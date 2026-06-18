@@ -57,7 +57,7 @@ export const primeTimeGroups = [
       { title: "Free plan contact cap", priority: "P0", status: "done", owner: "engineering", detail: "Convex enforces the 10-contact free workspace limit before lead creation." },
       { title: "Spam and quality scoring", priority: "P0", status: "done", owner: "data", detail: "Lead quality and spam score are stored and surfaced for triage." },
       { title: "Bulk lead actions", priority: "P1", status: "done", owner: "product", detail: "Bulk status movement exists for lead operations." },
-      { title: "Duplicate review queue", priority: "P1", status: "in_progress", owner: "data", detail: "Duplicate review tables exist; add a full UI queue with merge and ignore decisions." },
+      { title: "Duplicate review queue", priority: "P1", status: "in_progress", owner: "data", detail: "Lead Ops now has a duplicate review queue with inspect, keep, and hide-duplicate actions; persist full merge decisions in duplicateReviewDecisions next." },
       { title: "Lead import wizard", priority: "P1", status: "next", owner: "engineering", detail: "CSV mapping, validation preview, quality errors, and dry-run import need a production workflow." },
       { title: "SLA reminders", priority: "P1", status: "in_progress", owner: "product", detail: "SLA state is computed in the UI; add scheduled notifications and inbox tasks." },
       { title: "Source ROI attribution", priority: "P2", status: "next", owner: "growth", detail: "Track lead source cost, conversion, average ticket, close rate, and payback." },

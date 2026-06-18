@@ -3519,6 +3519,7 @@ function LeadOpsView({ operatingDepth, operatingActions }: { operatingDepth: Ope
   const [statusFilter, setStatusFilter] = useState("all");
   const [gradeFilter, setGradeFilter] = useState("all");
   const [selectedIds, setSelectedIds] = useState<string[]>([]);
+  const [reviewedDuplicateIds, setReviewedDuplicateIds] = useState<string[]>([]);
   const [selectedLeadId, setSelectedLeadId] = useState<string | undefined>(operatingDepth.leadOps.rows[0]?.id);
   const statusOptions = operatingDepth.leadOps.statusSettings.length > 0 ? operatingDepth.leadOps.statusSettings : [];
   const rows = useMemo(() => {
@@ -3532,6 +3533,11 @@ function LeadOpsView({ operatingDepth, operatingActions }: { operatingDepth: Ope
   }, [gradeFilter, operatingDepth.leadOps.rows, query, statusFilter]);
   const selectedSet = new Set(selectedIds);
   const selectedLead = rows.find((row) => row.id === selectedLeadId) ?? rows[0] ?? operatingDepth.leadOps.rows[0];
+  const reviewedDuplicateSet = new Set(reviewedDuplicateIds);
+  const duplicateReviewRows = rows
+    .filter((row) => row.duplicateWarnings.length > 0 && !reviewedDuplicateSet.has(row.id))
+    .sort((a, b) => b.qualityScore - a.qualityScore)
+    .slice(0, 6);
 
   function toggleSelected(id: string) {
     setSelectedIds((current) => (current.includes(id) ? current.filter((item) => item !== id) : [...current, id]));
@@ -3541,6 +3547,14 @@ function LeadOpsView({ operatingDepth, operatingActions }: { operatingDepth: Ope
     if (selectedIds.length === 0) return;
     operatingActions?.bulkUpdateLeads?.(selectedIds, status);
     setSelectedIds([]);
+  }
+
+  function reviewDuplicate(row: LeadOpsRow, action: "keep" | "hide_duplicate") {
+    setReviewedDuplicateIds((current) => (current.includes(row.id) ? current : [...current, row.id]));
+    setSelectedLeadId(row.id);
+    if (action === "hide_duplicate") {
+      operatingActions?.updateLead?.(row.id, { status: "lost_confirmed", hidden: true });
+    }
   }
 
   return (
@@ -3694,6 +3708,58 @@ function LeadOpsView({ operatingDepth, operatingActions }: { operatingDepth: Ope
         </Panel>
 
         <div className="grid gap-4">
+          <Panel>
+            <div className="flex flex-wrap items-start justify-between gap-3">
+              <div>
+                <h2 className="text-base font-bold">Duplicate Review Queue</h2>
+                <p className="mt-1 text-sm leading-5 text-stone-500">Compare warning signals, inspect the lead, keep the record, or hide it as a duplicate before it pollutes estimates and revenue reporting.</p>
+              </div>
+              <div className="flex flex-wrap gap-2">
+                <Badge tone={duplicateReviewRows.length > 0 ? "warning" : "success"}>{duplicateReviewRows.length} open</Badge>
+                {reviewedDuplicateIds.length > 0 ? <Badge>{reviewedDuplicateIds.length} reviewed</Badge> : null}
+              </div>
+            </div>
+            <div className="mt-4 grid gap-3">
+              {duplicateReviewRows.length > 0 ? duplicateReviewRows.map((row) => (
+                <div key={row.id} className="rounded-md border border-stone-200 p-3">
+                  <div className="flex flex-wrap items-start justify-between gap-3">
+                    <div className="min-w-0">
+                      <button type="button" onClick={() => setSelectedLeadId(row.id)} className="truncate text-left font-semibold text-stone-900 hover:text-[#224036]">
+                        {row.customerName}
+                      </button>
+                      <div className="mt-1 text-sm text-stone-500">{row.title} - {row.city || "No city"} - {row.source}</div>
+                    </div>
+                    <div className="flex flex-wrap gap-1">
+                      <Badge tone={row.qualityScore >= 80 ? "success" : "warning"}>{row.qualityScore} quality</Badge>
+                      <Badge tone={row.spamScore >= 35 ? "danger" : "neutral"}>{row.spamScore} spam</Badge>
+                    </div>
+                  </div>
+                  <div className="mt-3 grid gap-2">
+                    {row.duplicateWarnings.map((warning) => (
+                      <div key={warning} className="rounded-md bg-amber-50 px-3 py-2 text-sm text-amber-800">{warning}</div>
+                    ))}
+                  </div>
+                  <div className="mt-3 flex flex-wrap gap-2">
+                    <button type="button" onClick={() => setSelectedLeadId(row.id)} className="inline-flex h-9 items-center gap-2 rounded-md border border-stone-200 bg-white px-3 text-sm font-semibold text-stone-800 shadow-sm transition hover:bg-stone-50">
+                      <FileText size={15} />
+                      Review duplicate
+                    </button>
+                    <button type="button" onClick={() => reviewDuplicate(row, "keep")} className="inline-flex h-9 items-center gap-2 rounded-md border border-emerald-200 bg-emerald-50 px-3 text-sm font-semibold text-emerald-800 transition hover:bg-emerald-100">
+                      <Check size={15} />
+                      Keep Lead
+                    </button>
+                    <button type="button" onClick={() => reviewDuplicate(row, "hide_duplicate")} className="inline-flex h-9 items-center gap-2 rounded-md border border-rose-200 bg-rose-50 px-3 text-sm font-semibold text-rose-800 transition hover:bg-rose-100">
+                      <X size={15} />
+                      Hide Duplicate
+                    </button>
+                  </div>
+                </div>
+              )) : (
+                <div className="rounded-md border border-dashed border-stone-200 p-4 text-sm text-stone-500">No duplicate warnings in the current lead filters.</div>
+              )}
+            </div>
+          </Panel>
+
           <Panel>
             <div className="flex items-start justify-between gap-3">
               <div>

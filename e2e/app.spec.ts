@@ -61,6 +61,8 @@ test("loads the operating shell and creates a lead", async ({ page }) => {
   await page.getByPlaceholder("Lead, customer, city, source").fill("Playwright Home");
   await expect(page.getByText("Perimeter pest prevention").first()).toBeVisible();
   await expect(page.getByRole("heading", { name: "Lead Detail" })).toBeVisible();
+  await expect(page.getByRole("heading", { name: "Duplicate Review Queue" })).toBeVisible();
+  await expect(page.getByRole("button", { name: "Review duplicate" }).first()).toBeVisible();
   await expect(page.getByText("Estimate readiness")).toBeVisible();
   await expect(page.getByText("Source win rate")).toBeVisible();
 });
