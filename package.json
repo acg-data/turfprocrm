@@ -7,6 +7,12 @@
     "dev:convex": "convex dev",
     "build": "next build",
     "start": "next start",
+    "cf:build": "opennextjs-cloudflare build",
+    "cf:preview": "opennextjs-cloudflare build && opennextjs-cloudflare preview",
+    "cf:deploy": "opennextjs-cloudflare build && opennextjs-cloudflare deploy -- --keep-vars",
+    "cf:typegen": "wrangler types --env-interface CloudflareEnv cloudflare-env.d.ts",
+    "deploy": "convex deploy --cmd \"npm run cf:build\" && opennextjs-cloudflare deploy -- --keep-vars",
+    "deploy:convex": "convex deploy",
     "lint": "eslint",
     "typecheck": "tsc --noEmit",
     "codegen": "convex codegen",
@@ -17,6 +23,7 @@
   },
   "dependencies": {
     "@clerk/nextjs": "^7.5.5",
+    "@opennextjs/cloudflare": "^1.19.11",
     "class-variance-authority": "^0.7.1",
     "clsx": "^2.1.1",
     "convex": "^1.41.0",
@@ -38,6 +45,7 @@
     "eslint-config-next": "16.2.9",
     "tailwindcss": "^4",
     "typescript": "^5",
-    "vitest": "^4.1.9"
+    "vitest": "^4.1.9",
+    "wrangler": "^4.102.0"
   }
 }

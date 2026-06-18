@@ -93,3 +93,9 @@ Playwright smoke tests are available with:
 ```bash
 npm run test:e2e
 ```
+
+## Cloudflare Deployment
+
+This app is configured for Cloudflare Workers through the OpenNext adapter. Use `npm run cf:build` to package the Next.js app for Cloudflare, `npm run cf:preview` to test the Worker runtime locally, and `npm run deploy` for the full Convex-plus-Cloudflare production deploy.
+
+The deployment checklist and required dashboard variables are in `docs/cloudflare-deployment.md`.

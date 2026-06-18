@@ -18,6 +18,9 @@
 # next.js
 /.next/
 /out/
+/.open-next/
+/.wrangler/
+cloudflare-env.d.ts
 
 # production
 /build
@@ -39,6 +42,8 @@ yarn-error.log*
 # local env files
 .env
 .env.*
+.dev.vars
+.dev.vars.*
 !.env.example
 
 # vercel
