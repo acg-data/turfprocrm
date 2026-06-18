@@ -26,6 +26,8 @@ const opportunityStage = v.union(
 const leadType = v.union(v.literal("phone_call"), v.literal("form"), v.literal("direct_email"), v.literal("referral"), v.literal("other"));
 const accountType = v.union(v.literal("residential"), v.literal("commercial"));
 const urgency = v.union(v.literal("low"), v.literal("normal"), v.literal("high"));
+const activityEntityType = v.union(v.literal("customer"), v.literal("job"));
+const activityComposerKind = v.union(v.literal("call"), v.literal("email"), v.literal("note"));
 
 function partsInTimeZone(date: Date, timeZone: string) {
   const parts = new Intl.DateTimeFormat("en-US", {
@@ -1214,6 +1216,55 @@ export const addTask = mutation({
       createdAt: now,
       updatedAt: now,
     });
+  },
+});
+
+export const addActivity = mutation({
+  args: {
+    entityType: activityEntityType,
+    entityId: v.string(),
+    kind: activityComposerKind,
+    summary: v.string(),
+    createFollowUp: v.optional(v.boolean()),
+    dueInDays: v.optional(v.number()),
+  },
+  handler: async (ctx, args) => {
+    const org = await requireDemoOrg(ctx);
+    const summary = args.summary.trim();
+    if (!summary) throw new Error("Activity summary is required.");
+
+    const target =
+      args.entityType === "customer"
+        ? await ctx.db.get(args.entityId as Id<"customers">)
+        : await ctx.db.get(args.entityId as Id<"jobs">);
+    if (!target || target.organizationId !== org._id) throw new Error("Activity target not found.");
+
+    const now = Date.now();
+    const activityId = await ctx.db.insert("activities", {
+      organizationId: org._id,
+      entityType: args.entityType,
+      entityId: args.entityId,
+      kind: args.kind,
+      summary,
+      occurredAt: now,
+    });
+
+    if (args.createFollowUp) {
+      const dueInDays = Math.max(1, Math.min(30, Math.round(args.dueInDays ?? 2)));
+      await ctx.db.insert("tasks", {
+        organizationId: org._id,
+        entityType: args.entityType,
+        entityId: args.entityId,
+        title: `Follow up: ${summary.slice(0, 80)}`,
+        status: "open",
+        priority: "normal",
+        dueAt: now + dueInDays * 24 * 60 * 60 * 1000,
+        createdAt: now,
+        updatedAt: now,
+      });
+    }
+
+    return activityId;
   },
 });
 

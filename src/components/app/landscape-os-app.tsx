@@ -161,6 +161,21 @@ type GlobalSearchResult = {
   searchText?: string;
 };
 
+type ActivityComposerKind = Extract<WorkspaceSnapshot["activities"][number]["kind"], "call" | "email" | "note">;
+
+type ActivityComposerState = {
+  kind: ActivityComposerKind;
+  body: string;
+  createFollowUp: boolean;
+  dueInDays: string;
+};
+
+const activityKindLabels: Record<ActivityComposerKind, string> = {
+  note: "Internal note",
+  call: "Call",
+  email: "Email",
+};
+
 const leadSourceOptions = ["Manual entry", "Website form", "Phone", "Referral", "Google Maps", "Door hanger", "Import"];
 const leadTypeOptions: Array<{ value: LeadType; label: string }> = [
   { value: "phone_call", label: "Phone call" },
@@ -190,6 +205,15 @@ function defaultLeadForm(): LeadFormState {
     urgency: "normal",
     message: "",
     estimateNotes: "",
+  };
+}
+
+function defaultActivityComposer(): ActivityComposerState {
+  return {
+    kind: "note",
+    body: "",
+    createFollowUp: false,
+    dueInDays: "2",
   };
 }
 
@@ -252,6 +276,14 @@ type LiveActions = {
   completeChecklistItem?: (visitId: string, itemId: string) => void;
   submitVisit?: (visitId: string, issueFlag?: string) => void;
   addTask?: (jobId: string, title: string) => void;
+  addActivity?: (input: {
+    entityType: "customer" | "job";
+    entityId: string;
+    kind: ActivityComposerKind;
+    summary: string;
+    createFollowUp: boolean;
+    dueInDays: number;
+  }) => void;
   createCrew?: (name: string) => void;
   toggleService?: (itemId: string) => void;
 };
@@ -1313,6 +1345,7 @@ function LandscapeOsLiveApp() {
   const completeChecklistMutation = useMutation(api.demo.completeChecklistItem);
   const submitVisitMutation = useMutation(api.demo.submitVisit);
   const addTaskMutation = useMutation(api.demo.addTask);
+  const addActivityMutation = useMutation(api.demo.addActivity);
   const createCrewMutation = useMutation(api.demo.createCrew);
   const toggleServiceMutation = useMutation(api.demo.toggleServiceCatalogItem);
   const updateLeadMutation = useMutation(api.operating.updateLead);
@@ -1376,6 +1409,16 @@ function LandscapeOsLiveApp() {
       addTask: (jobId, title) => {
         void addTaskMutation({ jobId: jobId as Id<"jobs">, title }).catch((error) => logConvexWriteFailure("addTask", error));
       },
+      addActivity: (input) => {
+        void addActivityMutation({
+          entityType: input.entityType,
+          entityId: input.entityId,
+          kind: input.kind,
+          summary: input.summary,
+          createFollowUp: input.createFollowUp,
+          dueInDays: input.dueInDays,
+        }).catch((error) => logConvexWriteFailure("addActivity", error));
+      },
       createCrew: (name) => {
         void createCrewMutation({ name }).catch((error) => logConvexWriteFailure("createCrew", error));
       },
@@ -1384,6 +1427,7 @@ function LandscapeOsLiveApp() {
       },
     }),
     [
+      addActivityMutation,
       addTaskMutation,
       advanceOpportunityMutation,
       assignVisitMutation,
@@ -1487,6 +1531,8 @@ function LandscapeOsWorkspace({
   const [selectedJobId, setSelectedJobId] = useState(initialWorkspace.jobs[0]?.id ?? "");
   const [selectedVisitId, setSelectedVisitId] = useState(initialWorkspace.visits[0]?.id ?? "");
   const [leadForm, setLeadForm] = useState<LeadFormState>(() => defaultLeadForm());
+  const [customerActivityForm, setCustomerActivityForm] = useState<ActivityComposerState>(() => defaultActivityComposer());
+  const [jobActivityForm, setJobActivityForm] = useState<ActivityComposerState>(() => defaultActivityComposer());
   const [clientOnboardingForm, setClientOnboardingForm] = useState<ClientOnboardingFormState>(() => defaultClientOnboardingForm());
   const [provisionedClients, setProvisionedClients] = useState<ProvisionedClientWorkspace[]>([]);
   const [taskTitle, setTaskTitle] = useState("");
@@ -1907,6 +1953,75 @@ function LandscapeOsWorkspace({
     setTaskTitle("");
   }
 
+  function addRecordActivity(
+    event: FormEvent,
+    target: { entityType: "customer" | "job"; entityId: string; form: ActivityComposerState; reset: (value: ActivityComposerState) => void },
+  ) {
+    event.preventDefault();
+    const summary = target.form.body.trim();
+    if (!summary) return;
+    const dueInDays = Math.max(1, Math.min(30, Math.round(Number(target.form.dueInDays || "2"))));
+    setWorkspace((current) => ({
+      ...current,
+      activities: [
+        {
+          id: newId("act"),
+          entityType: target.entityType,
+          entityId: target.entityId,
+          kind: target.form.kind,
+          summary,
+          actorId: "u-amy",
+          occurredAt: now(),
+        },
+        ...current.activities,
+      ],
+      tasks: target.form.createFollowUp
+        ? [
+            {
+              id: newId("task"),
+              entityType: target.entityType,
+              entityId: target.entityId,
+              title: `Follow up: ${summary.slice(0, 80)}`,
+              status: "open",
+              priority: "normal",
+              dueAt: now() + dueInDays * 24 * 60 * 60 * 1000,
+              assignedUserId: "u-amy",
+            },
+            ...current.tasks,
+          ]
+        : current.tasks,
+    }));
+    liveActions?.addActivity?.({
+      entityType: target.entityType,
+      entityId: target.entityId,
+      kind: target.form.kind,
+      summary,
+      createFollowUp: target.form.createFollowUp,
+      dueInDays,
+    });
+    target.reset(defaultActivityComposer());
+  }
+
+  function addCustomerActivity(event: FormEvent) {
+    if (!selectedCustomer) return;
+    addRecordActivity(event, {
+      entityType: "customer",
+      entityId: selectedCustomer.id,
+      form: customerActivityForm,
+      reset: setCustomerActivityForm,
+    });
+  }
+
+  function addJobActivity(event: FormEvent) {
+    if (!selectedJob) return;
+    addRecordActivity(event, {
+      entityType: "job",
+      entityId: selectedJob.id,
+      form: jobActivityForm,
+      reset: setJobActivityForm,
+    });
+  }
+
   function toggleTask(taskId: string) {
     setWorkspace((current) => ({
       ...current,
@@ -2098,6 +2213,9 @@ function LandscapeOsWorkspace({
                 leadForm={leadForm}
                 setLeadForm={setLeadForm}
                 createLead={createLead}
+                activityForm={customerActivityForm}
+                setActivityForm={setCustomerActivityForm}
+                addActivity={addCustomerActivity}
               />
             )}
             {view === "pipeline" && <PipelineView workspace={workspace} customersById={customersById} moveOpportunity={moveOpportunity} />}
@@ -2116,6 +2234,9 @@ function LandscapeOsWorkspace({
                 taskTitle={taskTitle}
                 setTaskTitle={setTaskTitle}
                 addJobTask={addJobTask}
+                activityForm={jobActivityForm}
+                setActivityForm={setJobActivityForm}
+                addActivity={addJobActivity}
                 toggleTask={toggleTask}
               />
             )}
@@ -2524,6 +2645,119 @@ function HorizontalBarChart({
   );
 }
 
+function ActivityComposer({
+  contextLabel,
+  form,
+  setForm,
+  onSubmit,
+}: {
+  contextLabel: "Customer" | "Job";
+  form: ActivityComposerState;
+  setForm: (value: ActivityComposerState) => void;
+  onSubmit: (event: FormEvent) => void;
+}) {
+  return (
+    <form onSubmit={onSubmit} className="rounded-md border border-stone-200 bg-stone-50 p-3">
+      <div className="grid gap-3 sm:grid-cols-[1fr_auto]">
+        <Field label="Activity type">
+          <select
+            aria-label={`${contextLabel} activity type`}
+            className={inputClass()}
+            value={form.kind}
+            onChange={(event) => setForm({ ...form, kind: event.target.value as ActivityComposerKind })}
+          >
+            {Object.entries(activityKindLabels).map(([value, label]) => (
+              <option key={value} value={value}>{label}</option>
+            ))}
+          </select>
+        </Field>
+        <Field label="Due days">
+          <input
+            aria-label={`${contextLabel} follow-up due days`}
+            className={cn(inputClass(), "w-28")}
+            value={form.dueInDays}
+            onChange={(event) => setForm({ ...form, dueInDays: event.target.value })}
+            disabled={!form.createFollowUp}
+            inputMode="numeric"
+          />
+        </Field>
+      </div>
+      <div className="mt-3">
+        <Field label="Summary">
+          <textarea
+            aria-label={`${contextLabel} activity summary`}
+            className={cn(inputClass(), "min-h-24 resize-y py-2")}
+            value={form.body}
+            onChange={(event) => setForm({ ...form, body: event.target.value })}
+            placeholder="Log what happened and what the team should know."
+            required
+          />
+        </Field>
+      </div>
+      <div className="mt-3 flex flex-wrap items-center justify-between gap-3">
+        <label className="inline-flex items-center gap-2 text-sm font-semibold text-stone-700">
+          <input
+            aria-label={`${contextLabel} create follow-up`}
+            type="checkbox"
+            checked={form.createFollowUp}
+            onChange={(event) => setForm({ ...form, createFollowUp: event.target.checked })}
+            className="h-4 w-4 rounded border-stone-300 text-[#224036]"
+          />
+          Create follow-up task
+        </label>
+        <TextButton type="submit" icon={<Plus size={16} />}>Log Activity</TextButton>
+      </div>
+    </form>
+  );
+}
+
+function ActivityTimeline({
+  activities,
+  tasks,
+  emptyLabel,
+}: {
+  activities: WorkspaceSnapshot["activities"];
+  tasks: WorkspaceSnapshot["tasks"];
+  emptyLabel: string;
+}) {
+  const visibleActivities = activities.slice(0, 6);
+  const visibleTasks = tasks.slice(0, 4);
+  return (
+    <div className="rounded-md border border-stone-200 bg-white p-3">
+      <div className="flex items-center justify-between gap-3">
+        <h3 className="text-sm font-bold">Timeline</h3>
+        <Badge>{visibleActivities.length + visibleTasks.length}</Badge>
+      </div>
+      <div className="mt-3 grid gap-2">
+        {visibleTasks.map((task) => (
+          <div key={`task-${task.id}`} className="rounded-md border border-amber-200 bg-amber-50 p-2 text-sm">
+            <div className="flex items-center justify-between gap-2">
+              <span className="font-semibold">Follow-up</span>
+              <Badge tone="warning">{shortDate(task.dueAt)}</Badge>
+            </div>
+            <div className="mt-1 text-stone-700">{task.title}</div>
+          </div>
+        ))}
+        {visibleActivities.map((activity) => {
+          const label = activity.kind === "call" || activity.kind === "email" || activity.kind === "note" ? activityKindLabels[activity.kind] : formatStatus(activity.kind);
+          return (
+            <div key={`activity-${activity.id}`} className="rounded-md border border-stone-200 p-2 text-sm">
+              <div className="flex items-center justify-between gap-2">
+                <Badge tone={activity.kind === "call" ? "success" : activity.kind === "email" ? "warning" : "neutral"}>{label}</Badge>
+                <span className="text-xs text-stone-500">{shortDate(activity.occurredAt)}</span>
+              </div>
+              <div className="mt-2 leading-5 text-stone-700">{activity.summary}</div>
+            </div>
+          );
+        })}
+        {visibleTasks.length === 0 && visibleActivities.length === 0 ? (
+          <div className="rounded-md border border-dashed border-stone-200 p-4 text-sm text-stone-500">{emptyLabel}</div>
+        ) : null}
+      </div>
+    </div>
+  );
+}
+
 function CrmView({
   workspace,
   customerSearch,
@@ -2534,6 +2768,9 @@ function CrmView({
   leadForm,
   setLeadForm,
   createLead,
+  activityForm,
+  setActivityForm,
+  addActivity,
 }: {
   workspace: WorkspaceSnapshot;
   customerSearch: string;
@@ -2544,10 +2781,15 @@ function CrmView({
   leadForm: LeadFormState;
   setLeadForm: (value: LeadFormState) => void;
   createLead: (event: FormEvent) => void;
+  activityForm: ActivityComposerState;
+  setActivityForm: (value: ActivityComposerState) => void;
+  addActivity: (event: FormEvent) => void;
 }) {
   const filtered = workspace.customers.filter((customer) => customer.name.toLowerCase().includes(customerSearch.toLowerCase()));
   const customerProperties = selectedCustomer ? workspace.properties.filter((property) => property.customerId === selectedCustomer.id) : [];
   const customerOpps = selectedCustomer ? workspace.opportunities.filter((opp) => opp.customerId === selectedCustomer.id) : [];
+  const customerActivities = selectedCustomer ? workspace.activities.filter((activity) => activity.entityType === "customer" && activity.entityId === selectedCustomer.id) : [];
+  const customerTasks = selectedCustomer ? workspace.tasks.filter((task) => task.entityType === "customer" && task.entityId === selectedCustomer.id && task.status !== "done") : [];
 
   return (
     <div className="grid gap-4 xl:grid-cols-[0.8fr_1.2fr]">
@@ -2621,6 +2863,24 @@ function CrmView({
                 ))}
               </div>
             </>
+          ) : null}
+        </Panel>
+
+        <Panel>
+          <div className="flex flex-wrap items-center justify-between gap-3">
+            <h2 className="text-base font-bold">Customer Activity</h2>
+            <Badge>{customerTasks.length} open follow-up{customerTasks.length === 1 ? "" : "s"}</Badge>
+          </div>
+          {selectedCustomer ? (
+            <div className="mt-4 grid gap-4 lg:grid-cols-[1fr_0.9fr]">
+              <ActivityComposer
+                contextLabel="Customer"
+                form={activityForm}
+                setForm={setActivityForm}
+                onSubmit={addActivity}
+              />
+              <ActivityTimeline activities={customerActivities} tasks={customerTasks} emptyLabel="No logged calls, emails, or notes for this customer yet." />
+            </div>
           ) : null}
         </Panel>
 
@@ -2901,6 +3161,9 @@ function JobsView({
   taskTitle,
   setTaskTitle,
   addJobTask,
+  activityForm,
+  setActivityForm,
+  addActivity,
   toggleTask,
 }: {
   workspace: WorkspaceSnapshot;
@@ -2913,10 +3176,14 @@ function JobsView({
   taskTitle: string;
   setTaskTitle: (value: string) => void;
   addJobTask: (event: FormEvent) => void;
+  activityForm: ActivityComposerState;
+  setActivityForm: (value: ActivityComposerState) => void;
+  addActivity: (event: FormEvent) => void;
   toggleTask: (taskId: string) => void;
 }) {
   const visits = selectedJob ? workspace.visits.filter((visit) => visit.jobId === selectedJob.id) : [];
-  const tasks = selectedJob ? workspace.tasks.filter((task) => task.entityId === selectedJob.id) : [];
+  const tasks = selectedJob ? workspace.tasks.filter((task) => task.entityType === "job" && task.entityId === selectedJob.id) : [];
+  const jobActivities = selectedJob ? workspace.activities.filter((activity) => activity.entityType === "job" && activity.entityId === selectedJob.id) : [];
   const property = selectedJob?.propertyId ? propertiesById.get(selectedJob.propertyId) : undefined;
   const selectedSummary = selectedJob ? operatingDepth.jobCosting.summaries.find((summary) => summary.jobId === selectedJob.id) : undefined;
   const selectedTime = selectedJob ? operatingDepth.fieldOps.timeBreakdowns.find((row) => row.jobId === selectedJob.id) : undefined;
@@ -2997,6 +3264,24 @@ function JobsView({
               </button>
             ))}
           </div>
+        </Panel>
+
+        <Panel>
+          <div className="flex flex-wrap items-center justify-between gap-3">
+            <h2 className="text-base font-bold">Job Activity</h2>
+            <Badge>{jobActivities.length} logged</Badge>
+          </div>
+          {selectedJob ? (
+            <div className="mt-4 grid gap-4 lg:grid-cols-[1fr_0.9fr]">
+              <ActivityComposer
+                contextLabel="Job"
+                form={activityForm}
+                setForm={setActivityForm}
+                onSubmit={addActivity}
+              />
+              <ActivityTimeline activities={jobActivities} tasks={tasks.filter((task) => task.status !== "done")} emptyLabel="No job calls, emails, or internal notes logged yet." />
+            </div>
+          ) : null}
         </Panel>
 
         <Panel>

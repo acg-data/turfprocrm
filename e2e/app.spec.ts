@@ -34,6 +34,11 @@ test("loads the operating shell and creates a lead", async ({ page }) => {
   await page.getByLabel("Global search").press("Enter");
   await expect(page.getByRole("heading", { name: "CRM", exact: true })).toBeVisible();
   await expect(page.getByRole("heading", { name: "Brookside HOA" })).toBeVisible();
+  await page.getByLabel("Customer activity summary").fill("Called board about north entrance treatment timing.");
+  await page.getByLabel("Customer create follow-up").check();
+  await page.getByRole("button", { name: "Log Activity" }).click();
+  await expect(page.getByText("Called board about north entrance treatment timing.", { exact: true })).toBeVisible();
+  await expect(page.getByText("Follow up: Called board about north entrance treatment timing.")).toBeVisible();
 
   await openAppView(page, "Prime Time");
   await expect(page.getByRole("heading", { name: "Top 100 updates to make this sellable as a real SaaS" })).toBeVisible();
