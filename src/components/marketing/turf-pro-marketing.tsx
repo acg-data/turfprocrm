@@ -277,28 +277,45 @@ function WorkflowSection() {
 }
 
 function PricingSection() {
+  const pricingCards: Array<{ name: string; body: string; price: string; bullets: string[] }> = [
+    {
+      name: "Free",
+      body: "For a new operator testing the CRM before moving live operations in.",
+      price: "$0",
+      bullets: ["10 contacts included", "Single sign-in onboarding", "Demo access to lead, dispatch, field, costing, and profit workflows"],
+    },
+    {
+      name: "All-In Pro",
+      body: "The paid plan for real landscaping, lawn, tree, and pest-control operators.",
+      price: "$99/mo",
+      bullets: ["CRM, estimating, unlimited land measurements, scheduling, routes, jobs, messaging, invoicing, e-payments, reporting, analytics, and crew time", "Job costing, renewals, materials, chemical tracking, autoprice, advanced resources, and integrations", "Plant and tree inventory mapping, sales automation, templates, expenses, equipment maintenance, projects, and permissions"],
+    },
+    {
+      name: "Included Depth",
+      body: "No separate Professional or Enterprise unlock for the niche operating features.",
+      price: "Bundled",
+      bullets: ["Admin role editor and permission matrix", "Revenue, profit, P&L proxy, churn, LTV, and cost intelligence", "Feature flags and Stripe-ready billing boundary for future packaging"],
+    },
+  ];
+
   return (
     <section className={`${styles.section} ${styles.pricing}`}>
       <div className={styles.wrap}>
         <div className={styles.sectionHeader}>
           <p className={styles.eyebrow}>Commercial path</p>
-          <h2 className={styles.sectionTitle}>Pricing pages without fake proof.</h2>
+          <h2 className={styles.sectionTitle}>Arborgold-style depth, one $99/mo plan.</h2>
           <p className={styles.sectionLede}>
-            The billing model is ready for plan gates and seats. Live Stripe checkout is still a next-phase integration, so this page keeps the commercial message honest.
+            Start free with 10 contacts, then upgrade to one paid plan that includes the green-industry features operators expect to be split across higher tiers.
           </p>
         </div>
         <div className={styles.priceGrid}>
-          {[
-            ["Starter", "Small crews proving the workflow", ["Lead Ops", "CRM", "Dispatch", "Field PWA"]],
-            ["Pro", "Growing operators tracking cost", ["Everything in Starter", "Job costing", "Rate cards", "Profit dashboard"]],
-            ["Growth", "Multi-crew teams with admin depth", ["Everything in Pro", "Advanced roles", "Cost snapshots", "Reporting export boundary"]],
-          ].map(([name, body, bullets]) => (
-            <article key={name as string} className={styles.priceCard}>
+          {pricingCards.map(({ name, body, price, bullets }) => (
+            <article key={name} className={styles.priceCard}>
               <h3>{name}</h3>
               <p>{body}</p>
-              <div className={styles.price}>Price to confirm</div>
+              <div className={styles.price}>{price}</div>
               <ul className={styles.list}>
-                {(bullets as string[]).map((item) => <li key={item}>{item}</li>)}
+                {bullets.map((item) => <li key={item}>{item}</li>)}
               </ul>
             </article>
           ))}

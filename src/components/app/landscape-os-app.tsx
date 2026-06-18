@@ -93,6 +93,14 @@ type LeadUrgency = "low" | "normal" | "high";
 type IndustryFocus = "landscaping" | "pest_control" | "both";
 type BillingPlan = "free" | "starter" | "pro" | "growth" | "enterprise";
 
+const billingPlanLabels: Record<BillingPlan, string> = {
+  free: "Free - 10 contacts",
+  starter: "Legacy Starter",
+  pro: "$99/mo All-In Pro",
+  growth: "Legacy Growth",
+  enterprise: "Legacy Enterprise",
+};
+
 type LeadFormState = {
   customerName: string;
   title: string;
@@ -1641,7 +1649,7 @@ function LandscapeOsWorkspace({
         createdAt,
         checklist: [
           "Workspace and owner membership",
-          "Trial subscription shell",
+          clientOnboardingForm.billingPlan === "free" ? "Free subscription shell with 10-contact cap" : "$99/mo All-In Pro subscription shell",
           "Lead statuses and saved views",
           "Service catalog and default crew",
           "Lead intake form and CSV import lane",
@@ -4003,11 +4011,8 @@ function ClientOnboardingView({
               </Field>
               <Field label="Plan">
                 <select className={inputClass()} value={form.billingPlan} onChange={(event) => setForm({ ...form, billingPlan: event.target.value as BillingPlan })}>
-                  <option value="free">Free - 10 contacts</option>
-                  <option value="starter">Starter</option>
-                  <option value="pro">Pro</option>
-                  <option value="growth">Growth</option>
-                  <option value="enterprise">Enterprise</option>
+                  <option value="free">{billingPlanLabels.free}</option>
+                  <option value="pro">{billingPlanLabels.pro}</option>
                 </select>
               </Field>
               <Field label="Seats">
@@ -4126,7 +4131,7 @@ function ClientOnboardingView({
                     <div className="mt-1 text-sm text-stone-500">/{client.slug} - {client.ownerEmail}</div>
                   </div>
                   <div className="flex gap-2">
-                    <Badge>{client.billingPlan}</Badge>
+                    <Badge>{billingPlanLabels[client.billingPlan]}</Badge>
                     <Badge>{client.seats} seats</Badge>
                   </div>
                 </div>

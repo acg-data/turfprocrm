@@ -5,7 +5,7 @@ today.setHours(0, 0, 0, 0);
 const day = 24 * 60 * 60 * 1000;
 const at = (hour: number, minute = 0, offset = 0) => today.getTime() + offset * day + hour * 60 * 60 * 1000 + minute * 60 * 1000;
 
-export const demoWorkspace: WorkspaceSnapshot = {
+const baseDemoWorkspace: WorkspaceSnapshot = {
   organization: {
     id: "org-greenline",
     name: "Greenline Turf & Pest",
@@ -298,3 +298,222 @@ export const demoWorkspace: WorkspaceSnapshot = {
     { id: "mat-seed", name: "Premium overseed blend", unit: "bag", costCents: 6400, active: true },
   ],
 };
+
+const scaleFirstNames = [
+  "Avery",
+  "Blake",
+  "Casey",
+  "Dakota",
+  "Emerson",
+  "Finley",
+  "Gray",
+  "Harper",
+  "Jordan",
+  "Kai",
+  "Logan",
+  "Morgan",
+  "Noel",
+  "Parker",
+  "Quinn",
+  "Reese",
+  "Sawyer",
+  "Taylor",
+  "Val",
+  "Wren",
+];
+
+const scaleLastNames = [
+  "Adams",
+  "Bennett",
+  "Carter",
+  "Diaz",
+  "Ellis",
+  "Foster",
+  "Garcia",
+  "Hayes",
+  "Iverson",
+  "Johnson",
+  "Kim",
+  "Lopez",
+  "Miller",
+  "Nolan",
+  "Owens",
+  "Patel",
+  "Rivera",
+  "Stone",
+  "Turner",
+  "Young",
+];
+
+const scaleCities = ["Foxborough", "Mansfield", "Sharon", "Wrentham", "Plainville"];
+const scaleSources = ["Website form", "Google Local Services", "Referral", "Phone", "Yard sign", "Facebook"];
+const scalePrograms = ["lawn_care", "landscaping", "pest_control", "tree_shrub", "irrigation", "maintenance"] as const;
+const scaleRoles = ["sales", "dispatcher", "crew_lead", "technician", "manager"] as const;
+const scaleStatuses = ["new", "contacted", "converted", "disqualified"] as const;
+const scaleStages = ["new", "qualified", "estimating", "proposal_sent", "won"] as const;
+
+function buildScaledDemoWorkspace(workspace: WorkspaceSnapshot): WorkspaceSnapshot {
+  const syntheticMembers: WorkspaceSnapshot["members"] = Array.from({ length: 100 }, (_, index) => {
+    const number = index + 1;
+    const firstName = scaleFirstNames[index % scaleFirstNames.length];
+    const lastName = scaleLastNames[Math.floor(index / scaleFirstNames.length) % scaleLastNames.length];
+    return {
+      id: `u-demo-${String(number).padStart(3, "0")}`,
+      name: `${firstName} ${lastName}`,
+      email: `demo.user${String(number).padStart(3, "0")}@turfpro.test`,
+      role: scaleRoles[index % scaleRoles.length],
+    };
+  });
+
+  const syntheticCustomers: WorkspaceSnapshot["customers"] = [];
+  const syntheticProperties: WorkspaceSnapshot["properties"] = [];
+  const syntheticLeads: WorkspaceSnapshot["leads"] = [];
+  const syntheticOpportunities: WorkspaceSnapshot["opportunities"] = [];
+  const syntheticJobs: WorkspaceSnapshot["jobs"] = [];
+  const syntheticVisits: WorkspaceSnapshot["visits"] = [];
+  const syntheticTasks: WorkspaceSnapshot["tasks"] = [];
+  const syntheticActivities: WorkspaceSnapshot["activities"] = [];
+
+  for (let index = 0; index < 100; index += 1) {
+    const number = index + 1;
+    const padded = String(number).padStart(3, "0");
+    const firstName = scaleFirstNames[index % scaleFirstNames.length];
+    const lastName = scaleLastNames[(index * 3) % scaleLastNames.length];
+    const program = scalePrograms[index % scalePrograms.length];
+    const owner = syntheticMembers[index % syntheticMembers.length];
+    const city = scaleCities[index % scaleCities.length];
+    const status = scaleStatuses[index % scaleStatuses.length];
+    const stage = scaleStages[index % scaleStages.length];
+    const accountType = index % 5 === 0 ? "commercial" : "residential";
+    const customerType = index % 10 === 0 ? "hoa" : accountType;
+    const valueCents = 18000 + (index % 18) * 12500 + (accountType === "commercial" ? 185000 : 0);
+
+    syntheticCustomers.push({
+      id: `cust-scale-${padded}`,
+      name: accountType === "commercial" ? `${lastName} Facilities ${padded}` : `${firstName} ${lastName}`,
+      type: customerType,
+      status: status === "converted" ? "active" : "prospect",
+      phone: `(508) 555-${String(1000 + number).slice(-4)}`,
+      email: `${firstName.toLowerCase()}.${lastName.toLowerCase()}${padded}@example.test`,
+      tags: ["scale-test", program, accountType],
+      ownerId: owner.id,
+    });
+
+    syntheticProperties.push({
+      id: `prop-scale-${padded}`,
+      customerId: `cust-scale-${padded}`,
+      label: accountType === "commercial" ? `${lastName} Facility` : "Primary residence",
+      street: `${100 + number} ${["Maple", "Cedar", "Oak", "Pine", "Elm"][index % 5]} ${accountType === "commercial" ? "Parkway" : "Lane"}`,
+      city,
+      state: "MA",
+      postalCode: `02${String(30 + (index % 60)).padStart(3, "0")}`,
+      notes: index % 7 === 0 ? "Gate code required. Confirm access before dispatch." : "Synthetic scale-test property.",
+      lawnSizeSqFt: 6500 + (index % 30) * 1750 + (accountType === "commercial" ? 72000 : 0),
+    });
+
+    syntheticLeads.push({
+      id: `lead-scale-${padded}`,
+      title: `${program.replaceAll("_", " ")} request ${padded}`,
+      customerId: `cust-scale-${padded}`,
+      propertyId: `prop-scale-${padded}`,
+      source: scaleSources[index % scaleSources.length],
+      status,
+      urgency: index % 9 === 0 ? "high" : index % 4 === 0 ? "low" : "normal",
+      ownerId: owner.id,
+      leadType: index % 4 === 0 ? "phone_call" : "form",
+      accountType,
+      companyAssignment: index % 2 === 0 ? "Turf Pro" : "GreenAce",
+      programRequests: [program],
+      lawnSizeSqFt: 6500 + (index % 30) * 1750 + (accountType === "commercial" ? 72000 : 0),
+      message: "Generated scale-test lead for pricing, routing, follow-up, and quality scoring.",
+      estimateNotes: "Use this record to test list performance, filters, owners, and conversion views.",
+      qualityScore: 52 + (index % 45),
+      spamScore: index % 17 === 0 ? 35 : 0,
+      receivedAt: at(8 + (index % 9), (index * 7) % 60, -1 * (index % 21)),
+      createdAt: at(8 + (index % 9), (index * 7) % 60, -1 * (index % 21)),
+    });
+
+    syntheticOpportunities.push({
+      id: `opp-scale-${padded}`,
+      leadId: `lead-scale-${padded}`,
+      customerId: `cust-scale-${padded}`,
+      propertyId: `prop-scale-${padded}`,
+      title: `${program.replaceAll("_", " ")} estimate ${padded}`,
+      stage,
+      valueCents,
+      closeProbability: stage === "won" ? 100 : 20 + (index % 6) * 12,
+      expectedCloseDate: at(16, 0, index % 18),
+      ownerId: owner.id,
+      serviceLines: [program],
+      updatedAt: at(9 + (index % 7), (index * 11) % 60, -1 * (index % 10)),
+    });
+
+    if (index < 36) {
+      const jobStatus = index % 6 === 0 ? "completed" : index % 3 === 0 ? "in_progress" : "scheduled";
+      syntheticJobs.push({
+        id: `job-scale-${padded}`,
+        customerId: `cust-scale-${padded}`,
+        propertyId: `prop-scale-${padded}`,
+        title: `${program.replaceAll("_", " ")} production ${padded}`,
+        status: jobStatus,
+        priority: index % 8 === 0 ? "high" : "normal",
+        managerId: owner.id,
+        startDate: at(7 + (index % 8), 30, index % 12),
+      });
+      syntheticVisits.push({
+        id: `visit-scale-${padded}`,
+        jobId: `job-scale-${padded}`,
+        customerId: `cust-scale-${padded}`,
+        propertyId: `prop-scale-${padded}`,
+        scheduledStart: at(7 + (index % 8), 30, index % 12),
+        scheduledEnd: at(9 + (index % 8), 0, index % 12),
+        status: index % 6 === 0 ? "complete" : index % 3 === 0 ? "on_site" : "scheduled",
+        routeOrder: (index % 12) + 1,
+        crewId: workspace.crews[index % workspace.crews.length]?.id ?? "crew-alpha",
+        checklist: [
+          { id: `scale-${padded}-c1`, label: "Confirm property access", isDone: index % 3 === 0 },
+          { id: `scale-${padded}-c2`, label: "Complete service scope", isDone: index % 6 === 0 },
+          { id: `scale-${padded}-c3`, label: "Log materials and photos", isDone: false },
+        ],
+        notes: "Synthetic route stop for dispatch and mobile field testing.",
+      });
+      syntheticTasks.push({
+        id: `task-scale-${padded}`,
+        entityType: "job",
+        entityId: `job-scale-${padded}`,
+        title: `Review scale-test job ${padded}`,
+        status: index % 5 === 0 ? "in_progress" : "open",
+        priority: index % 8 === 0 ? "high" : "normal",
+        dueAt: at(15, 0, index % 9),
+        assignedUserId: owner.id,
+      });
+    }
+
+    if (index < 50) {
+      syntheticActivities.push({
+        id: `act-scale-${padded}`,
+        entityType: "lead",
+        entityId: `lead-scale-${padded}`,
+        kind: index % 2 === 0 ? "call" : "email",
+        summary: `Scale-test activity logged for ${firstName} ${lastName}`,
+        actorId: owner.id,
+        occurredAt: at(10 + (index % 6), (index * 5) % 60, -1 * (index % 14)),
+      });
+    }
+  }
+
+  return {
+    ...workspace,
+    members: [...workspace.members, ...syntheticMembers],
+    customers: [...workspace.customers, ...syntheticCustomers],
+    properties: [...workspace.properties, ...syntheticProperties],
+    leads: [...workspace.leads, ...syntheticLeads],
+    opportunities: [...workspace.opportunities, ...syntheticOpportunities],
+    jobs: [...workspace.jobs, ...syntheticJobs],
+    visits: [...workspace.visits, ...syntheticVisits],
+    tasks: [...workspace.tasks, ...syntheticTasks],
+    activities: [...workspace.activities, ...syntheticActivities],
+  };
+}
+
+export const demoWorkspace: WorkspaceSnapshot = buildScaledDemoWorkspace(baseDemoWorkspace);

@@ -146,13 +146,261 @@ function leadQualityIssues(input: { email?: string; phone?: string; street?: str
   return issues;
 }
 
+const scaleFirstNames = ["Avery", "Blake", "Casey", "Dakota", "Emerson", "Finley", "Gray", "Harper", "Jordan", "Kai", "Logan", "Morgan", "Noel", "Parker", "Quinn", "Reese", "Sawyer", "Taylor", "Val", "Wren"];
+const scaleLastNames = ["Adams", "Bennett", "Carter", "Diaz", "Ellis", "Foster", "Garcia", "Hayes", "Iverson", "Johnson", "Kim", "Lopez", "Miller", "Nolan", "Owens", "Patel", "Rivera", "Stone", "Turner", "Young"];
+const scaleCities = ["Foxborough", "Mansfield", "Sharon", "Wrentham", "Plainville"];
+const scaleSources = ["Website form", "Google Local Services", "Referral", "Phone", "Yard sign", "Facebook"];
+const scalePrograms = ["lawn_care", "landscaping", "pest_control", "tree_shrub", "irrigation", "maintenance"] as const;
+const scaleRoles = ["sales", "dispatcher", "crew_lead", "technician", "manager"] as const;
+const scaleStatuses = ["new", "contacted", "do_estimate", "estimate_provided", "follow_up", "waiting", "converted"] as const;
+const scaleStages = ["new", "qualified", "estimating", "proposal_sent", "won"] as const;
+
+async function ensureDemoScaleData(ctx: MutationCtx, organizationId: Id<"organizations">) {
+  const now = Date.now();
+  const existingLeads = await ctx.db.query("leads").withIndex("by_org", (q) => q.eq("organizationId", organizationId)).collect();
+  const existingScaleLeadKeys = new Set(existingLeads.map((lead) => lead.externalSourceId).filter(Boolean));
+  const scaleUserIds: Array<Id<"users">> = [];
+
+  for (let index = 0; index < 100; index += 1) {
+    const number = index + 1;
+    const padded = String(number).padStart(3, "0");
+    const clerkUserId = `demo-scale-user-${padded}`;
+    const firstName = scaleFirstNames[index % scaleFirstNames.length];
+    const lastName = scaleLastNames[Math.floor(index / scaleFirstNames.length) % scaleLastNames.length];
+    const role = scaleRoles[index % scaleRoles.length];
+    const email = `demo.user${padded}@turfpro.test`;
+
+    let user = await ctx.db.query("users").withIndex("by_clerk_user_id", (q) => q.eq("clerkUserId", clerkUserId)).unique();
+    if (!user) {
+      const userId = await ctx.db.insert("users", {
+        clerkUserId,
+        name: `${firstName} ${lastName}`,
+        email,
+        createdAt: now,
+        updatedAt: now,
+      });
+      user = await ctx.db.get(userId);
+    }
+    if (!user) continue;
+    scaleUserIds.push(user._id);
+
+    const existingMembership = await ctx.db
+      .query("memberships")
+      .withIndex("by_org_user", (q) => q.eq("organizationId", organizationId).eq("userId", user._id))
+      .unique();
+    if (!existingMembership) {
+      await ctx.db.insert("memberships", {
+        organizationId,
+        userId: user._id,
+        role,
+        status: "active",
+        joinedAt: now,
+        updatedAt: now,
+      });
+    }
+  }
+
+  const crews = await ctx.db.query("crews").withIndex("by_org", (q) => q.eq("organizationId", organizationId)).collect();
+  let insertedRecords = 0;
+
+  for (let index = 0; index < 100; index += 1) {
+    const number = index + 1;
+    const padded = String(number).padStart(3, "0");
+    const externalSourceId = `demo-scale-lead-${padded}`;
+    if (existingScaleLeadKeys.has(externalSourceId)) continue;
+
+    const firstName = scaleFirstNames[index % scaleFirstNames.length];
+    const lastName = scaleLastNames[(index * 3) % scaleLastNames.length];
+    const program = scalePrograms[index % scalePrograms.length];
+    const ownerUserId = scaleUserIds[index % Math.max(1, scaleUserIds.length)];
+    const city = scaleCities[index % scaleCities.length];
+    const status = scaleStatuses[index % scaleStatuses.length];
+    const stage = scaleStages[index % scaleStages.length];
+    const accountType = index % 5 === 0 ? "commercial" : "residential";
+    const customerType = index % 10 === 0 ? "hoa" : accountType;
+    const lawnSizeSqFt = 6500 + (index % 30) * 1750 + (accountType === "commercial" ? 72000 : 0);
+    const valueCents = 18000 + (index % 18) * 12500 + (accountType === "commercial" ? 185000 : 0);
+    const leadCreatedAt = at(8 + (index % 9), (index * 7) % 60, -1 * (index % 21));
+    const customerName = accountType === "commercial" ? `${lastName} Facilities ${padded}` : `${firstName} ${lastName}`;
+
+    const customerId = await ctx.db.insert("customers", {
+      organizationId,
+      name: customerName,
+      type: customerType,
+      status: status === "converted" ? "active" : "prospect",
+      source: scaleSources[index % scaleSources.length],
+      ownerUserId,
+      tags: ["scale-test", program, accountType],
+      lifetimeValueCents: stage === "won" ? valueCents * 3 : 0,
+      createdAt: leadCreatedAt,
+      updatedAt: leadCreatedAt,
+    });
+    const contactId = await ctx.db.insert("contacts", {
+      organizationId,
+      customerId,
+      name: customerName,
+      email: `${firstName.toLowerCase()}.${lastName.toLowerCase()}${padded}@example.test`,
+      phone: `(508) 555-${String(1000 + number).slice(-4)}`,
+      preferredChannel: index % 2 === 0 ? "phone" : "email",
+      isPrimary: true,
+      createdAt: leadCreatedAt,
+      updatedAt: leadCreatedAt,
+    });
+    const propertyId = await ctx.db.insert("properties", {
+      organizationId,
+      customerId,
+      label: accountType === "commercial" ? `${lastName} Facility` : "Primary residence",
+      street: `${100 + number} ${["Maple", "Cedar", "Oak", "Pine", "Elm"][index % 5]} ${accountType === "commercial" ? "Parkway" : "Lane"}`,
+      city,
+      state: "MA",
+      postalCode: `02${String(30 + (index % 60)).padStart(3, "0")}`,
+      notes: index % 7 === 0 ? "Gate code required. Confirm access before dispatch." : "Synthetic scale-test property.",
+      lawnSizeSqFt,
+      createdAt: leadCreatedAt,
+      updatedAt: leadCreatedAt,
+    });
+    const leadId = await ctx.db.insert("leads", {
+      organizationId,
+      customerId,
+      contactId,
+      propertyId,
+      title: `${program.replaceAll("_", " ")} request ${padded}`,
+      source: scaleSources[index % scaleSources.length],
+      leadType: index % 4 === 0 ? "phone_call" : "form",
+      companyAssignment: index % 2 === 0 ? "Turf Pro" : "GreenAce",
+      accountType,
+      firstName,
+      lastName,
+      email: `${firstName.toLowerCase()}.${lastName.toLowerCase()}${padded}@example.test`,
+      mobilePhone: `(508) 555-${String(1000 + number).slice(-4)}`,
+      normalizedPhone: `508555${String(1000 + number).slice(-4)}`,
+      message: "Generated scale-test lead for pricing, routing, follow-up, and quality scoring.",
+      estimateNotes: "Use this record to test list performance, filters, owners, and conversion views.",
+      programRequests: [program],
+      lawnSizeSqFt,
+      grade: index % 6 === 0 ? "a" : index % 4 === 0 ? "b" : index % 3 === 0 ? "c" : "ungraded",
+      status,
+      urgency: index % 9 === 0 ? "high" : index % 4 === 0 ? "low" : "normal",
+      ownerUserId,
+      spamScore: index % 17 === 0 ? 35 : 0,
+      spamReasons: index % 17 === 0 ? ["scale_test_solicitation_phrase"] : [],
+      qualityScore: 52 + (index % 45),
+      receivedAt: leadCreatedAt,
+      externalSourceId,
+      rawPayload: { source: "demo_scale_seed", rowNumber: number },
+      createdAt: leadCreatedAt,
+      updatedAt: leadCreatedAt,
+    });
+    const opportunityId = await ctx.db.insert("opportunities", {
+      organizationId,
+      leadId,
+      customerId,
+      propertyId,
+      title: `${program.replaceAll("_", " ")} estimate ${padded}`,
+      stage,
+      valueCents,
+      closeProbability: stage === "won" ? 100 : 20 + (index % 6) * 12,
+      expectedCloseDate: at(16, 0, index % 18),
+      ownerUserId,
+      serviceLines: [program],
+      createdAt: leadCreatedAt,
+      updatedAt: at(9 + (index % 7), (index * 11) % 60, -1 * (index % 10)),
+    });
+
+    if (index < 36 && crews.length) {
+      const jobId = await ctx.db.insert("jobs", {
+        organizationId,
+        customerId,
+        propertyId,
+        opportunityId,
+        title: `${program.replaceAll("_", " ")} production ${padded}`,
+        status: index % 6 === 0 ? "completed" : index % 3 === 0 ? "in_progress" : "scheduled",
+        priority: index % 8 === 0 ? "high" : "normal",
+        startDate: at(7 + (index % 8), 30, index % 12),
+        managerUserId: ownerUserId,
+        createdAt: leadCreatedAt,
+        updatedAt: leadCreatedAt,
+      });
+      const visitId = await ctx.db.insert("jobVisits", {
+        organizationId,
+        jobId,
+        customerId,
+        propertyId,
+        scheduledStart: at(7 + (index % 8), 30, index % 12),
+        scheduledEnd: at(9 + (index % 8), 0, index % 12),
+        status: index % 6 === 0 ? "complete" : index % 3 === 0 ? "on_site" : "scheduled",
+        routeOrder: (index % 12) + 1,
+        assignedCrewId: crews[index % crews.length]._id,
+        checklist: [
+          { id: `scale-${padded}-c1`, label: "Confirm property access", isDone: index % 3 === 0 },
+          { id: `scale-${padded}-c2`, label: "Complete service scope", isDone: index % 6 === 0 },
+          { id: `scale-${padded}-c3`, label: "Log materials and photos", isDone: false },
+        ],
+        notes: "Synthetic route stop for dispatch and mobile field testing.",
+        createdAt: leadCreatedAt,
+        updatedAt: leadCreatedAt,
+      });
+      await ctx.db.insert("tasks", {
+        organizationId,
+        entityType: "job",
+        entityId: jobId,
+        title: `Review scale-test job ${padded}`,
+        status: index % 5 === 0 ? "in_progress" : "open",
+        priority: index % 8 === 0 ? "high" : "normal",
+        dueAt: at(15, 0, index % 9),
+        assignedUserId: ownerUserId,
+        createdAt: leadCreatedAt,
+        updatedAt: leadCreatedAt,
+      });
+      await ctx.db.insert("activities", {
+        organizationId,
+        entityType: "visit",
+        entityId: visitId,
+        kind: "visit",
+        summary: `Scale-test visit created for ${customerName}`,
+        actorUserId: ownerUserId,
+        occurredAt: leadCreatedAt,
+      });
+    }
+
+    if (index < 50) {
+      await ctx.db.insert("activities", {
+        organizationId,
+        entityType: "lead",
+        entityId: leadId,
+        kind: index % 2 === 0 ? "call" : "email",
+        summary: `Scale-test activity logged for ${customerName}`,
+        actorUserId: ownerUserId,
+        occurredAt: at(10 + (index % 6), (index * 5) % 60, -1 * (index % 14)),
+      });
+    }
+
+    insertedRecords += 1;
+  }
+
+  if (insertedRecords > 0) {
+    await ctx.db.insert("auditEvents", {
+      organizationId,
+      action: "demo.scale_seed",
+      entityType: "organization",
+      entityId: organizationId,
+      summary: `Seeded ${insertedRecords} synthetic accounts and 100 synthetic team users for scale testing`,
+      after: { insertedAccounts: insertedRecords, syntheticUsers: 100 },
+      createdAt: now,
+    });
+  }
+
+  return { insertedAccounts: insertedRecords, syntheticUsers: 100 };
+}
+
 export const bootstrapWorkspace = mutation({
   args: {},
   handler: async (ctx) => {
     const existing = await getDemoOrg(ctx);
     if (existing) {
       await refreshDemoDates(ctx, existing._id);
-      return { organizationId: existing._id, created: false, refreshed: true };
+      const scale = await ensureDemoScaleData(ctx, existing._id);
+      return { organizationId: existing._id, created: false, refreshed: true, scale };
     }
 
     const now = Date.now();
@@ -536,7 +784,9 @@ export const bootstrapWorkspace = mutation({
       createdAt: now,
     });
 
-    return { organizationId, created: true };
+    const scale = await ensureDemoScaleData(ctx, organizationId);
+
+    return { organizationId, created: true, scale };
   },
 });
 

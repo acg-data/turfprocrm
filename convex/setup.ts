@@ -52,6 +52,11 @@ function planLimits(plan?: string) {
   return { contactLimit: null, memberLimit: null };
 }
 
+function planMarketing(plan?: string) {
+  if (plan === "free") return { label: "Free", monthlyPriceCents: 0, contactLimit: 10 };
+  return { label: "$99/mo All-In Pro", monthlyPriceCents: 9900, contactLimit: null };
+}
+
 export const syncCurrentUser = mutation({
   args: {},
   handler: async (ctx) => {
@@ -139,6 +144,7 @@ export const createOrganization = mutation({
         reportingMirror: "auditEvents_export_boundary",
         onboardingVersion: "green_industry_mvp_v1",
         planLimits: planLimits(plan),
+        planMarketing: planMarketing(plan),
       },
       createdByClerkUserId: identity.subject,
       createdAt: now,
@@ -346,7 +352,7 @@ export const createOrganization = mutation({
       entityType: "organization",
       entityId: organizationId,
       summary: `Provisioned ${args.name} workspace`,
-      after: { slug, plan, checklistItems: 6, limits: planLimits(plan) },
+      after: { slug, plan, checklistItems: 6, limits: planLimits(plan), marketing: planMarketing(plan) },
       createdAt: now,
     });
 

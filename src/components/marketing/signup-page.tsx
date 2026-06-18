@@ -27,10 +27,10 @@ const plans: Array<{
   },
   {
     id: "pro",
-    name: "Paid",
-    price: "Pro",
-    description: "For operators ready to run live sales and production workflows.",
-    highlights: ["No free-contact cap", "Full lead ops and job costing", "Team roles, admin controls, and growth workflows"],
+    name: "All-In Pro",
+    price: "$99/mo",
+    description: "For operators who want Arborgold-style depth without enterprise-tier pricing.",
+    highlights: ["Unlimited contacts and land measurements", "CRM, estimating, scheduling, routes, jobs, invoicing, payments, and reporting", "Job costing, material inventory, chemical tracking, renewals, permissions, and profit dashboards"],
   },
 ];
 
@@ -119,7 +119,8 @@ export function AuthEntryPage() {
           <div className="grid gap-3 rounded-lg border border-stone-200 bg-white p-4">
             {[
               ["One entry point", "Every marketing, login, and trial click lands here first"],
-              ["Free account", "10 contacts included before upgrade prompts"],
+              ["Free account", "10 contacts included before upgrading"],
+              ["$99/mo paid plan", "All Arborgold-style operating modules included in one plan"],
               ["Guided onboarding", "After sign-in, create the company workspace and continue into the OS"],
             ].map(([title, body]) => (
               <div key={title} className="flex gap-3">
@@ -240,7 +241,7 @@ export function AuthEntryPage() {
                 {createdWorkspaceId ? <div className="rounded-md border border-emerald-200 bg-emerald-50 p-3 text-sm text-emerald-800">Workspace created. Open the app to continue onboarding.</div> : null}
                 <button type="submit" disabled={isCreating || !convexConfigured} className="inline-flex min-h-10 items-center justify-center gap-2 rounded-md bg-[#224036] px-4 text-sm font-semibold text-white disabled:cursor-not-allowed disabled:opacity-50">
                   <CreditCard size={16} />
-                  {isCreating ? "Creating workspace..." : selectedPlan === "free" ? "Create free workspace" : "Create paid workspace"}
+                  {isCreating ? "Creating workspace..." : selectedPlan === "free" ? "Create free workspace" : "Create $99/mo workspace"}
                 </button>
               </form>
               </Show>
