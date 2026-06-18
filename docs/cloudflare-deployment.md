@@ -58,7 +58,21 @@ In Clerk, add the production Cloudflare URL and custom domain to the allowed red
 
 In Convex, set `CLERK_JWT_ISSUER_DOMAIN` on the production deployment so Convex can validate Clerk tokens.
 
-The `npm run deploy` script runs:
+The Cloudflare Git deploy command is:
+
+```bash
+npm run deploy
+```
+
+That command deploys the Cloudflare Worker frontend only. Use this for normal Cloudflare dashboard deploys so the site can publish even when Convex production deploy keys have not been added yet.
+
+The full manual deploy command is:
+
+```bash
+npm run deploy:full
+```
+
+That runs:
 
 1. `convex deploy --cmd "npm run cf:build"`
 2. `opennextjs-cloudflare deploy -- --keep-vars`
@@ -72,6 +86,7 @@ npm run cf:build
 npm run cf:preview
 npm run cf:deploy
 npm run deploy
+npm run deploy:full
 ```
 
 Use `npm run cf:preview` to test the Cloudflare Worker runtime locally before a production deploy.
