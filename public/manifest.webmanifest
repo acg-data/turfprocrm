@@ -1,0 +1,16 @@
+{
+  "name": "Landscape CRM",
+  "short_name": "Landscape CRM",
+  "description": "CRM, estimating, dispatch, project management, and field execution for landscaping and pest-control operators.",
+  "start_url": "/",
+  "display": "standalone",
+  "background_color": "#f7f8f3",
+  "theme_color": "#224036",
+  "icons": [
+    {
+      "src": "/favicon.ico",
+      "sizes": "48x48",
+      "type": "image/x-icon"
+    }
+  ]
+}
