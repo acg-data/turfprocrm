@@ -29,6 +29,11 @@ test("marketing front page routes to product pages and the live app", async ({ p
 test("loads the operating shell and creates a lead", async ({ page }) => {
   await page.goto("/app");
   await expect(page.getByRole("heading", { name: "Dashboard" })).toBeVisible();
+  await page.getByLabel("Global search").fill("Brookside");
+  await expect(page.getByText("Brookside HOA").first()).toBeVisible();
+  await page.getByLabel("Global search").press("Enter");
+  await expect(page.getByRole("heading", { name: "CRM", exact: true })).toBeVisible();
+  await expect(page.getByRole("heading", { name: "Brookside HOA" })).toBeVisible();
 
   await openAppView(page, "Prime Time");
   await expect(page.getByRole("heading", { name: "Top 100 updates to make this sellable as a real SaaS" })).toBeVisible();

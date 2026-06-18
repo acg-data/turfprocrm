@@ -40,7 +40,7 @@ export const primeTimeGroups = [
       { title: "Demo data at operating scale", priority: "P0", status: "done", owner: "product", detail: "The live demo workspace has 100 synthetic users plus high-volume leads, customers, jobs, and activities." },
       { title: "Daily owner dashboard", priority: "P0", status: "done", owner: "product", detail: "Pipeline, visits, estimates, overdue tasks, route board, and recent activity are visible on load." },
       { title: "Cross-module navigation", priority: "P0", status: "done", owner: "product", detail: "Dashboard, lead ops, CRM, pipeline, dispatch, jobs, field, costing, profit, admin, onboarding, and specs are reachable from the app shell." },
-      { title: "Global command/search layer", priority: "P1", status: "next", owner: "product", detail: "Add keyboard-friendly search for customers, leads, jobs, invoices, visits, and settings." },
+      { title: "Global command/search layer", priority: "P1", status: "done", owner: "product", detail: "Header search jumps across customers, leads, opportunities, jobs, visits, and tasks with keyboard selection." },
       { title: "Record detail drawers", priority: "P1", status: "in_progress", owner: "product", detail: "Lead detail exists; expand the pattern to customer, job, invoice, and visit side panels." },
       { title: "Saved workspace views", priority: "P1", status: "in_progress", owner: "engineering", detail: "Lead saved views are modeled; extend saved views to dispatch, jobs, profit, and reporting." },
       { title: "Inline activity composer", priority: "P1", status: "next", owner: "product", detail: "Add call, email, SMS note, internal comment, and follow-up creation from every major record." },

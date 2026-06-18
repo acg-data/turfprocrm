@@ -149,6 +149,18 @@ type ProvisionedClientWorkspace = {
   checklist: string[];
 };
 
+type GlobalSearchResult = {
+  id: string;
+  kind: "Customer" | "Lead" | "Opportunity" | "Job" | "Visit" | "Task";
+  label: string;
+  detail: string;
+  view: View;
+  customerId?: string;
+  jobId?: string;
+  visitId?: string;
+  searchText?: string;
+};
+
 const leadSourceOptions = ["Manual entry", "Website form", "Phone", "Referral", "Google Maps", "Door hanger", "Import"];
 const leadTypeOptions: Array<{ value: LeadType; label: string }> = [
   { value: "phone_call", label: "Phone call" },
@@ -1469,6 +1481,7 @@ function LandscapeOsWorkspace({
   const [workspace, setWorkspace] = useState<WorkspaceSnapshot>(initialWorkspace);
   const [view, setView] = useState<View>("dashboard");
   const [mobileNavOpen, setMobileNavOpen] = useState(false);
+  const [globalSearch, setGlobalSearch] = useState("");
   const [customerSearch, setCustomerSearch] = useState("");
   const [selectedCustomerId, setSelectedCustomerId] = useState(initialWorkspace.customers[0]?.id ?? "");
   const [selectedJobId, setSelectedJobId] = useState(initialWorkspace.jobs[0]?.id ?? "");
@@ -1518,6 +1531,116 @@ function LandscapeOsWorkspace({
   const selectedCustomer = customersById.get(selectedCustomerId) ?? workspace.customers[0];
   const selectedJob = jobsById.get(selectedJobId) ?? workspace.jobs[0];
   const selectedVisit = workspace.visits.find((visit) => visit.id === selectedVisitId) ?? workspace.visits[0];
+  const globalSearchResults = useMemo<GlobalSearchResult[]>(() => {
+    const query = globalSearch.trim().toLowerCase();
+    if (query.length < 2) return [];
+    const includes = (...values: Array<string | undefined>) => values.some((value) => value?.toLowerCase().includes(query));
+    const results: GlobalSearchResult[] = [];
+
+    for (const customer of workspace.customers) {
+      if (!includes(customer.name, customer.email, customer.phone, customer.tags.join(" "))) continue;
+      results.push({
+        id: `customer-${customer.id}`,
+        kind: "Customer",
+        label: customer.name,
+        detail: `${formatStatus(customer.type)} - ${customer.email || customer.phone || "No primary contact"}`,
+        view: "crm",
+        customerId: customer.id,
+        searchText: customer.name,
+      });
+    }
+
+    for (const lead of workspace.leads) {
+      const customer = customersById.get(lead.customerId);
+      const property = propertiesById.get(lead.propertyId);
+      if (!includes(lead.title, customer?.name, property?.city, lead.source, lead.programRequests?.join(" "))) continue;
+      results.push({
+        id: `lead-${lead.id}`,
+        kind: "Lead",
+        label: lead.title,
+        detail: `${customer?.name ?? "Lead"} - ${formatStatus(lead.status)} - ${lead.source}`,
+        view: "lead_ops",
+        customerId: lead.customerId,
+        searchText: customer?.name ?? lead.title,
+      });
+    }
+
+    for (const opportunity of workspace.opportunities) {
+      const customer = customersById.get(opportunity.customerId);
+      if (!includes(opportunity.title, customer?.name, opportunity.stage, opportunity.serviceLines.join(" "))) continue;
+      results.push({
+        id: `opportunity-${opportunity.id}`,
+        kind: "Opportunity",
+        label: opportunity.title,
+        detail: `${customer?.name ?? "Opportunity"} - ${currency(opportunity.valueCents)} - ${opportunityStageLabel(opportunity.stage)}`,
+        view: "pipeline",
+        customerId: opportunity.customerId,
+      });
+    }
+
+    for (const job of workspace.jobs) {
+      const customer = customersById.get(job.customerId);
+      if (!includes(job.title, customer?.name, job.status, job.priority)) continue;
+      results.push({
+        id: `job-${job.id}`,
+        kind: "Job",
+        label: job.title,
+        detail: `${customer?.name ?? "Job"} - ${formatStatus(job.status)} - ${formatStatus(job.priority)}`,
+        view: "jobs",
+        customerId: job.customerId,
+        jobId: job.id,
+      });
+    }
+
+    for (const visit of workspace.visits) {
+      const customer = customersById.get(visit.customerId);
+      const job = jobsById.get(visit.jobId);
+      if (!includes(customer?.name, job?.title, visit.status, timeRange(visit.scheduledStart, visit.scheduledEnd))) continue;
+      results.push({
+        id: `visit-${visit.id}`,
+        kind: "Visit",
+        label: job?.title ?? "Scheduled visit",
+        detail: `${customer?.name ?? "Visit"} - ${timeRange(visit.scheduledStart, visit.scheduledEnd)} - ${visitStatusLabel(visit.status)}`,
+        view: "field",
+        customerId: visit.customerId,
+        jobId: visit.jobId,
+        visitId: visit.id,
+      });
+    }
+
+    for (const task of workspace.tasks) {
+      if (!includes(task.title, task.status, task.priority)) continue;
+      results.push({
+        id: `task-${task.id}`,
+        kind: "Task",
+        label: task.title,
+        detail: `${formatStatus(task.status)} - due ${shortDate(task.dueAt)}`,
+        view: task.entityType === "job" ? "jobs" : "dashboard",
+        jobId: task.entityType === "job" ? task.entityId : undefined,
+      });
+    }
+
+    return results.slice(0, 10);
+  }, [customersById, globalSearch, jobsById, propertiesById, workspace.customers, workspace.jobs, workspace.leads, workspace.opportunities, workspace.tasks, workspace.visits]);
+
+  function openGlobalSearchResult(result: GlobalSearchResult) {
+    setView(result.view);
+    if (result.customerId) {
+      setSelectedCustomerId(result.customerId);
+    }
+    if (result.jobId) {
+      setSelectedJobId(result.jobId);
+    }
+    if (result.visitId) {
+      setSelectedVisitId(result.visitId);
+    }
+    if (result.view === "crm" && result.searchText) {
+      setCustomerSearch(result.searchText);
+    }
+    setGlobalSearch("");
+    setMobileNavOpen(false);
+  }
+
   const authConfigured = Boolean(process.env.NEXT_PUBLIC_CLERK_PUBLISHABLE_KEY);
 
   function createLead(event: FormEvent) {
@@ -1915,6 +2038,46 @@ function LandscapeOsWorkspace({
                   </>
                 ) : null}
               </div>
+            </div>
+            <div className="relative mt-3 max-w-3xl">
+              <Search size={16} className="pointer-events-none absolute left-3 top-1/2 -translate-y-1/2 text-stone-400" />
+              <input
+                aria-label="Global search"
+                value={globalSearch}
+                onChange={(event) => setGlobalSearch(event.target.value)}
+                onKeyDown={(event) => {
+                  if (event.key === "Escape") {
+                    setGlobalSearch("");
+                  }
+                  if (event.key === "Enter" && globalSearchResults[0]) {
+                    openGlobalSearchResult(globalSearchResults[0]);
+                  }
+                }}
+                placeholder="Search customers, leads, jobs, visits, tasks"
+                className="h-10 w-full rounded-md border border-stone-200 bg-white pl-9 pr-3 text-sm font-medium text-stone-900 shadow-sm outline-none transition placeholder:text-stone-400 focus:border-[#224036] focus:ring-2 focus:ring-[#224036]/15"
+              />
+              {globalSearch.trim().length >= 2 ? (
+                <div className="absolute left-0 right-0 top-full z-40 mt-2 max-h-96 overflow-y-auto rounded-lg border border-stone-200 bg-white p-1 shadow-xl">
+                  {globalSearchResults.length > 0 ? (
+                    globalSearchResults.map((result) => (
+                      <button
+                        type="button"
+                        key={result.id}
+                        onClick={() => openGlobalSearchResult(result)}
+                        className="flex w-full items-start gap-3 rounded-md px-3 py-2 text-left transition hover:bg-stone-50 focus:bg-stone-50 focus:outline-none"
+                      >
+                        <Badge>{result.kind}</Badge>
+                        <span className="min-w-0">
+                          <span className="block truncate text-sm font-semibold text-stone-900">{result.label}</span>
+                          <span className="block truncate text-xs text-stone-500">{result.detail}</span>
+                        </span>
+                      </button>
+                    ))
+                  ) : (
+                    <div className="px-3 py-4 text-sm text-stone-500">No matching customers, leads, jobs, visits, or tasks.</div>
+                  )}
+                </div>
+              ) : null}
             </div>
           </header>
 
