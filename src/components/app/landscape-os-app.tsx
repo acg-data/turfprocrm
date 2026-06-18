@@ -42,6 +42,7 @@ import { useMutation, useQuery } from "convex/react";
 import Link from "next/link";
 import { FormEvent, ReactNode, useEffect, useMemo, useRef, useState } from "react";
 import { demoWorkspace } from "@/data/demo-workspace";
+import { primeTimeBacklog, primeTimeGroups, type PrimeTimeStatus } from "@/data/prime-time-roadmap";
 import type { JobVisit, Opportunity, WorkspaceSnapshot } from "@/domain/types";
 import {
   canAdvanceOpportunity,
@@ -59,10 +60,11 @@ import { cn, currency, googleMapsUrl, shortDate, timeRange } from "@/lib/utils";
 import { api } from "../../../convex/_generated/api";
 import type { Id } from "../../../convex/_generated/dataModel";
 
-type View = "dashboard" | "lead_ops" | "crm" | "pipeline" | "dispatch" | "jobs" | "field" | "costing" | "profit" | "cost_intel" | "admin" | "onboarding" | "specs";
+type View = "dashboard" | "prime_time" | "lead_ops" | "crm" | "pipeline" | "dispatch" | "jobs" | "field" | "costing" | "profit" | "cost_intel" | "admin" | "onboarding" | "specs";
 
 const navItems: Array<{ id: View; label: string; icon: ReactNode }> = [
   { id: "dashboard", label: "Dashboard", icon: <LayoutDashboard size={18} /> },
+  { id: "prime_time", label: "Prime Time", icon: <ListChecks size={18} /> },
   { id: "lead_ops", label: "Lead Ops", icon: <Filter size={18} /> },
   { id: "crm", label: "CRM", icon: <UsersRound size={18} /> },
   { id: "pipeline", label: "Pipeline", icon: <Gauge size={18} /> },
@@ -509,6 +511,13 @@ function operatingTone(status: string) {
   if (["converted", "won", "paid", "posted", "complete", "completed", "approved", "active", "received"].includes(status)) return "success";
   if (["spam", "lost", "lost_confirmed", "lost_assumed", "disqualified", "void", "failed", "rejected", "overdue", "canceled"].includes(status)) return "danger";
   if (["contacted", "do_estimate", "estimate_provided", "follow_up", "partially_paid", "sent", "submitted", "medium", "high"].includes(status)) return "warning";
+  return "neutral";
+}
+
+function primeTimeTone(status: PrimeTimeStatus) {
+  if (status === "done") return "success";
+  if (status === "blocked") return "danger";
+  if (status === "in_progress") return "warning";
   return "neutral";
 }
 
@@ -1815,7 +1824,7 @@ function LandscapeOsWorkspace({
       <div className="flex min-h-screen">
         <aside
           className={cn(
-            "fixed inset-y-0 left-0 z-30 w-72 border-r border-stone-200 bg-white p-4 transition-transform lg:static lg:translate-x-0",
+            "fixed inset-y-0 left-0 z-30 w-72 overflow-y-auto border-r border-stone-200 bg-white p-4 transition-transform lg:static lg:translate-x-0",
             mobileNavOpen ? "translate-x-0" : "-translate-x-full",
           )}
         >
@@ -1913,6 +1922,7 @@ function LandscapeOsWorkspace({
             {view === "dashboard" && (
               <DashboardView workspace={workspace} dashboard={dashboard} crewsById={crewsById} customersById={customersById} jobsById={jobsById} setView={setView} />
             )}
+            {view === "prime_time" && <PrimeTimeView />}
             {view === "lead_ops" && <LeadOpsView operatingDepth={effectiveOperatingDepth} operatingActions={operatingActions} />}
             {view === "crm" && (
               <CrmView
@@ -1991,6 +2001,171 @@ function LandscapeOsWorkspace({
           </div>
         </main>
       </div>
+    </div>
+  );
+}
+
+function PrimeTimeView() {
+  const statusOrder: PrimeTimeStatus[] = ["done", "in_progress", "next", "blocked"];
+  const priorityOrder = { P0: 0, P1: 1, P2: 2 };
+  const statusCounts = statusOrder.map((status) => ({
+    status,
+    count: primeTimeBacklog.filter((item) => item.status === status).length,
+  }));
+  const doneCount = statusCounts.find((row) => row.status === "done")?.count ?? 0;
+  const inProgressCount = statusCounts.find((row) => row.status === "in_progress")?.count ?? 0;
+  const blockedCount = statusCounts.find((row) => row.status === "blocked")?.count ?? 0;
+  const launchScore = Math.round(((doneCount + inProgressCount * 0.45) / primeTimeBacklog.length) * 100);
+  const p0Open = primeTimeBacklog
+    .filter((item) => item.priority === "P0" && item.status !== "done")
+    .sort((a, b) => priorityOrder[a.priority] - priorityOrder[b.priority] || a.status.localeCompare(b.status));
+  const tracks = primeTimeGroups.map((group) => {
+    const items = primeTimeBacklog.filter((item) => item.track === group.track);
+    const done = items.filter((item) => item.status === "done").length;
+    const active = items.filter((item) => item.status === "in_progress").length;
+    const blocked = items.filter((item) => item.status === "blocked").length;
+    return {
+      ...group,
+      items,
+      done,
+      active,
+      blocked,
+      score: Math.round(((done + active * 0.45) / items.length) * 100),
+    };
+  });
+  const ownerCounts = Array.from(new Set(primeTimeBacklog.map((item) => item.owner))).map((owner) => ({
+    owner,
+    count: primeTimeBacklog.filter((item) => item.owner === owner && item.status !== "done").length,
+  }));
+
+  return (
+    <div className="grid gap-4">
+      <Panel>
+        <div className="flex flex-wrap items-start justify-between gap-4">
+          <div>
+            <div className="flex items-center gap-2 text-sm font-semibold text-[#224036]">
+              <ListChecks size={16} />
+              Prime Time Launch Board
+            </div>
+            <h2 className="mt-2 text-2xl font-bold tracking-normal">Top 100 updates to make this sellable as a real SaaS</h2>
+            <p className="mt-2 max-w-4xl text-sm leading-6 text-stone-600">
+              This board turns the next hundred product, backend, finance, security, onboarding, and go-to-market improvements into an owned launch checklist. Done items are already represented in the current app or Convex model; open items are the next build queue.
+            </p>
+          </div>
+          <div className="grid gap-2 text-right">
+            <div className="text-4xl font-bold text-[#224036]">{launchScore}%</div>
+            <div className="text-xs font-semibold uppercase tracking-normal text-stone-500">weighted launch score</div>
+          </div>
+        </div>
+        <div className="mt-5 grid gap-3 sm:grid-cols-2 xl:grid-cols-5">
+          <Metric label="Top 100" value={primeTimeBacklog.length} />
+          <Metric label="Done" value={doneCount} tone="success" />
+          <Metric label="In progress" value={inProgressCount} tone="warning" />
+          <Metric label="Blocked" value={blockedCount} tone={blockedCount > 0 ? "danger" : "neutral"} />
+          <Metric label="P0 open" value={p0Open.length} tone={p0Open.length > 0 ? "danger" : "success"} />
+        </div>
+      </Panel>
+
+      <div className="grid gap-4 xl:grid-cols-[1fr_380px]">
+        <Panel>
+          <div className="flex flex-wrap items-center justify-between gap-3">
+            <h2 className="text-base font-bold">Track Progress</h2>
+            <Badge>{tracks.length} workstreams</Badge>
+          </div>
+          <div className="mt-4 grid gap-3 md:grid-cols-2">
+            {tracks.map((track) => (
+              <div key={track.track} className="rounded-md border border-stone-200 p-3">
+                <div className="flex items-start justify-between gap-3">
+                  <div>
+                    <div className="font-semibold">{track.track}</div>
+                    <div className="mt-1 text-sm leading-5 text-stone-500">{track.goal}</div>
+                  </div>
+                  <Badge tone={track.blocked > 0 ? "danger" : track.score >= 70 ? "success" : "warning"}>{track.score}%</Badge>
+                </div>
+                <div className="mt-3 h-2 overflow-hidden rounded-full bg-stone-100">
+                  <div className="h-full rounded-full bg-[#224036]" style={{ width: `${track.score}%` }} />
+                </div>
+                <div className="mt-3 grid grid-cols-4 gap-2 text-center text-xs">
+                  <div className="rounded-md bg-emerald-50 p-2 text-emerald-800"><div className="font-bold">{track.done}</div><div>done</div></div>
+                  <div className="rounded-md bg-amber-50 p-2 text-amber-800"><div className="font-bold">{track.active}</div><div>active</div></div>
+                  <div className="rounded-md bg-stone-50 p-2 text-stone-600"><div className="font-bold">{track.items.filter((item) => item.status === "next").length}</div><div>next</div></div>
+                  <div className="rounded-md bg-rose-50 p-2 text-rose-800"><div className="font-bold">{track.blocked}</div><div>blocked</div></div>
+                </div>
+              </div>
+            ))}
+          </div>
+        </Panel>
+
+        <div className="grid gap-4">
+          <Panel>
+            <h2 className="text-base font-bold">P0 Open Items</h2>
+            <div className="mt-4 grid gap-2">
+              {p0Open.map((item) => (
+                <div key={item.id} className="rounded-md border border-stone-200 p-3">
+                  <div className="flex items-start justify-between gap-3">
+                    <div>
+                      <div className="font-semibold">{item.title}</div>
+                      <div className="mt-1 text-xs text-stone-500">{item.id} - {item.track} - {item.owner}</div>
+                    </div>
+                    <Badge tone={primeTimeTone(item.status)}>{formatStatus(item.status)}</Badge>
+                  </div>
+                  <div className="mt-2 text-sm leading-5 text-stone-600">{item.detail}</div>
+                </div>
+              ))}
+            </div>
+          </Panel>
+
+          <Panel>
+            <h2 className="text-base font-bold">Owner Load</h2>
+            <div className="mt-4 grid gap-2">
+              {ownerCounts.map((row) => (
+                <div key={row.owner} className="flex items-center justify-between gap-3 rounded-md border border-stone-200 p-3">
+                  <span className="font-semibold">{formatStatus(row.owner)}</span>
+                  <Badge>{row.count} open</Badge>
+                </div>
+              ))}
+            </div>
+          </Panel>
+        </div>
+      </div>
+
+      <Panel>
+        <div className="flex flex-wrap items-center justify-between gap-3">
+          <h2 className="text-base font-bold">All 100 Updates</h2>
+          <div className="flex flex-wrap gap-2">
+            {statusCounts.map((row) => (
+              <Badge key={row.status} tone={primeTimeTone(row.status)}>{formatStatus(row.status)}: {row.count}</Badge>
+            ))}
+          </div>
+        </div>
+        <div className="mt-4 grid gap-4">
+          {tracks.map((track) => (
+            <div key={track.track} className="rounded-lg border border-stone-200 bg-stone-50 p-3">
+              <div className="flex flex-wrap items-center justify-between gap-3">
+                <div>
+                  <h3 className="font-bold">{track.track}</h3>
+                  <p className="mt-1 text-sm leading-5 text-stone-500">{track.goal}</p>
+                </div>
+                <Badge>{track.items.length} items</Badge>
+              </div>
+              <div className="mt-3 grid gap-2 lg:grid-cols-2">
+                {track.items.map((item) => (
+                  <div key={item.id} className="rounded-md border border-stone-200 bg-white p-3">
+                    <div className="flex items-start justify-between gap-3">
+                      <div className="min-w-0">
+                        <div className="text-xs font-semibold uppercase tracking-normal text-stone-500">{item.id} - {item.priority} - {item.owner}</div>
+                        <div className="mt-1 font-semibold">{item.title}</div>
+                      </div>
+                      <Badge tone={primeTimeTone(item.status)}>{formatStatus(item.status)}</Badge>
+                    </div>
+                    <div className="mt-2 text-sm leading-5 text-stone-600">{item.detail}</div>
+                  </div>
+                ))}
+              </div>
+            </div>
+          ))}
+        </div>
+      </Panel>
     </div>
   );
 }

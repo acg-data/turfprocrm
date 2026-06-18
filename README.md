@@ -59,6 +59,7 @@ The free plan is first-class in Convex. New free workspaces get owner membership
 - Jobs: job workspace, visits, and tasks
 - Field: mobile job list, checklist completion, issue flags, and visit submission
 - Admin: members, crews, service catalog, materials, and settings foundation
+- Prime Time: top-100 SaaS launch-hardening board with owner, priority, status, launch score, P0 blockers, and track progress
 - Specs: live backend blueprint, modeled table groups, Netlify dashboard parity, external interface boundaries, and SaaS readiness
 
 ## Convex Interfaces
@@ -99,3 +100,5 @@ npm run test:e2e
 This app is configured for Cloudflare Workers through the OpenNext adapter. Use `npm run cf:build` to package the Next.js app for Cloudflare, `npm run cf:preview` to test the Worker runtime locally, `npm run deploy` for Cloudflare frontend deploys, and `npm run deploy:full` for the full Convex-plus-Cloudflare production deploy.
 
 The deployment checklist and required dashboard variables are in `docs/cloudflare-deployment.md`.
+
+The top-100 prime-time checklist and current launch blockers are in `docs/prime-time-top-100.md`.

@@ -20,7 +20,7 @@ test("marketing front page routes to product pages and the live app", async ({ p
   await expect(page.getByRole("heading", { name: "Sign in, then launch the workspace" })).toBeVisible();
   await expect(page.getByText("Single sign-in + Convex onboarding")).toBeVisible();
   await expect(page.getByText("10 contacts included").first()).toBeVisible();
-  await expect(page.getByText("Paid").first()).toBeVisible();
+  await expect(page.getByText("All-In Pro").first()).toBeVisible();
 
   await page.goto("/signup");
   await expect(page).toHaveURL("/signin");
@@ -29,6 +29,11 @@ test("marketing front page routes to product pages and the live app", async ({ p
 test("loads the operating shell and creates a lead", async ({ page }) => {
   await page.goto("/app");
   await expect(page.getByRole("heading", { name: "Dashboard" })).toBeVisible();
+
+  await openAppView(page, "Prime Time");
+  await expect(page.getByRole("heading", { name: "Top 100 updates to make this sellable as a real SaaS" })).toBeVisible();
+  await expect(page.getByText("P0 Open Items")).toBeVisible();
+  await expect(page.getByText("Stripe checkout").first()).toBeVisible();
 
   await openAppView(page, "CRM");
   await page.getByRole("textbox", { name: "Customer", exact: true }).fill("Playwright Home");
@@ -80,7 +85,7 @@ test("mobile field screen can complete checklist items", async ({ page }) => {
   await expect(page.getByText("Weather application rules")).toBeVisible();
   await expect(page.getByText("Material / chemical lot")).toBeVisible();
   await expect(page.getByText("Equipment checkout")).toBeVisible();
-  await page.getByRole("button", { name: /Post treatment flags|Mow front lawn/ }).first().click();
+  await page.getByRole("button", { name: /Post treatment flags|Mow front lawn|Confirm property access|Complete service scope/ }).first().click();
   await expect(page.getByRole("button", { name: "Submit Visit" })).toBeVisible();
 });
 

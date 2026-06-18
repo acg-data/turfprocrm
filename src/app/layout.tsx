@@ -1,4 +1,4 @@
-import type { Metadata } from "next";
+import type { Metadata, Viewport } from "next";
 import { Fraunces, Geist, Geist_Mono } from "next/font/google";
 import { AppProviders } from "@/components/app/providers";
 import "./globals.css";
@@ -22,7 +22,20 @@ const fraunces = Fraunces({
 export const metadata: Metadata = {
   title: "Turf Pro CRM",
   description: "Lead operations, CRM, dispatch, field work, job costing, and profit tracking for landscaping and pest control teams.",
+  applicationName: "Turf Pro CRM",
   manifest: "/manifest.webmanifest",
+  appleWebApp: {
+    capable: true,
+    statusBarStyle: "default",
+    title: "Turf Pro CRM",
+  },
+  formatDetection: {
+    telephone: false,
+  },
+};
+
+export const viewport: Viewport = {
+  themeColor: "#224036",
 };
 
 export default function RootLayout({

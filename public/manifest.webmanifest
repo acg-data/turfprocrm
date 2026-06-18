@@ -1,9 +1,12 @@
 {
-  "name": "Landscape CRM",
-  "short_name": "Landscape CRM",
-  "description": "CRM, estimating, dispatch, project management, and field execution for landscaping and pest-control operators.",
-  "start_url": "/",
+  "name": "Turf Pro CRM",
+  "short_name": "Turf Pro",
+  "description": "CRM, estimating, dispatch, field execution, job costing, and launch-ready operating controls for landscaping and pest-control operators.",
+  "start_url": "/app",
+  "scope": "/",
   "display": "standalone",
+  "orientation": "portrait-primary",
+  "categories": ["business", "productivity"],
   "background_color": "#f7f8f3",
   "theme_color": "#224036",
   "icons": [
