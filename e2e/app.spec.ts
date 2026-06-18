@@ -71,6 +71,11 @@ test("dispatch surfaces route confidence and crew risk", async ({ page }) => {
 
   await expect(page.getByText("Route confidence").first()).toBeVisible();
   await expect(page.getByText(/weather application risk|No routing warnings|Crew skill mismatch/).first()).toBeVisible();
+
+  await openAppView(page, "Costing");
+  await expect(page.getByRole("heading", { name: "Margin Guardrails" })).toBeVisible();
+  await expect(page.getByText("Price lift needed")).toBeVisible();
+  await expect(page.getByText("Guardrail").first()).toBeVisible();
 });
 
 test("profit and admin expose owner analytics", async ({ page }) => {

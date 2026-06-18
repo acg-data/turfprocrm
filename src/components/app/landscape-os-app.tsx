@@ -3806,6 +3806,33 @@ function CostingView({ workspace, operatingDepth, operatingActions }: { workspac
   const summaries = operatingDepth.jobCosting.summaries;
   const worstVariance = [...summaries].sort((a, b) => b.varianceCents - a.varianceCents)[0];
   const bestMargin = [...summaries].sort((a, b) => b.grossMarginPercent - a.grossMarginPercent)[0];
+  const targetMarginPercent = 35;
+  const marginGuardrails = summaries
+    .map((summary) => {
+      const actualCostCents = summary.actualLaborCostCents + summary.actualMaterialCostCents + summary.actualEquipmentCostCents + summary.overheadCostCents;
+      const targetRevenueCents = Math.ceil(actualCostCents / (1 - targetMarginPercent / 100));
+      const priceLiftCents = Math.max(0, targetRevenueCents - summary.actualRevenueCents);
+      const reasons = [
+        ...(summary.grossMarginPercent < targetMarginPercent ? [`Margin is ${percent(targetMarginPercent - summary.grossMarginPercent)} below target`] : []),
+        ...(summary.varianceCents > 0 ? [`Actual cost over estimate by ${currency(summary.varianceCents)}`] : []),
+        ...(summary.actualLaborCostCents > summary.actualMaterialCostCents + summary.actualEquipmentCostCents ? ["Labor-heavy cost profile"] : []),
+        ...(summary.overheadCostCents > summary.grossProfitCents ? ["Overhead exceeds gross profit"] : []),
+      ];
+      const status = summary.grossMarginPercent < 20 || priceLiftCents > 50000 ? "blocked" : reasons.length > 0 ? "watch" : "on_track";
+      return {
+        ...summary,
+        status,
+        tone: status === "blocked" ? "danger" : status === "watch" ? "warning" : "success",
+        actualCostCents,
+        targetRevenueCents,
+        priceLiftCents,
+        reasons,
+      };
+    })
+    .sort((a, b) => b.priceLiftCents - a.priceLiftCents || b.varianceCents - a.varianceCents);
+  const guardrailByJobId = new Map(marginGuardrails.map((guardrail) => [guardrail.jobId, guardrail]));
+  const atRiskGuardrails = marginGuardrails.filter((guardrail) => guardrail.status !== "on_track");
+  const totalPriceLiftCents = atRiskGuardrails.reduce((sum, guardrail) => sum + guardrail.priceLiftCents, 0);
 
   function submitTimesheet(event: FormEvent) {
     event.preventDefault();
@@ -3839,10 +3866,68 @@ function CostingView({ workspace, operatingDepth, operatingActions }: { workspac
         </div>
       </Panel>
 
+      <Panel>
+        <div className="flex flex-wrap items-start justify-between gap-4">
+          <div>
+            <h2 className="text-base font-bold">Margin Guardrails</h2>
+            <p className="mt-1 max-w-3xl text-sm leading-5 text-stone-500">Target margin, price lift, cost variance, and cost-profile warnings for jobs that are likely underpriced or drifting from estimate.</p>
+          </div>
+          <div className="grid grid-cols-3 gap-2 text-center">
+            <div className="rounded-md border border-stone-200 bg-stone-50 p-3">
+              <div className="text-xs font-semibold uppercase tracking-normal text-stone-500">Target margin</div>
+              <div className="mt-1 text-lg font-bold">{percent(targetMarginPercent)}</div>
+            </div>
+            <div className="rounded-md border border-stone-200 bg-stone-50 p-3">
+              <div className="text-xs font-semibold uppercase tracking-normal text-stone-500">At risk</div>
+              <div className="mt-1 text-lg font-bold">{atRiskGuardrails.length}</div>
+            </div>
+            <div className="rounded-md border border-stone-200 bg-stone-50 p-3">
+              <div className="text-xs font-semibold uppercase tracking-normal text-stone-500">Price lift needed</div>
+              <div className="mt-1 text-lg font-bold">{currency(totalPriceLiftCents)}</div>
+            </div>
+          </div>
+        </div>
+        <div className="mt-4 grid gap-3 lg:grid-cols-3">
+          {(atRiskGuardrails.length > 0 ? atRiskGuardrails.slice(0, 3) : marginGuardrails.slice(0, 3)).map((guardrail) => (
+            <div key={guardrail.id} className={cn("rounded-md border p-3", guardrail.status === "blocked" ? "border-rose-200 bg-rose-50" : guardrail.status === "watch" ? "border-amber-200 bg-amber-50" : "border-emerald-200 bg-emerald-50")}>
+              <div className="flex items-start justify-between gap-3">
+                <div className="min-w-0">
+                  <div className="truncate font-semibold">{guardrail.jobTitle}</div>
+                  <div className="mt-1 truncate text-sm text-stone-500">{guardrail.customerName}</div>
+                </div>
+                <Badge tone={guardrail.tone}>{formatStatus(guardrail.status)}</Badge>
+              </div>
+              <div className="mt-3 grid grid-cols-3 gap-2 text-sm">
+                <div>
+                  <div className="text-xs font-semibold uppercase tracking-normal text-stone-500">Margin</div>
+                  <div className="mt-1 font-bold">{percent(guardrail.grossMarginPercent)}</div>
+                </div>
+                <div>
+                  <div className="text-xs font-semibold uppercase tracking-normal text-stone-500">Lift</div>
+                  <div className="mt-1 font-bold">{currency(guardrail.priceLiftCents)}</div>
+                </div>
+                <div>
+                  <div className="text-xs font-semibold uppercase tracking-normal text-stone-500">Target</div>
+                  <div className="mt-1 font-bold">{currency(guardrail.targetRevenueCents)}</div>
+                </div>
+              </div>
+              <div className="mt-3 grid gap-1 text-xs leading-5 text-stone-600">
+                {(guardrail.reasons.length > 0 ? guardrail.reasons : ["Pricing is currently inside margin guardrail."]).map((reason) => (
+                  <div key={reason} className="flex gap-2">
+                    <span className="mt-2 h-1.5 w-1.5 shrink-0 rounded-full bg-current" />
+                    <span>{reason}</span>
+                  </div>
+                ))}
+              </div>
+            </div>
+          ))}
+        </div>
+      </Panel>
+
       <div className="grid gap-4 xl:grid-cols-[1fr_340px]">
         <Panel className="overflow-hidden p-0">
           <div className="overflow-x-auto">
-            <table className="min-w-[1080px] w-full border-collapse text-sm">
+            <table className="min-w-[1200px] w-full border-collapse text-sm">
               <thead className="bg-stone-50 text-left text-xs font-semibold uppercase tracking-normal text-stone-500">
                 <tr>
                   <th className="px-4 py-3">Job</th>
@@ -3855,26 +3940,38 @@ function CostingView({ workspace, operatingDepth, operatingActions }: { workspac
                   <th className="px-4 py-3 text-right">Profit</th>
                   <th className="px-4 py-3 text-right">Margin</th>
                   <th className="px-4 py-3 text-right">Variance</th>
+                  <th className="px-4 py-3 text-right">Guardrail</th>
                 </tr>
               </thead>
               <tbody className="divide-y divide-stone-100">
-                {summaries.map((summary) => (
-                  <tr key={summary.id}>
-                    <td className="px-4 py-3">
-                      <div className="font-semibold">{summary.jobTitle}</div>
-                      <div className="mt-1 text-xs text-stone-500">{summary.customerName}</div>
-                    </td>
-                    <td className="px-4 py-3">{summary.crewName}</td>
-                    <td className="px-4 py-3 text-right font-semibold">{currency(summary.actualRevenueCents)}</td>
-                    <td className="px-4 py-3 text-right">{currency(summary.actualLaborCostCents)}</td>
-                    <td className="px-4 py-3 text-right">{currency(summary.actualMaterialCostCents)}</td>
-                    <td className="px-4 py-3 text-right">{currency(summary.actualEquipmentCostCents)}</td>
-                    <td className="px-4 py-3 text-right">{currency(summary.overheadCostCents)}</td>
-                    <td className="px-4 py-3 text-right font-semibold">{currency(summary.grossProfitCents)}</td>
-                    <td className="px-4 py-3 text-right"><Badge tone={summary.grossMarginPercent >= 35 ? "success" : summary.grossMarginPercent < 20 ? "danger" : "warning"}>{percent(summary.grossMarginPercent)}</Badge></td>
-                    <td className="px-4 py-3 text-right"><Badge tone={summary.varianceCents > 0 ? "warning" : "success"}>{currency(summary.varianceCents)}</Badge></td>
-                  </tr>
-                ))}
+                {summaries.map((summary) => {
+                  const guardrail = guardrailByJobId.get(summary.jobId);
+                  return (
+                    <tr key={summary.id}>
+                      <td className="px-4 py-3">
+                        <div className="font-semibold">{summary.jobTitle}</div>
+                        <div className="mt-1 text-xs text-stone-500">{summary.customerName}</div>
+                      </td>
+                      <td className="px-4 py-3">{summary.crewName}</td>
+                      <td className="px-4 py-3 text-right font-semibold">{currency(summary.actualRevenueCents)}</td>
+                      <td className="px-4 py-3 text-right">{currency(summary.actualLaborCostCents)}</td>
+                      <td className="px-4 py-3 text-right">{currency(summary.actualMaterialCostCents)}</td>
+                      <td className="px-4 py-3 text-right">{currency(summary.actualEquipmentCostCents)}</td>
+                      <td className="px-4 py-3 text-right">{currency(summary.overheadCostCents)}</td>
+                      <td className="px-4 py-3 text-right font-semibold">{currency(summary.grossProfitCents)}</td>
+                      <td className="px-4 py-3 text-right"><Badge tone={summary.grossMarginPercent >= 35 ? "success" : summary.grossMarginPercent < 20 ? "danger" : "warning"}>{percent(summary.grossMarginPercent)}</Badge></td>
+                      <td className="px-4 py-3 text-right"><Badge tone={summary.varianceCents > 0 ? "warning" : "success"}>{currency(summary.varianceCents)}</Badge></td>
+                      <td className="px-4 py-3 text-right">
+                        {guardrail ? (
+                          <div className="flex flex-col items-end gap-1">
+                            <Badge tone={guardrail.tone}>{formatStatus(guardrail.status)}</Badge>
+                            <span className="text-xs text-stone-500">{guardrail.priceLiftCents > 0 ? `${currency(guardrail.priceLiftCents)} lift` : "No lift"}</span>
+                          </div>
+                        ) : null}
+                      </td>
+                    </tr>
+                  );
+                })}
               </tbody>
             </table>
           </div>

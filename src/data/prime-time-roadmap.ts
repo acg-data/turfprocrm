@@ -74,7 +74,7 @@ export const primeTimeGroups = [
       { title: "Autoprice calculator model", priority: "P1", status: "in_progress", owner: "engineering", detail: "Declarative pricing rules and calculator sessions are stored; add the full no-code calculator UI." },
       { title: "Unlimited land measurements", priority: "P1", status: "in_progress", owner: "product", detail: "Property and area objects exist; map-based measurement interaction needs production polish." },
       { title: "Estimate templates", priority: "P1", status: "in_progress", owner: "product", detail: "Template tables exist; add reusable quote layouts by service line." },
-      { title: "Margin guardrails", priority: "P1", status: "next", owner: "data", detail: "Warn when estimate labor, materials, equipment, or overhead will miss target margin." },
+      { title: "Margin guardrails", priority: "P1", status: "in_progress", owner: "data", detail: "Costing now calculates target-margin guardrails, price lift needed, variance, and cost-profile reasons; extend this earlier into estimate creation before quoting." },
       { title: "Renewal pricing", priority: "P1", status: "next", owner: "product", detail: "Add renewal proposal generation with price increase rules and renewal status." },
       { title: "Approval and e-sign", priority: "P2", status: "next", owner: "engineering", detail: "Customer approvals need secure public links, signatures, audit events, and expiration." },
       { title: "Proposal PDF exports", priority: "P2", status: "next", owner: "engineering", detail: "Generate branded PDFs from estimate templates and record them as files." },
