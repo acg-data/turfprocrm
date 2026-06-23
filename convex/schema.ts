@@ -11,7 +11,7 @@ const role = v.union(
   v.literal("technician"),
 );
 
-const memberStatus = v.union(v.literal("active"), v.literal("invited"), v.literal("disabled"));
+const memberStatus = v.union(v.literal("active"), v.literal("invited"), v.literal("disabled"), v.literal("expired"), v.literal("revoked"));
 const customerType = v.union(v.literal("residential"), v.literal("commercial"), v.literal("hoa"), v.literal("municipal"));
 const customerStatus = v.union(v.literal("active"), v.literal("prospect"), v.literal("inactive"), v.literal("do_not_service"));
 const accountType = v.union(v.literal("residential"), v.literal("commercial"));
@@ -41,10 +41,24 @@ const opportunityStage = v.union(
   v.literal("lost"),
 );
 const estimateStatus = v.union(v.literal("draft"), v.literal("sent"), v.literal("accepted"), v.literal("declined"), v.literal("expired"));
+const estimateApprovalStatus = v.union(v.literal("not_required"), v.literal("pending"), v.literal("approved"), v.literal("rejected"));
+const approvalRequestStatus = v.union(v.literal("pending"), v.literal("approved"), v.literal("rejected"), v.literal("canceled"));
 const jobStatus = v.union(v.literal("scheduled"), v.literal("in_progress"), v.literal("blocked"), v.literal("completed"), v.literal("canceled"));
+const changeOrderStatus = v.union(v.literal("draft"), v.literal("pending_approval"), v.literal("approved"), v.literal("rejected"), v.literal("canceled"));
 const visitStatus = v.union(v.literal("scheduled"), v.literal("en_route"), v.literal("on_site"), v.literal("complete"), v.literal("missed"), v.literal("canceled"));
 const taskStatus = v.union(v.literal("open"), v.literal("in_progress"), v.literal("done"), v.literal("canceled"));
 const priority = v.union(v.literal("low"), v.literal("normal"), v.literal("high"));
+const fieldIssueCategory = v.union(
+  v.literal("damage"),
+  v.literal("pest_activity"),
+  v.literal("customer_concern"),
+  v.literal("access_issue"),
+  v.literal("upsell_opportunity"),
+  v.literal("safety_hazard"),
+  v.literal("other"),
+);
+const fieldIssueSeverity = v.union(v.literal("low"), v.literal("normal"), v.literal("high"), v.literal("urgent"));
+const fieldIssueStatus = v.union(v.literal("open"), v.literal("reviewed"), v.literal("resolved"), v.literal("dismissed"));
 const serviceCategory = v.union(
   v.literal("lawn_care"),
   v.literal("landscaping"),
@@ -81,6 +95,7 @@ const entityType = v.union(
   v.literal("customer_invoice"),
   v.literal("customer_payment"),
   v.literal("timesheet_entry"),
+  v.literal("field_issue"),
   v.literal("labor_rate_card"),
   v.literal("equipment_rate_card"),
   v.literal("vendor_catalog"),
@@ -109,6 +124,7 @@ const activityKind = v.union(
 const dataQualityIssueKind = v.union(
   v.literal("duplicate"),
   v.literal("missing_name"),
+  v.literal("missing_contact"),
   v.literal("missing_status"),
   v.literal("bad_phone"),
   v.literal("invalid_email"),
@@ -119,6 +135,8 @@ const dataQualityIssueKind = v.union(
   v.literal("potential_spam"),
   v.literal("stale_follow_up"),
   v.literal("price_missing"),
+  v.literal("unknown_service_line"),
+  v.literal("plan_limit"),
 );
 const issueStatus = v.union(v.literal("open"), v.literal("ignored"), v.literal("fixed"), v.literal("false_positive"));
 const severity = v.union(v.literal("info"), v.literal("warning"), v.literal("critical"));
@@ -186,6 +204,12 @@ export default defineSchema({
     clerkOrganizationId: v.optional(v.string()),
     role,
     status: memberStatus,
+    invitedEmail: v.optional(v.string()),
+    invitedByUserId: v.optional(v.id("users")),
+    inviteToken: v.optional(v.string()),
+    inviteExpiresAt: v.optional(v.number()),
+    inviteAcceptedAt: v.optional(v.number()),
+    inviteRevokedAt: v.optional(v.number()),
     fieldPinEnabled: v.optional(v.boolean()),
     notificationProfileId: v.optional(v.id("notificationPreferences")),
     joinedAt: v.number(),
@@ -354,12 +378,18 @@ export default defineSchema({
     propertyId: v.optional(v.id("properties")),
     estimateNumber: v.string(),
     status: estimateStatus,
+    approvalStatus: v.optional(estimateApprovalStatus),
+    approvalRequestId: v.optional(v.id("approvalRequests")),
     subtotalCents: v.number(),
     discountCents: v.optional(v.number()),
     taxCents: v.number(),
     totalCents: v.number(),
     sentAt: v.optional(v.number()),
     acceptedAt: v.optional(v.number()),
+    acceptedByName: v.optional(v.string()),
+    acceptedByEmail: v.optional(v.string()),
+    acceptanceSource: v.optional(v.union(v.literal("customer_portal"), v.literal("email"), v.literal("verbal"), v.literal("office"))),
+    acceptanceNote: v.optional(v.string()),
     expiresAt: v.optional(v.number()),
     terms: v.optional(v.string()),
     templateId: v.optional(v.id("estimateTemplates")),
@@ -371,9 +401,46 @@ export default defineSchema({
     .index("by_opportunity", ["opportunityId"])
     .index("by_customer", ["customerId"]),
 
+  approvalRequests: defineTable({
+    organizationId: v.id("organizations"),
+    estimateId: v.id("estimates"),
+    opportunityId: v.optional(v.id("opportunities")),
+    customerId: v.id("customers"),
+    requestedByUserId: v.optional(v.id("users")),
+    assignedApproverUserId: v.optional(v.id("users")),
+    status: approvalRequestStatus,
+    reasonDetails: v.array(
+      v.object({
+        code: v.string(),
+        label: v.string(),
+        severity: v.union(v.literal("warning"), v.literal("critical")),
+        detail: v.string(),
+        impactCents: v.optional(v.number()),
+      }),
+    ),
+    riskScore: v.number(),
+    grossMarginPercent: v.number(),
+    discountCents: v.number(),
+    discountPercent: v.number(),
+    estimatedCostCents: v.number(),
+    totalCents: v.number(),
+    dueAt: v.number(),
+    decidedByUserId: v.optional(v.id("users")),
+    decidedAt: v.optional(v.number()),
+    decisionComment: v.optional(v.string()),
+    requestedAt: v.number(),
+    createdAt: v.number(),
+    updatedAt: v.number(),
+  })
+    .index("by_org", ["organizationId"])
+    .index("by_org_status", ["organizationId", "status"])
+    .index("by_estimate", ["estimateId"])
+    .index("by_org_assignee_status", ["organizationId", "assignedApproverUserId", "status"]),
+
   estimateLineItems: defineTable({
     organizationId: v.id("organizations"),
     estimateId: v.id("estimates"),
+    servicePackageId: v.optional(v.id("servicePackages")),
     serviceCatalogItemId: v.optional(v.id("serviceCatalogItems")),
     priceBookItemId: v.optional(v.id("priceBookItems")),
     name: v.string(),
@@ -425,9 +492,18 @@ export default defineSchema({
     organizationId: v.id("organizations"),
     name: v.string(),
     category: serviceCategory,
+    description: v.optional(v.string()),
     includedServiceCatalogItemIds: v.array(v.id("serviceCatalogItems")),
     defaultPriceCents: v.number(),
     billingCadence: v.union(v.literal("one_time"), v.literal("monthly"), v.literal("seasonal"), v.literal("annual")),
+    laborHours: v.optional(v.number()),
+    laborRateCents: v.optional(v.number()),
+    materialCostCents: v.optional(v.number()),
+    equipmentCostCents: v.optional(v.number()),
+    overheadPercent: v.optional(v.number()),
+    targetMarginPercent: v.optional(v.number()),
+    checklistTemplateId: v.optional(v.id("checklistTemplates")),
+    checklistDefaults: v.optional(v.array(v.string())),
     active: v.boolean(),
     createdAt: v.number(),
     updatedAt: v.number(),
@@ -515,6 +591,59 @@ export default defineSchema({
     .index("by_org_status", ["organizationId", "status"])
     .index("by_customer", ["customerId"])
     .index("by_org_manager", ["organizationId", "managerUserId"]),
+
+  changeOrders: defineTable({
+    organizationId: v.id("organizations"),
+    jobId: v.id("jobs"),
+    customerId: v.id("customers"),
+    propertyId: v.optional(v.id("properties")),
+    estimateId: v.optional(v.id("estimates")),
+    title: v.string(),
+    description: v.string(),
+    status: changeOrderStatus,
+    requestedByName: v.optional(v.string()),
+    approvedByName: v.optional(v.string()),
+    approvedByEmail: v.optional(v.string()),
+    revenueDeltaCents: v.number(),
+    estimatedCostDeltaCents: v.number(),
+    grossProfitDeltaCents: v.number(),
+    grossMarginPercent: v.number(),
+    scheduleImpactDays: v.number(),
+    requestedAt: v.number(),
+    approvedAt: v.optional(v.number()),
+    taskId: v.optional(v.id("tasks")),
+    createdByUserId: v.optional(v.id("users")),
+    createdAt: v.number(),
+    updatedAt: v.number(),
+  })
+    .index("by_org", ["organizationId"])
+    .index("by_job", ["jobId"])
+    .index("by_customer", ["customerId"])
+    .index("by_org_status", ["organizationId", "status"])
+    .index("by_org_updated", ["organizationId", "updatedAt"]),
+
+  recurringServicePlans: defineTable({
+    organizationId: v.id("organizations"),
+    customerId: v.id("customers"),
+    propertyId: v.optional(v.id("properties")),
+    jobId: v.optional(v.id("jobs")),
+    crewId: v.optional(v.id("crews")),
+    name: v.string(),
+    frequency: v.union(v.literal("weekly"), v.literal("biweekly"), v.literal("monthly"), v.literal("seasonal"), v.literal("custom")),
+    intervalDays: v.number(),
+    visitDurationMinutes: v.number(),
+    nextRunAt: v.number(),
+    lastGeneratedAt: v.optional(v.number()),
+    generatedVisitIds: v.optional(v.array(v.id("jobVisits"))),
+    status: v.union(v.literal("active"), v.literal("paused"), v.literal("completed")),
+    createdAt: v.number(),
+    updatedAt: v.number(),
+  })
+    .index("by_org", ["organizationId"])
+    .index("by_org_status", ["organizationId", "status"])
+    .index("by_job", ["jobId"])
+    .index("by_customer", ["customerId"])
+    .index("by_org_next_run", ["organizationId", "nextRunAt"]),
 
   jobPhases: defineTable({
     organizationId: v.id("organizations"),
@@ -668,6 +797,32 @@ export default defineSchema({
     .index("by_org_assignee", ["organizationId", "assignedUserId"])
     .index("by_org_due", ["organizationId", "dueAt"])
     .index("by_entity", ["entityType", "entityId"]),
+
+  fieldIssues: defineTable({
+    organizationId: v.id("organizations"),
+    visitId: v.id("jobVisits"),
+    jobId: v.id("jobs"),
+    customerId: v.id("customers"),
+    propertyId: v.optional(v.id("properties")),
+    taskId: v.optional(v.id("tasks")),
+    opportunityId: v.optional(v.id("opportunities")),
+    category: fieldIssueCategory,
+    severity: fieldIssueSeverity,
+    status: fieldIssueStatus,
+    summary: v.string(),
+    details: v.optional(v.string()),
+    customerVisible: v.boolean(),
+    createdByUserId: v.optional(v.id("users")),
+    createdAt: v.number(),
+    updatedAt: v.number(),
+  })
+    .index("by_org", ["organizationId"])
+    .index("by_visit", ["visitId"])
+    .index("by_task", ["taskId"])
+    .index("by_opportunity", ["opportunityId"])
+    .index("by_org_status", ["organizationId", "status"])
+    .index("by_org_category", ["organizationId", "category"])
+    .index("by_org_created", ["organizationId", "createdAt"]),
 
   activities: defineTable({
     organizationId: v.id("organizations"),
@@ -896,6 +1051,9 @@ export default defineSchema({
     laborRateCardId: v.optional(v.id("laborRateCards")),
     status: timesheetStatus,
     roleName: v.string(),
+    startSource: v.optional(v.union(v.literal("manual"), v.literal("gps"))),
+    startedLatitude: v.optional(v.number()),
+    startedLongitude: v.optional(v.number()),
     startedAt: v.number(),
     endedAt: v.number(),
     breakMinutes: v.optional(v.number()),

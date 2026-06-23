@@ -1,6 +1,7 @@
-import { ConvexError, v } from "convex/values";
+import { v } from "convex/values";
+import type { Id } from "./_generated/dataModel";
 import { mutation, query } from "./_generated/server";
-import type { MutationCtx } from "./_generated/server";
+import { requireIdentity, upsertCurrentUser } from "./lib/users";
 
 function slugify(value: string) {
   return value
@@ -8,40 +9,6 @@ function slugify(value: string) {
     .replace(/[^a-z0-9]+/g, "-")
     .replace(/^-|-$/g, "")
     .slice(0, 48);
-}
-
-async function upsertCurrentUser(ctx: MutationCtx) {
-  const identity = await ctx.auth.getUserIdentity();
-  if (!identity) {
-    throw new ConvexError({ code: "UNAUTHENTICATED", message: "Sign in is required." });
-  }
-
-  const now = Date.now();
-  const email = identity.email ?? `${identity.subject}@unknown.local`;
-  const name = identity.name ?? identity.nickname ?? email;
-  const existing = await ctx.db
-    .query("users")
-    .withIndex("by_clerk_user_id", (q) => q.eq("clerkUserId", identity.subject))
-    .unique();
-
-  if (existing) {
-    await ctx.db.patch(existing._id, {
-      name,
-      email,
-      avatarUrl: identity.pictureUrl,
-      updatedAt: now,
-    });
-    return existing._id;
-  }
-
-  return await ctx.db.insert("users", {
-    clerkUserId: identity.subject,
-    name,
-    email,
-    avatarUrl: identity.pictureUrl,
-    createdAt: now,
-    updatedAt: now,
-  });
 }
 
 const billingPlan = v.union(v.literal("free"), v.literal("starter"), v.literal("pro"), v.literal("growth"), v.literal("enterprise"));
@@ -110,11 +77,7 @@ export const createOrganization = mutation({
     billingPlan: v.optional(billingPlan),
   },
   handler: async (ctx, args) => {
-    const identity = await ctx.auth.getUserIdentity();
-    if (!identity) {
-      throw new ConvexError({ code: "UNAUTHENTICATED", message: "Sign in is required." });
-    }
-
+    const identity = await requireIdentity(ctx);
     const userId = await upsertCurrentUser(ctx);
     const now = Date.now();
     const plan = args.billingPlan ?? "free";
@@ -162,19 +125,154 @@ export const createOrganization = mutation({
     });
 
     const defaultServices = [
-      ["Six-step fertilization program", "lawn_care", "season", 165000],
-      ["Mosquito and tick barrier", "pest_control", "visit", 13000],
-      ["Core aeration and overseeding", "lawn_care", "acre", 42000],
-      ["Spring cleanup", "landscaping", "crew hour", 9500],
+      ["Six-step fertilization program", "lawn_care", "season", 165000, 120],
+      ["Mosquito and tick barrier", "pest_control", "visit", 13000, 35],
+      ["Core aeration and overseeding", "lawn_care", "acre", 42000, 90],
+      ["Spring cleanup", "landscaping", "crew hour", 9500, 60],
     ] as const;
+    const serviceCatalogIds = new Map<string, Id<"serviceCatalogItems">>();
 
-    for (const [name, category, defaultUnit, defaultPriceCents] of defaultServices) {
-      await ctx.db.insert("serviceCatalogItems", {
+    for (const [name, category, defaultUnit, defaultPriceCents, durationMinutes] of defaultServices) {
+      const serviceCatalogItemId = await ctx.db.insert("serviceCatalogItems", {
         organizationId,
         name,
         category,
         defaultUnit,
         defaultPriceCents,
+        durationMinutes,
+        active: true,
+        createdAt: now,
+        updatedAt: now,
+      });
+      serviceCatalogIds.set(name, serviceCatalogItemId);
+    }
+
+    const priceBookId = await ctx.db.insert("priceBooks", {
+      organizationId,
+      name: "Default lawn and pest price book",
+      description: "Starter price book for fertilization, lawn care, and pest recurring services.",
+      active: true,
+      createdAt: now,
+      updatedAt: now,
+    });
+    const fertilizationPriceBookItemId = await ctx.db.insert("priceBookItems", {
+      organizationId,
+      priceBookId,
+      serviceCatalogItemId: serviceCatalogIds.get("Six-step fertilization program"),
+      name: "Six-step program by lawn size",
+      unit: "season",
+      basePriceCents: 165000,
+      minPriceCents: 62000,
+      pricingModel: "per_sq_ft",
+      formula: "max(minPrice, lawnSizeSqFt * 0.018)",
+      active: true,
+      createdAt: now,
+      updatedAt: now,
+    });
+    await ctx.db.insert("priceBookItems", {
+      organizationId,
+      priceBookId,
+      serviceCatalogItemId: serviceCatalogIds.get("Mosquito and tick barrier"),
+      name: "Mosquito barrier visit",
+      unit: "visit",
+      basePriceCents: 13000,
+      minPriceCents: 9500,
+      pricingModel: "per_visit",
+      active: true,
+      createdAt: now,
+      updatedAt: now,
+    });
+    for (const rule of [
+      { name: "Large turf production complexity", condition: { minAreaSqFt: 50000 }, adjustmentType: "percent" as const, adjustmentValue: 8, order: 1 },
+      { name: "Small property minimum handling", condition: { maxAreaSqFt: 10000 }, adjustmentType: "fixed" as const, adjustmentValue: 15000, order: 2 },
+    ]) {
+      await ctx.db.insert("pricingRules", {
+        organizationId,
+        priceBookItemId: fertilizationPriceBookItemId,
+        ...rule,
+        active: true,
+        createdAt: now,
+        updatedAt: now,
+      });
+    }
+
+    for (const row of [
+      {
+        name: "Lawn health season package",
+        category: "lawn_care" as const,
+        description: "Six-step fertility, grub prevention, aeration, and overseeding assumptions for a full lawn-care season.",
+        catalogNames: ["Six-step fertilization program", "Core aeration and overseeding"],
+        defaultPriceCents: 185000,
+        billingCadence: "seasonal" as const,
+        laborHours: 5.5,
+        laborRateCents: 3200,
+        materialCostCents: 38500,
+        equipmentCostCents: 14500,
+        overheadPercent: 18,
+        targetMarginPercent: 42,
+        checklistDefaults: ["Measure turf zones", "Confirm fertilizer rate", "Flag treated areas", "Capture before/after photos"],
+      },
+      {
+        name: "Mosquito and tick protection package",
+        category: "pest_control" as const,
+        description: "Seasonal barrier program with chemical, route, applicator, and compliance defaults.",
+        catalogNames: ["Mosquito and tick barrier"],
+        defaultPriceCents: 78000,
+        billingCadence: "seasonal" as const,
+        laborHours: 3.5,
+        laborRateCents: 3400,
+        materialCostCents: 12600,
+        equipmentCostCents: 5800,
+        overheadPercent: 16,
+        targetMarginPercent: 45,
+        checklistDefaults: ["Confirm wetland buffer", "Record product and EPA label", "Capture weather snapshot", "Notify customer after service"],
+      },
+      {
+        name: "Spring cleanup production package",
+        category: "landscaping" as const,
+        description: "Crew-hour cleanup package with disposal, equipment, and margin assumptions.",
+        catalogNames: ["Spring cleanup"],
+        defaultPriceCents: 152000,
+        billingCadence: "one_time" as const,
+        laborHours: 12,
+        laborRateCents: 3000,
+        materialCostCents: 9000,
+        equipmentCostCents: 22000,
+        overheadPercent: 18,
+        targetMarginPercent: 38,
+        checklistDefaults: ["Walk property with customer notes", "Stage debris removal", "Inspect beds and edges", "Log disposal or dump fees"],
+      },
+    ]) {
+      const includedServiceCatalogItemIds = row.catalogNames.map((name) => serviceCatalogIds.get(name)).filter((id): id is Id<"serviceCatalogItems"> => Boolean(id));
+      await ctx.db.insert("servicePackages", {
+        organizationId,
+        name: row.name,
+        category: row.category,
+        description: row.description,
+        includedServiceCatalogItemIds,
+        defaultPriceCents: row.defaultPriceCents,
+        billingCadence: row.billingCadence,
+        laborHours: row.laborHours,
+        laborRateCents: row.laborRateCents,
+        materialCostCents: row.materialCostCents,
+        equipmentCostCents: row.equipmentCostCents,
+        overheadPercent: row.overheadPercent,
+        targetMarginPercent: row.targetMarginPercent,
+        checklistDefaults: row.checklistDefaults,
+        active: true,
+        createdAt: now,
+        updatedAt: now,
+      });
+    }
+
+    for (const material of [
+      { name: "Merit grub control", unit: "bag", costCents: 7300, epaRegistrationNumber: "432-1312", restrictedUse: false },
+      { name: "Mosquito barrier mix", unit: "gallon", costCents: 2800, restrictedUse: false },
+      { name: "Premium overseed blend", unit: "bag", costCents: 6400 },
+    ]) {
+      await ctx.db.insert("materials", {
+        organizationId,
+        ...material,
         active: true,
         createdAt: now,
         updatedAt: now,

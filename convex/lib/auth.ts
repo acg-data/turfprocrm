@@ -11,6 +11,7 @@ export const permissionRoles = {
   manageCatalog: ["owner", "admin", "manager"],
   managePipeline: ["owner", "admin", "manager", "sales"],
   createEstimate: ["owner", "admin", "manager", "sales"],
+  approveEstimates: ["owner", "admin", "manager"],
   convertEstimate: ["owner", "admin", "manager"],
   dispatchVisits: ["owner", "admin", "manager", "dispatcher"],
   completeFieldWork: ["owner", "admin", "manager", "crew_lead", "technician"],

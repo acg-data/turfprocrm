@@ -1,6 +1,8 @@
 "use client";
 
 import {
+  ArrowDown,
+  ArrowUp,
   BarChart3,
   Bell,
   Briefcase,
@@ -9,6 +11,7 @@ import {
   Check,
   ChevronLeft,
   ChevronRight,
+  Clock,
   ClipboardCheck,
   ClipboardList,
   CloudSun,
@@ -28,6 +31,7 @@ import {
   Receipt,
   Route,
   Search,
+  Send,
   Settings,
   ShieldCheck,
   SlidersHorizontal,
@@ -40,12 +44,25 @@ import {
 import { Show, UserButton } from "@clerk/nextjs";
 import { useMutation, useQuery } from "convex/react";
 import Link from "next/link";
-import { FormEvent, ReactNode, useEffect, useMemo, useRef, useState } from "react";
+import { ChangeEvent, FormEvent, ReactNode, useEffect, useMemo, useRef, useState } from "react";
+import {
+  customerJourneyCategories,
+  customerJourneyCoverageLabels,
+  customerJourneyCoverageTone,
+  customerJourneys,
+  journeyCoverageSummary,
+} from "@/data/customer-journeys";
 import { demoWorkspace } from "@/data/demo-workspace";
 import { primeTimeBacklog, primeTimeGroups, type PrimeTimeStatus } from "@/data/prime-time-roadmap";
+import { parseLeadImportCsv } from "@/domain/imports";
+import { activeFertilizationPricingAdjustments, calculateFertilizationProgramPricing } from "@/domain/fertilization-pricing";
+import { leadQualityThresholds, scoreLeadQuality } from "@/domain/lead-scoring";
 import type { JobVisit, Opportunity, WorkspaceSnapshot } from "@/domain/types";
 import {
   canAdvanceOpportunity,
+  fieldIssueCategories,
+  fieldIssueCategoryLabel,
+  fieldIssueSeverities,
   nextOpportunityStage,
   opportunityStageLabel,
   opportunityStages,
@@ -53,6 +70,8 @@ import {
   roleLabel,
   statusTone,
   visitStatusLabel,
+  type FieldIssueCategory,
+  type FieldIssueSeverity,
   type Role,
   type ServiceCategory,
 } from "@/domain/workflow";
@@ -60,11 +79,12 @@ import { cn, currency, googleMapsUrl, shortDate, timeRange } from "@/lib/utils";
 import { api } from "../../../convex/_generated/api";
 import type { Id } from "../../../convex/_generated/dataModel";
 
-type View = "dashboard" | "prime_time" | "lead_ops" | "crm" | "pipeline" | "dispatch" | "jobs" | "field" | "costing" | "profit" | "cost_intel" | "admin" | "onboarding" | "specs";
+type View = "dashboard" | "prime_time" | "journeys" | "lead_ops" | "crm" | "pipeline" | "dispatch" | "jobs" | "field" | "costing" | "profit" | "cost_intel" | "admin" | "onboarding" | "specs";
 
 const navItems: Array<{ id: View; label: string; icon: ReactNode }> = [
   { id: "dashboard", label: "Dashboard", icon: <LayoutDashboard size={18} /> },
   { id: "prime_time", label: "Prime Time", icon: <ListChecks size={18} /> },
+  { id: "journeys", label: "Journeys", icon: <ClipboardCheck size={18} /> },
   { id: "lead_ops", label: "Lead Ops", icon: <Filter size={18} /> },
   { id: "crm", label: "CRM", icon: <UsersRound size={18} /> },
   { id: "pipeline", label: "Pipeline", icon: <Gauge size={18} /> },
@@ -89,11 +109,39 @@ const categoryLabels: Record<ServiceCategory, string> = {
   maintenance: "Maintenance",
 };
 
+const fieldIssuePresets: Array<{ label: string; category: FieldIssueCategory; severity: FieldIssueSeverity; details: string; customerVisible?: boolean; serviceCategory?: ServiceCategory; estimatedValueCents?: number }> = [
+  { label: "Property damage", category: "damage", severity: "urgent", details: "Document damage, photos, affected area, and customer impact.", customerVisible: true },
+  { label: "Pest activity", category: "pest_activity", severity: "high", details: "Record pest type, location, pressure level, and treatment recommendation.", serviceCategory: "pest_control" },
+  { label: "Customer concern", category: "customer_concern", severity: "high", details: "Capture customer concern and required manager callback.", customerVisible: true },
+  { label: "Access issue", category: "access_issue", severity: "normal", details: "Gate, lock, pet, vehicle, or site access blocked production." },
+  { label: "Upsell opportunity", category: "upsell_opportunity", severity: "normal", details: "Customer or technician identified additional billable work.", serviceCategory: "maintenance", estimatedValueCents: 45000 },
+  { label: "Safety hazard", category: "safety_hazard", severity: "urgent", details: "Stop-work or crew safety concern requiring supervisor review." },
+];
+
 type LeadType = "phone_call" | "form" | "direct_email" | "referral" | "other";
 type AccountType = "residential" | "commercial";
 type LeadUrgency = "low" | "normal" | "high";
+type CallOutcome = "estimate_requested" | "needs_callback" | "price_shopping" | "not_a_fit" | "emergency";
 type IndustryFocus = "landscaping" | "pest_control" | "both";
 type BillingPlan = "free" | "starter" | "pro" | "growth" | "enterprise";
+type FieldIssueSubmitInput = {
+  category: FieldIssueCategory;
+  severity: FieldIssueSeverity;
+  summary: string;
+  details?: string;
+  customerVisible: boolean;
+  createOpportunity?: boolean;
+  serviceCategory?: ServiceCategory;
+  estimatedValueCents?: number;
+};
+type FieldIssueDraft = {
+  category: FieldIssueCategory;
+  severity: FieldIssueSeverity;
+  details: string;
+  customerVisible: boolean;
+  serviceCategory: ServiceCategory;
+  estimatedValue: string;
+};
 
 const billingPlanLabels: Record<BillingPlan, string> = {
   free: "Free - 10 contacts",
@@ -122,6 +170,32 @@ type LeadFormState = {
   urgency: LeadUrgency;
   message: string;
   estimateNotes: string;
+  callOutcome: CallOutcome;
+  createCallFollowUp: boolean;
+  followUpDueInDays: string;
+};
+
+type WebLeadFormState = {
+  customerName: string;
+  email: string;
+  phone: string;
+  street: string;
+  city: string;
+  state: string;
+  postalCode: string;
+  serviceLine: ServiceCategory;
+  campaign: string;
+  sourceDetail: string;
+  message: string;
+  estimatedValue: string;
+};
+
+type RepeatLeadFormState = {
+  title: string;
+  value: string;
+  serviceLine: ServiceCategory;
+  source: string;
+  message: string;
 };
 
 type ClientOnboardingFormState = {
@@ -135,6 +209,47 @@ type ClientOnboardingFormState = {
   services: ServiceCategory[];
   importSource: string;
   seats: string;
+};
+
+type JobTaskFormState = {
+  title: string;
+  priority: "low" | "normal" | "high";
+  dueInDays: string;
+  assignedUserId: string;
+};
+
+type LeadStatusSettingCode =
+  | "new"
+  | "contacted"
+  | "do_estimate"
+  | "estimate_provided"
+  | "follow_up"
+  | "waiting"
+  | "converted"
+  | "lost_confirmed"
+  | "lost_assumed"
+  | "unqualified"
+  | "passed_on"
+  | "disqualified"
+  | "spam";
+
+type LeadStatusSettingFormState = {
+  settingId: string;
+  status: LeadStatusSettingCode;
+  label: string;
+  color: string;
+  sortOrder: string;
+  terminal: boolean;
+  active: boolean;
+};
+
+type ServiceCatalogFormState = {
+  itemId: string;
+  name: string;
+  category: ServiceCategory;
+  defaultUnit: string;
+  defaultPrice: string;
+  active: boolean;
 };
 
 type ProvisionedClientWorkspace = {
@@ -162,18 +277,35 @@ type GlobalSearchResult = {
 };
 
 type ActivityComposerKind = Extract<WorkspaceSnapshot["activities"][number]["kind"], "call" | "email" | "note">;
+type ActivityCallOutcome = "estimate_requested" | "left_voicemail" | "no_answer" | "not_interested" | "needs_manager";
+type OpportunityImpact = "none" | "increase_probability" | "decrease_probability" | "advance_stage";
 
 type ActivityComposerState = {
   kind: ActivityComposerKind;
   body: string;
   createFollowUp: boolean;
   dueInDays: string;
+  callOutcome: ActivityCallOutcome;
+  opportunityImpact: OpportunityImpact;
 };
 
 const activityKindLabels: Record<ActivityComposerKind, string> = {
   note: "Internal note",
   call: "Call",
   email: "Email",
+};
+const activityCallOutcomeLabels: Record<ActivityCallOutcome, string> = {
+  estimate_requested: "Estimate requested",
+  left_voicemail: "Left voicemail",
+  no_answer: "No answer",
+  not_interested: "Not interested",
+  needs_manager: "Needs manager review",
+};
+const opportunityImpactLabels: Record<OpportunityImpact, string> = {
+  none: "No opportunity impact",
+  increase_probability: "Increase probability",
+  decrease_probability: "Decrease probability",
+  advance_stage: "Advance stage",
 };
 
 const leadSourceOptions = ["Manual entry", "Website form", "Phone", "Referral", "Google Maps", "Door hanger", "Import"];
@@ -184,6 +316,14 @@ const leadTypeOptions: Array<{ value: LeadType; label: string }> = [
   { value: "referral", label: "Referral" },
   { value: "other", label: "Other" },
 ];
+const callOutcomeOptions: Array<{ value: CallOutcome; label: string }> = [
+  { value: "estimate_requested", label: "Estimate requested" },
+  { value: "needs_callback", label: "Needs callback" },
+  { value: "price_shopping", label: "Price shopping" },
+  { value: "not_a_fit", label: "Not a fit" },
+  { value: "emergency", label: "Emergency service" },
+];
+const callOutcomeLabels = Object.fromEntries(callOutcomeOptions.map((option) => [option.value, option.label])) as Record<CallOutcome, string>;
 
 function defaultLeadForm(): LeadFormState {
   return {
@@ -205,6 +345,9 @@ function defaultLeadForm(): LeadFormState {
     urgency: "normal",
     message: "",
     estimateNotes: "",
+    callOutcome: "estimate_requested",
+    createCallFollowUp: true,
+    followUpDueInDays: "1",
   };
 }
 
@@ -214,6 +357,67 @@ function defaultActivityComposer(): ActivityComposerState {
     body: "",
     createFollowUp: false,
     dueInDays: "2",
+    callOutcome: "estimate_requested",
+    opportunityImpact: "none",
+  };
+}
+
+function defaultJobTaskForm(): JobTaskFormState {
+  return {
+    title: "",
+    priority: "normal",
+    dueInDays: "2",
+    assignedUserId: "",
+  };
+}
+
+function defaultServiceCatalogForm(): ServiceCatalogFormState {
+  return {
+    itemId: "",
+    name: "Quarterly pest perimeter service",
+    category: "pest_control",
+    defaultUnit: "visit",
+    defaultPrice: "199",
+    active: true,
+  };
+}
+
+function defaultLeadStatusSettingForm(): LeadStatusSettingFormState {
+  return {
+    settingId: "",
+    status: "follow_up",
+    label: "Follow Up",
+    color: "#b45309",
+    sortOrder: "5",
+    terminal: false,
+    active: true,
+  };
+}
+
+function defaultWebLeadForm(): WebLeadFormState {
+  return {
+    customerName: "",
+    email: "",
+    phone: "",
+    street: "",
+    city: "Foxborough",
+    state: "MA",
+    postalCode: "",
+    serviceLine: "lawn_care",
+    campaign: "Spring cleanup landing page",
+    sourceDetail: "Google Ads",
+    message: "",
+    estimatedValue: "1800",
+  };
+}
+
+function defaultRepeatLeadForm(): RepeatLeadFormState {
+  return {
+    title: "",
+    value: "1200",
+    serviceLine: "maintenance",
+    source: "Repeat customer",
+    message: "",
   };
 }
 
@@ -270,12 +474,89 @@ type LiveActions = {
     urgency: LeadUrgency;
     message?: string;
     estimateNotes?: string;
-  }) => void;
+    callOutcome?: CallOutcome;
+    createCallFollowUp?: boolean;
+    followUpDueInDays?: number;
+  }) => Promise<{ customerId?: string; leadId?: string; opportunityId?: string } | void>;
+  createLeadForCustomer?: (input: {
+    customerId: string;
+    propertyId?: string;
+    title: string;
+    source: string;
+    valueCents: number;
+    serviceLine: ServiceCategory;
+    message?: string;
+  }) => Promise<{ leadId?: string; opportunityId?: string } | void>;
+  createEstimateFromOpportunity?: (input: {
+    opportunityId: string;
+    status: "draft" | "sent";
+    lineItemName: string;
+    quantity: number;
+    unit: string;
+    unitPriceCents: number;
+    terms?: string;
+    servicePackageId?: string;
+    serviceCatalogItemId?: string;
+  }) => Promise<{ estimateId?: string; estimateNumber?: string } | void>;
+  sendEstimateToCustomer?: (estimateId: string) => Promise<{ estimateId?: string; estimateNumber?: string; sentAt?: number; expiresAt?: number } | void>;
+  acceptEstimateFromCustomer?: (input: {
+    estimateId: string;
+    acceptedByName?: string;
+    acceptedByEmail?: string;
+    acceptanceSource?: "customer_portal" | "email" | "verbal" | "office";
+    acceptanceNote?: string;
+  }) => Promise<{ estimateId?: string; estimateNumber?: string; acceptedAt?: number } | void>;
+  convertEstimateToJob?: (input: {
+    estimateId: string;
+    scheduledStart?: number;
+    scheduledEnd?: number;
+    crewId?: string;
+  }) => Promise<{ estimateId?: string; estimateNumber?: string; jobId?: string; visitId?: string; jobTitle?: string; alreadyConverted?: boolean } | void>;
   advanceOpportunity?: (opportunityId: string, stage: Opportunity["stage"]) => void;
   assignVisit?: (visitId: string, crewId: string) => void;
+  reorderVisit?: (visitId: string, routeOrder: number) => void;
+  generateRecurringRoute?: (input: {
+    jobId: string;
+    frequency: "weekly" | "biweekly" | "monthly" | "seasonal" | "custom";
+    count: number;
+    firstStart: number;
+    durationMinutes: number;
+    crewId?: string;
+  }) => Promise<{ planId?: string; visitIds?: string[]; generatedCount?: number; nextRunAt?: number } | void>;
+  createChangeOrder?: (input: {
+    jobId: string;
+    title: string;
+    description: string;
+    requestedByName?: string;
+    revenueDeltaCents: number;
+    estimatedCostDeltaCents: number;
+    scheduleImpactDays: number;
+  }) => Promise<{ changeOrderId?: string } | string | void>;
+  approveChangeOrder?: (input: {
+    changeOrderId: string;
+    approvedByName: string;
+    approvedByEmail?: string;
+  }) => Promise<{ changeOrderId?: string; taskId?: string } | void>;
+  startVisit?: (visitId: string, startSource?: "manual" | "gps") => Promise<{ visitId?: string; timesheetEntryId?: string; startedAt?: number } | void>;
   completeChecklistItem?: (visitId: string, itemId: string) => void;
-  submitVisit?: (visitId: string, issueFlag?: string) => void;
-  addTask?: (jobId: string, title: string) => void;
+  submitVisit?: (
+    visitId: string,
+    input?: {
+      issueFlag?: string;
+      issue?: FieldIssueSubmitInput;
+      notes?: string;
+      materialApplications?: Array<{ materialId: string; quantity: number; unit: string; targetAreaId?: string; notes?: string }>;
+    },
+  ) => Promise<{ visitId?: string; timesheetEntryId?: string; fieldIssueId?: string; issueTaskId?: string; issueOpportunityId?: string } | void>;
+  addTask?: (
+    jobId: string,
+    input: {
+      title: string;
+      priority?: "low" | "normal" | "high";
+      dueAt?: number;
+      assignedUserId?: string;
+    },
+  ) => Promise<string | void> | void;
   addActivity?: (input: {
     entityType: "customer" | "job";
     entityId: string;
@@ -283,9 +564,19 @@ type LiveActions = {
     summary: string;
     createFollowUp: boolean;
     dueInDays: number;
+    callOutcome?: ActivityCallOutcome;
+    opportunityImpact?: OpportunityImpact;
   }) => void;
   createCrew?: (name: string) => void;
   toggleService?: (itemId: string) => void;
+  upsertServiceCatalogItem?: (input: {
+    itemId?: string;
+    name: string;
+    category: ServiceCategory;
+    defaultUnit: string;
+    defaultPriceCents: number;
+    active: boolean;
+  }) => Promise<string | void> | void;
 };
 
 type LeadOpsRow = {
@@ -324,7 +615,7 @@ type OperatingDepth = {
   leadOps: {
     rows: LeadOpsRow[];
     savedViews: Array<{ id: string; name: string; scope: string; filters: unknown; columns: string[] }>;
-    statusSettings: Array<{ id: string; status: string; label: string; color: string; terminal: boolean; active: boolean }>;
+    statusSettings: Array<{ id: string; status: LeadStatusSettingCode; label: string; color: string; sortOrder: number; terminal: boolean; active: boolean }>;
     qualityIssues: Array<{ id: string; kind: string; severity: string; status: string; summary: string; leadId?: string }>;
     metrics: { openLeads: number; highQuality: number; spamReview: number; unassigned: number; slaOverdue: number; duplicates: number; estimateReady: number };
   };
@@ -340,7 +631,20 @@ type OperatingDepth = {
     members: Array<{ id: string; userId: string; name: string; email: string; role: Role; status: string }>;
     permissionMatrix: Array<{ permission: string; roles: Role[] }>;
     featureFlags: Array<{ id: string; key: string; enabled: boolean }>;
-    auditEvents: Array<{ id: string; action: string; summary: string; entityType: string; createdAt: number }>;
+    auditEvents: Array<{
+      id: string;
+      action: string;
+      summary: string;
+      entityType: string;
+      entityId: string;
+      actorUserId?: string;
+      actorName: string;
+      module: string;
+      exportState: string;
+      requestId?: string;
+      changedFields: string[];
+      createdAt: number;
+    }>;
     tagTaxonomy: Array<{ id: string; key: string; label: string; category: string; color: string; active: boolean; usageCount: number }>;
     segmentCards: Array<{ label: string; customerCount: number; revenueCents: number; grossProfitCents: number; churnRiskPercent: number }>;
     ownerAnalytics: {
@@ -404,22 +708,76 @@ type OperatingDepth = {
     grossProfitCents: number;
     arCents: number;
     grossMarginPercent: number;
+    serviceLineProfitability: Array<{
+      serviceCategory: string;
+      label: string;
+      revenueCents: number;
+      invoicedCents: number;
+      collectedCents: number;
+      laborCostCents: number;
+      materialCostCents: number;
+      equipmentCostCents: number;
+      overheadCostCents: number;
+      grossProfitCents: number;
+      grossMarginPercent: number;
+      jobCount: number;
+      calculatedAt: number;
+    }>;
     invoices: Array<{ id: string; invoiceNumber: string; customerName: string; status: string; totalCents: number; paidCents: number; balanceCents: number }>;
     payments: Array<{ id: string; customerName: string; status: string; method: string; amountCents: number; receivedAt: number }>;
   };
+};
+
+type ImportPreviewUiRow = {
+  id?: string;
+  rowNumber: number;
+  customerName: string;
+  email?: string;
+  phone?: string;
+  street?: string;
+  city?: string;
+  state?: string;
+  postalCode?: string;
+  serviceLine?: string;
+  source?: string;
+  mappedEntity: "lead + customer + property" | "customer + property" | "lead";
+  status: "ready" | "needs_review" | "blocked";
+  issues: Array<{ message: string }>;
 };
 
 type OperatingActions = {
   bootstrap?: () => void;
   updateLead?: (leadId: string, fields: { status?: string; grade?: string; hidden?: boolean }) => void;
   bulkUpdateLeads?: (leadIds: string[], status: string) => void;
+  createLeadImportPreview?: (input: { fileName?: string; csvText: string }) => Promise<{ importJobId: string; rows: Array<ImportPreviewUiRow & { id: string }> }>;
+  commitLeadImportRows?: (importJobId: string) => Promise<{ imported: number; skipped: number; failed: number }>;
+  submitWebLead?: (input: WebLeadFormState) => Promise<{ leadId: string; submissionId: string; spamScore: number; spamReasons: string[]; status: string }>;
+  runStaleLeadCheck?: () => Promise<{ inserted: number }>;
   updateMemberRole?: (membershipId: string, role: Role) => void;
+  inviteMember?: (input: { email: string; name?: string; role: Role; expiresInDays?: number }) => void;
+  revokeMemberInvite?: (membershipId: string) => void;
+  expireMemberInvite?: (membershipId: string) => void;
+  upsertLeadStatusSetting?: (input: { id?: string; status: LeadStatusSettingCode; label: string; color: string; sortOrder: number; terminal: boolean; active: boolean }) => void;
   upsertLaborRate?: (input: { id?: string; roleName: string; hourlyCostCents: number; billableRateCents?: number }) => void;
   upsertVendorCatalogItem?: (input: { id?: string; vendorName: string; itemName: string; category: ServiceCategory; unit: string; unitCostCents: number }) => void;
   addTimesheetEntry?: (jobId: string, roleName: string, hours: number, hourlyCostCents: number) => void;
   recordCustomerPayment?: (invoiceId: string, amountCents: number, method: "cash" | "check" | "card" | "ach" | "other") => void;
   recalculateJobCosts?: () => void;
   refreshCostIntelligence?: () => void;
+  priceFertilizationProgram?: (input: {
+    propertyId: string;
+    propertyAreaId?: string;
+    materialId: string;
+    priceBookItemId?: string;
+    applicationCount: number;
+    materialRateUnitsPer1000SqFt: number;
+    laborHoursPerApplication: number;
+    laborRateCents: number;
+    equipmentCostCentsPerApplication: number;
+    overheadPercent: number;
+    targetMarginPercent: number;
+  }) => Promise<{ sessionId: string; output: ReturnType<typeof calculateFertilizationProgramPricing> }>;
+  decideEstimateApproval?: (approvalRequestId: string, decision: "approved" | "rejected", comment?: string) => Promise<{ approvalRequestId: string; status: "approved" | "rejected" } | void>;
 };
 
 const fallbackBackendBlueprint: BackendBlueprint = {
@@ -528,14 +886,18 @@ function normalizeSlug(value: string) {
 }
 
 function leadQualityScore(form: LeadFormState) {
-  let score = 100;
-  if (!form.phone.trim()) score -= 18;
-  if (!form.email.trim()) score -= 12;
-  if (!form.street.trim() || !form.city.trim() || !form.postalCode.trim()) score -= 18;
-  if (!form.message.trim()) score -= 8;
-  if (!numericOrUndefined(form.lawnSizeSqFt)) score -= 6;
-  if (!form.companyAssignment.trim()) score -= 6;
-  return Math.max(20, score);
+  return scoreLeadQuality({
+    source: form.source,
+    phone: form.phone,
+    email: form.email,
+    street: form.street,
+    city: form.city,
+    postalCode: form.postalCode,
+    serviceLine: form.serviceLine,
+    lawnSizeSqFt: numericOrUndefined(form.lawnSizeSqFt),
+    message: form.message,
+    ownerOrCompany: form.companyAssignment,
+  }).score;
 }
 
 function dateTime(value: number) {
@@ -752,6 +1114,97 @@ function logConvexWriteFailure(action: string, error: unknown) {
   console.warn(`[convex:${action}] write skipped in local UI`, error);
 }
 
+function userFacingWriteError(error: unknown) {
+  if (error instanceof Error) {
+    return error.message.replace(/^.*Uncaught ConvexError:\s*/, "").replace(/^.*ConvexError:\s*/, "");
+  }
+  return "The backend rejected this write. Check plan limits, permissions, or required fields and try again.";
+}
+
+function sameIdentityText(left?: string, right?: string) {
+  return (left ?? "").trim().toLowerCase() === (right ?? "").trim().toLowerCase();
+}
+
+function preserveCustomerSelection(previous: WorkspaceSnapshot, next: WorkspaceSnapshot, currentId: string) {
+  if (next.customers.some((customer) => customer.id === currentId)) return currentId;
+  const previousCustomer = previous.customers.find((customer) => customer.id === currentId);
+  if (!previousCustomer) return next.customers[0]?.id ?? "";
+
+  const contactMatch = next.customers.find(
+    (customer) =>
+      sameIdentityText(customer.name, previousCustomer.name) &&
+      (sameIdentityText(customer.email, previousCustomer.email) || sameIdentityText(customer.phone, previousCustomer.phone)),
+  );
+  if (contactMatch) return contactMatch.id;
+
+  return next.customers.find((customer) => sameIdentityText(customer.name, previousCustomer.name))?.id ?? next.customers[0]?.id ?? "";
+}
+
+function preserveJobSelection(previous: WorkspaceSnapshot, next: WorkspaceSnapshot, currentId: string) {
+  if (next.jobs.some((job) => job.id === currentId)) return currentId;
+  const previousJob = previous.jobs.find((job) => job.id === currentId);
+  if (!previousJob) return next.jobs[0]?.id ?? "";
+  const previousCustomer = previous.customers.find((customer) => customer.id === previousJob.customerId);
+
+  const jobMatch = next.jobs.find((job) => {
+    if (!sameIdentityText(job.title, previousJob.title)) return false;
+    if (!previousCustomer) return true;
+    const nextCustomer = next.customers.find((customer) => customer.id === job.customerId);
+    return sameIdentityText(nextCustomer?.name, previousCustomer.name);
+  });
+
+  return jobMatch?.id ?? next.jobs.find((job) => sameIdentityText(job.title, previousJob.title))?.id ?? next.jobs[0]?.id ?? "";
+}
+
+function preserveVisitSelection(previous: WorkspaceSnapshot, next: WorkspaceSnapshot, currentId: string) {
+  if (next.visits.some((visit) => visit.id === currentId)) return currentId;
+  const previousVisit = previous.visits.find((visit) => visit.id === currentId);
+  if (!previousVisit) return next.visits[0]?.id ?? "";
+  const previousJob = previous.jobs.find((job) => job.id === previousVisit.jobId);
+
+  const visitMatch = next.visits.find((visit) => {
+    if (visit.scheduledStart !== previousVisit.scheduledStart || visit.scheduledEnd !== previousVisit.scheduledEnd) return false;
+    if (!previousJob) return true;
+    const nextJob = next.jobs.find((job) => job.id === visit.jobId);
+    return sameIdentityText(nextJob?.title, previousJob.title);
+  });
+
+  return visitMatch?.id ?? next.visits[0]?.id ?? "";
+}
+
+function normalizeWorkspaceSnapshot(workspace: WorkspaceSnapshot): WorkspaceSnapshot {
+  const maybe = workspace as WorkspaceSnapshot & {
+    contacts?: WorkspaceSnapshot["contacts"];
+    propertyAreas?: WorkspaceSnapshot["propertyAreas"];
+    invoices?: WorkspaceSnapshot["invoices"];
+    approvalRequests?: WorkspaceSnapshot["approvalRequests"];
+    payments?: WorkspaceSnapshot["payments"];
+    servicePackages?: WorkspaceSnapshot["servicePackages"];
+    priceBookItems?: WorkspaceSnapshot["priceBookItems"];
+    pricingRules?: WorkspaceSnapshot["pricingRules"];
+    recurringServicePlans?: WorkspaceSnapshot["recurringServicePlans"];
+    changeOrders?: WorkspaceSnapshot["changeOrders"];
+    notes?: WorkspaceSnapshot["notes"];
+    files?: WorkspaceSnapshot["files"];
+  };
+
+  return {
+    ...workspace,
+    contacts: maybe.contacts ?? [],
+    propertyAreas: maybe.propertyAreas ?? [],
+    invoices: maybe.invoices ?? [],
+    approvalRequests: maybe.approvalRequests ?? [],
+    payments: maybe.payments ?? [],
+    servicePackages: maybe.servicePackages ?? [],
+    priceBookItems: maybe.priceBookItems ?? [],
+    pricingRules: maybe.pricingRules ?? [],
+    recurringServicePlans: maybe.recurringServicePlans ?? [],
+    changeOrders: maybe.changeOrders ?? [],
+    notes: maybe.notes ?? [],
+    files: maybe.files ?? [],
+  };
+}
+
 function buildFallbackOperatingDepth(workspace: WorkspaceSnapshot): OperatingDepth {
   const customersById = new Map(workspace.customers.map((customer) => [customer.id, customer]));
   const propertiesById = new Map(workspace.properties.map((property) => [property.id, property]));
@@ -801,6 +1254,49 @@ function buildFallbackOperatingDepth(workspace: WorkspaceSnapshot): OperatingDep
     }),
     { invoicedCents: 0, collectedCents: 0, laborCostCents: 0, materialCostCents: 0, equipmentCostCents: 0, overheadCostCents: 0, grossProfitCents: 0 },
   );
+  const serviceLineGroups = summaries.reduce<Record<string, {
+    serviceCategory: string;
+    label: string;
+    revenueCents: number;
+    invoicedCents: number;
+    collectedCents: number;
+    laborCostCents: number;
+    materialCostCents: number;
+    equipmentCostCents: number;
+    overheadCostCents: number;
+    grossProfitCents: number;
+    jobCount: number;
+  }>>((groups, summary) => {
+    const title = summary.jobTitle.toLowerCase();
+    const serviceCategory = title.includes("mosquito") || title.includes("pest") ? "pest_control" : title.includes("irrigation") ? "irrigation" : "lawn_care";
+    const current = groups[serviceCategory] ?? {
+      serviceCategory,
+      label: categoryLabels[serviceCategory as ServiceCategory] ?? formatStatus(serviceCategory),
+      revenueCents: 0,
+      invoicedCents: 0,
+      collectedCents: 0,
+      laborCostCents: 0,
+      materialCostCents: 0,
+      equipmentCostCents: 0,
+      overheadCostCents: 0,
+      grossProfitCents: 0,
+      jobCount: 0,
+    };
+    current.revenueCents += summary.actualRevenueCents;
+    current.invoicedCents += summary.invoicedCents;
+    current.collectedCents += summary.collectedCents;
+    current.laborCostCents += summary.actualLaborCostCents;
+    current.materialCostCents += summary.actualMaterialCostCents;
+    current.equipmentCostCents += summary.actualEquipmentCostCents;
+    current.overheadCostCents += summary.overheadCostCents;
+    current.grossProfitCents += summary.grossProfitCents;
+    current.jobCount += 1;
+    groups[serviceCategory] = current;
+    return groups;
+  }, {});
+  const serviceLineProfitability = Object.values(serviceLineGroups)
+    .map((row) => ({ ...row, grossMarginPercent: row.revenueCents > 0 ? Math.round((row.grossProfitCents / row.revenueCents) * 1000) / 10 : 0, calculatedAt: now() }))
+    .sort((left, right) => right.grossMarginPercent - left.grossMarginPercent || right.grossProfitCents - left.grossProfitCents);
   const opportunityByLeadId = new Map(workspace.opportunities.filter((opportunity) => opportunity.leadId).map((opportunity) => [opportunity.leadId, opportunity]));
   const leadBaseRows = workspace.leads.map((lead) => {
     const customer = customersById.get(lead.customerId);
@@ -1148,10 +1644,10 @@ function buildFallbackOperatingDepth(workspace: WorkspaceSnapshot): OperatingDep
         { id: "fallback-spam", name: "Spam review", scope: "team", filters: { spamScore: ">=35" }, columns: ["title", "source", "spamScore"] },
       ],
       statusSettings: [
-        { id: "status-new", status: "new", label: "New", color: "#64748b", terminal: false, active: true },
-        { id: "status-contacted", status: "contacted", label: "Contacted", color: "#d97706", terminal: false, active: true },
-        { id: "status-converted", status: "converted", label: "Converted", color: "#047857", terminal: true, active: true },
-        { id: "status-spam", status: "spam", label: "Spam", color: "#475569", terminal: true, active: true },
+        { id: "status-new", status: "new", label: "New", color: "#64748b", sortOrder: 1, terminal: false, active: true },
+        { id: "status-contacted", status: "contacted", label: "Contacted", color: "#d97706", sortOrder: 2, terminal: false, active: true },
+        { id: "status-converted", status: "converted", label: "Converted", color: "#047857", sortOrder: 6, terminal: true, active: true },
+        { id: "status-spam", status: "spam", label: "Spam", color: "#475569", sortOrder: 8, terminal: true, active: true },
       ],
       qualityIssues: [],
       metrics: {
@@ -1185,7 +1681,18 @@ function buildFallbackOperatingDepth(workspace: WorkspaceSnapshot): OperatingDep
         { id: "flag-leads", key: "lead_ops_table", enabled: true },
         { id: "flag-costing", key: "job_costing_v1", enabled: true },
       ],
-      auditEvents: workspace.activities.slice(0, 8).map((activity) => ({ id: activity.id, action: activity.kind, summary: activity.summary, entityType: activity.entityType, createdAt: activity.occurredAt })),
+      auditEvents: workspace.activities.slice(0, 8).map((activity) => ({
+        id: activity.id,
+        action: activity.kind,
+        summary: activity.summary,
+        entityType: activity.entityType,
+        entityId: activity.entityId,
+        actorName: "Local demo",
+        module: formatStatus(activity.kind.split(".")[0] || "system"),
+        exportState: "not_exported",
+        changedFields: [],
+        createdAt: activity.occurredAt,
+      })),
       tagTaxonomy,
       segmentCards,
       ownerAnalytics,
@@ -1218,6 +1725,7 @@ function buildFallbackOperatingDepth(workspace: WorkspaceSnapshot): OperatingDep
       grossProfitCents: totals.grossProfitCents,
       arCents: Math.max(0, totals.invoicedCents - totals.collectedCents),
       grossMarginPercent: totals.invoicedCents > 0 ? Math.round((totals.grossProfitCents / totals.invoicedCents) * 1000) / 10 : 0,
+      serviceLineProfitability,
       invoices: summaries.map((summary, index) => ({ id: `invoice-${summary.jobId}`, invoiceNumber: `DRAFT-${index + 1001}`, customerName: summary.customerName, status: index === 0 ? "partially_paid" : "sent", totalCents: summary.invoicedCents, paidCents: summary.collectedCents, balanceCents: Math.max(0, summary.invoicedCents - summary.collectedCents) })),
       payments: summaries.slice(0, 2).map((summary, index) => ({ id: `payment-${summary.jobId}`, customerName: summary.customerName, status: "posted", method: index === 0 ? "ach" : "check", amountCents: summary.collectedCents, receivedAt: now() - index * 24 * 60 * 60 * 1000 })),
     },
@@ -1272,6 +1780,7 @@ function TextButton({
   type = "button",
   variant = "primary",
   className,
+  disabled,
 }: {
   children: ReactNode;
   icon?: ReactNode;
@@ -1279,13 +1788,15 @@ function TextButton({
   type?: "button" | "submit";
   variant?: "primary" | "secondary" | "ghost";
   className?: string;
+  disabled?: boolean;
 }) {
   return (
     <button
       type={type}
       onClick={onClick}
+      disabled={disabled}
       className={cn(
-        "inline-flex min-h-10 items-center justify-center gap-2 rounded-md px-3 text-sm font-semibold transition",
+        "inline-flex min-h-10 items-center justify-center gap-2 rounded-md px-3 text-sm font-semibold transition disabled:cursor-not-allowed disabled:opacity-50",
         variant === "primary" && "bg-[#224036] text-white shadow-sm hover:bg-[#1a332b]",
         variant === "secondary" && "border border-stone-200 bg-white text-stone-800 shadow-sm hover:bg-stone-50",
         variant === "ghost" && "text-stone-700 hover:bg-stone-100",
@@ -1340,29 +1851,52 @@ function LandscapeOsLiveApp() {
   const bootstrapWorkspace = useMutation(api.demo.bootstrapWorkspace);
   const bootstrapOperatingDepth = useMutation(api.operating.bootstrapOperatingDepth);
   const createLeadMutation = useMutation(api.demo.createLead);
+  const createLeadForCustomerMutation = useMutation(api.demo.createLeadForCustomer);
+  const createEstimateFromOpportunityMutation = useMutation(api.demo.createEstimateFromOpportunity);
+  const sendEstimateToCustomerMutation = useMutation(api.demo.sendEstimateToCustomer);
+  const acceptEstimateFromCustomerMutation = useMutation(api.demo.acceptEstimateFromCustomer);
+  const convertEstimateToJobMutation = useMutation(api.demo.convertEstimateToJob);
   const advanceOpportunityMutation = useMutation(api.demo.advanceOpportunity);
   const assignVisitMutation = useMutation(api.demo.assignVisit);
+  const reorderVisitMutation = useMutation(api.demo.reorderVisit);
+  const generateRecurringRouteMutation = useMutation(api.demo.generateRecurringRoute);
+  const createChangeOrderMutation = useMutation(api.demo.createChangeOrder);
+  const approveChangeOrderMutation = useMutation(api.demo.approveChangeOrder);
+  const startVisitMutation = useMutation(api.demo.startVisit);
   const completeChecklistMutation = useMutation(api.demo.completeChecklistItem);
   const submitVisitMutation = useMutation(api.demo.submitVisit);
   const addTaskMutation = useMutation(api.demo.addTask);
   const addActivityMutation = useMutation(api.demo.addActivity);
+  const decideApprovalRequestMutation = useMutation(api.demo.decideApprovalRequest);
   const createCrewMutation = useMutation(api.demo.createCrew);
   const toggleServiceMutation = useMutation(api.demo.toggleServiceCatalogItem);
+  const upsertServiceCatalogItemMutation = useMutation(api.demo.upsertServiceCatalogItem);
   const updateLeadMutation = useMutation(api.operating.updateLead);
   const bulkUpdateLeadsMutation = useMutation(api.operating.bulkUpdateLeads);
+  const createLeadImportPreviewMutation = useMutation(api.operating.createLeadImportPreview);
+  const commitLeadImportRowsMutation = useMutation(api.operating.commitLeadImportRows);
+  const submitWebLeadMutation = useMutation(api.leadIntake.submitWebLead);
+  const runStaleLeadCheckMutation = useMutation(api.operating.runStaleLeadCheck);
   const updateMemberRoleMutation = useMutation(api.operating.updateMemberRole);
+  const inviteMemberMutation = useMutation(api.operating.inviteMember);
+  const revokeMemberInviteMutation = useMutation(api.operating.revokeMemberInvite);
+  const expireMemberInviteMutation = useMutation(api.operating.expireMemberInvite);
+  const upsertLeadStatusSettingMutation = useMutation(api.operating.upsertLeadStatusSetting);
   const upsertLaborRateMutation = useMutation(api.operating.upsertLaborRate);
   const upsertVendorCatalogItemMutation = useMutation(api.operating.upsertVendorCatalogItem);
   const addTimesheetEntryMutation = useMutation(api.operating.addTimesheetEntry);
   const recordCustomerPaymentMutation = useMutation(api.operating.recordCustomerPayment);
   const recalculateJobCostsMutation = useMutation(api.operating.recalculateDemoJobCosts);
   const refreshCostIntelligenceMutation = useMutation(api.operating.refreshCostIntelligence);
+  const priceFertilizationProgramMutation = useMutation(api.operating.priceDemoFertilizationProgram);
   const bootstrapStartedRef = useRef(false);
+  const bootstrapRequestedRef = useRef(false);
   const operatingBootstrapStartedRef = useRef(false);
 
   useEffect(() => {
-    if (liveWorkspace !== null || bootstrapStartedRef.current) return;
+    if (liveWorkspace === undefined || bootstrapStartedRef.current || bootstrapRequestedRef.current) return;
     bootstrapStartedRef.current = true;
+    bootstrapRequestedRef.current = true;
     void bootstrapWorkspace({}).finally(() => {
       bootstrapStartedRef.current = false;
     });
@@ -1379,20 +1913,104 @@ function LandscapeOsLiveApp() {
 
   const liveActions = useMemo<LiveActions>(
     () => ({
-      createLead: (input) => {
-        void createLeadMutation({
-          customerName: input.customerName,
-          title: input.title,
-          phone: input.phone,
-          email: input.email,
-          street: input.street,
-          city: input.city,
-          state: input.state,
-          postalCode: input.postalCode,
-          valueCents: input.valueCents,
-          serviceLine: input.serviceLine,
-          source: input.source,
-        }).catch((error) => logConvexWriteFailure("createLead", error));
+      createLead: async (input) => {
+        try {
+          return await createLeadMutation({
+            customerName: input.customerName,
+            title: input.title,
+            phone: input.phone,
+            email: input.email,
+            street: input.street,
+            city: input.city,
+            state: input.state,
+            postalCode: input.postalCode,
+            valueCents: input.valueCents,
+            serviceLine: input.serviceLine,
+            source: input.source,
+            leadType: input.leadType,
+            accountType: input.accountType,
+            companyAssignment: input.companyAssignment,
+            lawnSizeSqFt: input.lawnSizeSqFt,
+            urgency: input.urgency,
+            message: input.message,
+            estimateNotes: input.estimateNotes,
+            callOutcome: input.callOutcome,
+            createCallFollowUp: input.createCallFollowUp,
+            followUpDueInDays: input.followUpDueInDays,
+          });
+        } catch (error) {
+          logConvexWriteFailure("createLead", error);
+          throw error;
+        }
+      },
+      createLeadForCustomer: async (input) => {
+        try {
+          return await createLeadForCustomerMutation({
+            customerId: input.customerId as Id<"customers">,
+            propertyId: input.propertyId as Id<"properties"> | undefined,
+            title: input.title,
+            source: input.source,
+            valueCents: input.valueCents,
+            serviceLine: input.serviceLine,
+            message: input.message,
+          });
+        } catch (error) {
+          logConvexWriteFailure("createLeadForCustomer", error);
+          throw error;
+        }
+      },
+      createEstimateFromOpportunity: async (input) => {
+        try {
+          return await createEstimateFromOpportunityMutation({
+            opportunityId: input.opportunityId as Id<"opportunities">,
+            status: input.status,
+            lineItemName: input.lineItemName,
+            quantity: input.quantity,
+            unit: input.unit,
+            unitPriceCents: input.unitPriceCents,
+            terms: input.terms,
+            servicePackageId: input.servicePackageId as Id<"servicePackages"> | undefined,
+            serviceCatalogItemId: input.serviceCatalogItemId as Id<"serviceCatalogItems"> | undefined,
+          });
+        } catch (error) {
+          logConvexWriteFailure("createEstimateFromOpportunity", error);
+          throw error;
+        }
+      },
+      sendEstimateToCustomer: async (estimateId) => {
+        try {
+          return await sendEstimateToCustomerMutation({ estimateId: estimateId as Id<"estimates"> });
+        } catch (error) {
+          logConvexWriteFailure("sendEstimateToCustomer", error);
+          throw error;
+        }
+      },
+      acceptEstimateFromCustomer: async (input) => {
+        try {
+          return await acceptEstimateFromCustomerMutation({
+            estimateId: input.estimateId as Id<"estimates">,
+            acceptedByName: input.acceptedByName,
+            acceptedByEmail: input.acceptedByEmail,
+            acceptanceSource: input.acceptanceSource,
+            acceptanceNote: input.acceptanceNote,
+          });
+        } catch (error) {
+          logConvexWriteFailure("acceptEstimateFromCustomer", error);
+          throw error;
+        }
+      },
+      convertEstimateToJob: async (input) => {
+        try {
+          return await convertEstimateToJobMutation({
+            estimateId: input.estimateId as Id<"estimates">,
+            scheduledStart: input.scheduledStart,
+            scheduledEnd: input.scheduledEnd,
+            crewId: input.crewId as Id<"crews"> | undefined,
+          });
+        } catch (error) {
+          logConvexWriteFailure("convertEstimateToJob", error);
+          throw error;
+        }
       },
       advanceOpportunity: (opportunityId, stage) => {
         void advanceOpportunityMutation({ opportunityId: opportunityId as Id<"opportunities">, stage }).catch((error) => logConvexWriteFailure("advanceOpportunity", error));
@@ -1400,14 +2018,94 @@ function LandscapeOsLiveApp() {
       assignVisit: (visitId, crewId) => {
         void assignVisitMutation({ visitId: visitId as Id<"jobVisits">, crewId: crewId as Id<"crews"> }).catch((error) => logConvexWriteFailure("assignVisit", error));
       },
+      reorderVisit: (visitId, routeOrder) => {
+        void reorderVisitMutation({ visitId: visitId as Id<"jobVisits">, routeOrder }).catch((error) => logConvexWriteFailure("reorderVisit", error));
+      },
+      generateRecurringRoute: async (input) => {
+        try {
+          return await generateRecurringRouteMutation({
+            jobId: input.jobId as Id<"jobs">,
+            frequency: input.frequency,
+            count: input.count,
+            firstStart: input.firstStart,
+            durationMinutes: input.durationMinutes,
+            crewId: input.crewId as Id<"crews"> | undefined,
+          });
+        } catch (error) {
+          logConvexWriteFailure("generateRecurringRoute", error);
+          throw error;
+        }
+      },
+      createChangeOrder: async (input) => {
+        try {
+          return await createChangeOrderMutation({
+            jobId: input.jobId as Id<"jobs">,
+            title: input.title,
+            description: input.description,
+            requestedByName: input.requestedByName,
+            revenueDeltaCents: input.revenueDeltaCents,
+            estimatedCostDeltaCents: input.estimatedCostDeltaCents,
+            scheduleImpactDays: input.scheduleImpactDays,
+          });
+        } catch (error) {
+          logConvexWriteFailure("createChangeOrder", error);
+          throw error;
+        }
+      },
+      approveChangeOrder: async (input) => {
+        try {
+          return await approveChangeOrderMutation({
+            changeOrderId: input.changeOrderId as Id<"changeOrders">,
+            approvedByName: input.approvedByName,
+            approvedByEmail: input.approvedByEmail,
+          });
+        } catch (error) {
+          logConvexWriteFailure("approveChangeOrder", error);
+          throw error;
+        }
+      },
+      startVisit: async (visitId, startSource = "manual") => {
+        try {
+          return await startVisitMutation({ visitId: visitId as Id<"jobVisits">, startSource });
+        } catch (error) {
+          logConvexWriteFailure("startVisit", error);
+          throw error;
+        }
+      },
       completeChecklistItem: (visitId, itemId) => {
         void completeChecklistMutation({ visitId: visitId as Id<"jobVisits">, itemId }).catch((error) => logConvexWriteFailure("completeChecklistItem", error));
       },
-      submitVisit: (visitId, issueFlag) => {
-        void submitVisitMutation({ visitId: visitId as Id<"jobVisits">, issueFlag }).catch((error) => logConvexWriteFailure("submitVisit", error));
+      submitVisit: async (visitId, input) => {
+        try {
+          return await submitVisitMutation({
+            visitId: visitId as Id<"jobVisits">,
+            issueFlag: input?.issueFlag,
+            issue: input?.issue,
+            notes: input?.notes,
+            materialApplications: input?.materialApplications?.map((application) => ({
+              materialId: application.materialId as Id<"materials">,
+              quantity: application.quantity,
+              unit: application.unit,
+              targetAreaId: application.targetAreaId as Id<"propertyAreas"> | undefined,
+              notes: application.notes,
+            })),
+          });
+        } catch (error) {
+          logConvexWriteFailure("submitVisit", error);
+          throw error;
+        }
       },
-      addTask: (jobId, title) => {
-        void addTaskMutation({ jobId: jobId as Id<"jobs">, title }).catch((error) => logConvexWriteFailure("addTask", error));
+      addTask: (jobId, input) => {
+        return addTaskMutation({
+          jobId: jobId as Id<"jobs">,
+          title: input.title,
+          priority: input.priority,
+          dueAt: input.dueAt,
+          assignedUserId: input.assignedUserId as Id<"users"> | undefined,
+        }).catch((error) => {
+          logConvexWriteFailure("addTask", error);
+          throw error;
+        });
       },
       addActivity: (input) => {
         void addActivityMutation({
@@ -1417,6 +2115,8 @@ function LandscapeOsLiveApp() {
           summary: input.summary,
           createFollowUp: input.createFollowUp,
           dueInDays: input.dueInDays,
+          callOutcome: input.callOutcome,
+          opportunityImpact: input.opportunityImpact,
         }).catch((error) => logConvexWriteFailure("addActivity", error));
       },
       createCrew: (name) => {
@@ -1425,17 +2125,41 @@ function LandscapeOsLiveApp() {
       toggleService: (itemId) => {
         void toggleServiceMutation({ itemId: itemId as Id<"serviceCatalogItems"> }).catch((error) => logConvexWriteFailure("toggleService", error));
       },
+      upsertServiceCatalogItem: (input) => {
+        return upsertServiceCatalogItemMutation({
+          itemId: input.itemId as Id<"serviceCatalogItems"> | undefined,
+          name: input.name,
+          category: input.category,
+          defaultUnit: input.defaultUnit,
+          defaultPriceCents: input.defaultPriceCents,
+          active: input.active,
+        }).catch((error) => {
+          logConvexWriteFailure("upsertServiceCatalogItem", error);
+          throw error;
+        });
+      },
     }),
     [
+      acceptEstimateFromCustomerMutation,
       addActivityMutation,
       addTaskMutation,
+      approveChangeOrderMutation,
       advanceOpportunityMutation,
       assignVisitMutation,
       completeChecklistMutation,
+      convertEstimateToJobMutation,
+      createChangeOrderMutation,
       createCrewMutation,
+      createEstimateFromOpportunityMutation,
+      createLeadForCustomerMutation,
       createLeadMutation,
+      generateRecurringRouteMutation,
+      reorderVisitMutation,
+      sendEstimateToCustomerMutation,
+      startVisitMutation,
       submitVisitMutation,
       toggleServiceMutation,
+      upsertServiceCatalogItemMutation,
     ],
   );
 
@@ -1455,8 +2179,74 @@ function LandscapeOsLiveApp() {
       bulkUpdateLeads: (leadIds, status) => {
         void bulkUpdateLeadsMutation({ leadIds: leadIds as Array<Id<"leads">>, status: status as Parameters<typeof bulkUpdateLeadsMutation>[0]["status"] }).catch((error) => logConvexWriteFailure("bulkUpdateLeads", error));
       },
+      createLeadImportPreview: async (input) => {
+        try {
+          return await createLeadImportPreviewMutation({ fileName: input.fileName, csvText: input.csvText });
+        } catch (error) {
+          logConvexWriteFailure("createLeadImportPreview", error);
+          throw error;
+        }
+      },
+      commitLeadImportRows: async (importJobId) => {
+        try {
+          return await commitLeadImportRowsMutation({ importJobId: importJobId as Id<"importJobs"> });
+        } catch (error) {
+          logConvexWriteFailure("commitLeadImportRows", error);
+          throw error;
+        }
+      },
+      submitWebLead: async (input) => {
+        try {
+          return await submitWebLeadMutation({
+            organizationSlug: "greenline-demo",
+            customerName: input.customerName,
+            email: input.email || undefined,
+            phone: input.phone || undefined,
+            street: input.street || undefined,
+            city: input.city,
+            state: input.state,
+            postalCode: input.postalCode || undefined,
+            serviceLine: input.serviceLine,
+            campaign: input.campaign || undefined,
+            sourceDetail: input.sourceDetail || undefined,
+            message: input.message || undefined,
+            estimatedValueCents: dollarsToCents(input.estimatedValue),
+          });
+        } catch (error) {
+          logConvexWriteFailure("submitWebLead", error);
+          throw error;
+        }
+      },
+      runStaleLeadCheck: async () => {
+        try {
+          return await runStaleLeadCheckMutation({});
+        } catch (error) {
+          logConvexWriteFailure("runStaleLeadCheck", error);
+          throw error;
+        }
+      },
       updateMemberRole: (membershipId, nextRole) => {
         void updateMemberRoleMutation({ membershipId: membershipId as Id<"memberships">, role: nextRole }).catch((error) => logConvexWriteFailure("updateMemberRole", error));
+      },
+      inviteMember: (input) => {
+        void inviteMemberMutation({ email: input.email, name: input.name, role: input.role, expiresInDays: input.expiresInDays }).catch((error) => logConvexWriteFailure("inviteMember", error));
+      },
+      revokeMemberInvite: (membershipId) => {
+        void revokeMemberInviteMutation({ membershipId: membershipId as Id<"memberships"> }).catch((error) => logConvexWriteFailure("revokeMemberInvite", error));
+      },
+      expireMemberInvite: (membershipId) => {
+        void expireMemberInviteMutation({ membershipId: membershipId as Id<"memberships"> }).catch((error) => logConvexWriteFailure("expireMemberInvite", error));
+      },
+      upsertLeadStatusSetting: (input) => {
+        void upsertLeadStatusSettingMutation({
+          id: input.id as Id<"leadStatusSettings"> | undefined,
+          status: input.status,
+          label: input.label,
+          color: input.color,
+          sortOrder: input.sortOrder,
+          terminal: input.terminal,
+          active: input.active,
+        }).catch((error) => logConvexWriteFailure("upsertLeadStatusSetting", error));
       },
       upsertLaborRate: (input) => {
         void upsertLaborRateMutation({ id: input.id as Id<"laborRateCards"> | undefined, roleName: input.roleName, hourlyCostCents: input.hourlyCostCents, billableRateCents: input.billableRateCents }).catch((error) => logConvexWriteFailure("upsertLaborRate", error));
@@ -1476,16 +2266,59 @@ function LandscapeOsLiveApp() {
       refreshCostIntelligence: () => {
         void refreshCostIntelligenceMutation({}).catch((error) => logConvexWriteFailure("refreshCostIntelligence", error));
       },
+      priceFertilizationProgram: async (input) => {
+        try {
+          const result = await priceFertilizationProgramMutation({
+            propertyId: input.propertyId as Id<"properties">,
+            propertyAreaId: input.propertyAreaId as Id<"propertyAreas"> | undefined,
+            materialId: input.materialId as Id<"materials">,
+            priceBookItemId: input.priceBookItemId as Id<"priceBookItems"> | undefined,
+            applicationCount: input.applicationCount,
+            materialRateUnitsPer1000SqFt: input.materialRateUnitsPer1000SqFt,
+            laborHoursPerApplication: input.laborHoursPerApplication,
+            laborRateCents: input.laborRateCents,
+            equipmentCostCentsPerApplication: input.equipmentCostCentsPerApplication,
+            overheadPercent: input.overheadPercent,
+            targetMarginPercent: input.targetMarginPercent,
+          });
+          return result;
+        } catch (error) {
+          logConvexWriteFailure("priceFertilizationProgram", error);
+          throw error;
+        }
+      },
+      decideEstimateApproval: async (approvalRequestId, decision, comment) => {
+        try {
+          return await decideApprovalRequestMutation({
+            approvalRequestId: approvalRequestId as Id<"approvalRequests">,
+            decision,
+            comment,
+          });
+        } catch (error) {
+          logConvexWriteFailure("decideEstimateApproval", error);
+          throw error;
+        }
+      },
     }),
     [
       addTimesheetEntryMutation,
       bootstrapOperatingDepth,
       bulkUpdateLeadsMutation,
+      commitLeadImportRowsMutation,
+      createLeadImportPreviewMutation,
+      decideApprovalRequestMutation,
+      expireMemberInviteMutation,
+      inviteMemberMutation,
+      priceFertilizationProgramMutation,
       recalculateJobCostsMutation,
       recordCustomerPaymentMutation,
       refreshCostIntelligenceMutation,
+      revokeMemberInviteMutation,
+      runStaleLeadCheckMutation,
+      submitWebLeadMutation,
       updateLeadMutation,
       updateMemberRoleMutation,
+      upsertLeadStatusSettingMutation,
       upsertLaborRateMutation,
       upsertVendorCatalogItemMutation,
     ],
@@ -1522,39 +2355,56 @@ function LandscapeOsWorkspace({
   operatingDepth?: OperatingDepth;
   operatingActions?: OperatingActions;
 }) {
-  const [workspace, setWorkspace] = useState<WorkspaceSnapshot>(initialWorkspace);
+  const normalizedInitialWorkspace = useMemo(() => normalizeWorkspaceSnapshot(initialWorkspace), [initialWorkspace]);
+  const [workspace, setWorkspace] = useState<WorkspaceSnapshot>(normalizedInitialWorkspace);
   const [view, setView] = useState<View>("dashboard");
   const [mobileNavOpen, setMobileNavOpen] = useState(false);
   const [globalSearch, setGlobalSearch] = useState("");
   const [customerSearch, setCustomerSearch] = useState("");
-  const [selectedCustomerId, setSelectedCustomerId] = useState(initialWorkspace.customers[0]?.id ?? "");
-  const [selectedJobId, setSelectedJobId] = useState(initialWorkspace.jobs[0]?.id ?? "");
-  const [selectedVisitId, setSelectedVisitId] = useState(initialWorkspace.visits[0]?.id ?? "");
+  const [selectedCustomerId, setSelectedCustomerId] = useState(normalizedInitialWorkspace.customers[0]?.id ?? "");
+  const [selectedJobId, setSelectedJobId] = useState(normalizedInitialWorkspace.jobs[0]?.id ?? "");
+  const [selectedVisitId, setSelectedVisitId] = useState(normalizedInitialWorkspace.visits[0]?.id ?? "");
   const [leadForm, setLeadForm] = useState<LeadFormState>(() => defaultLeadForm());
+  const [leadSubmitState, setLeadSubmitState] = useState<"idle" | "submitting" | "success" | "error">("idle");
+  const [leadSubmitMessage, setLeadSubmitMessage] = useState("");
   const [customerActivityForm, setCustomerActivityForm] = useState<ActivityComposerState>(() => defaultActivityComposer());
   const [jobActivityForm, setJobActivityForm] = useState<ActivityComposerState>(() => defaultActivityComposer());
   const [clientOnboardingForm, setClientOnboardingForm] = useState<ClientOnboardingFormState>(() => defaultClientOnboardingForm());
   const [provisionedClients, setProvisionedClients] = useState<ProvisionedClientWorkspace[]>([]);
-  const [taskTitle, setTaskTitle] = useState("");
+  const [jobTaskForm, setJobTaskForm] = useState<JobTaskFormState>(() => defaultJobTaskForm());
+  const [jobTaskMessage, setJobTaskMessage] = useState<{ state: "success" | "error" | "pending"; message: string } | null>(null);
   const [crewName, setCrewName] = useState("");
   const [issueFlag, setIssueFlag] = useState("");
+  const workspaceRef = useRef(normalizedInitialWorkspace);
+
+  useEffect(() => {
+    workspaceRef.current = workspace;
+  }, [workspace]);
 
   useEffect(() => {
     let cancelled = false;
     queueMicrotask(() => {
       if (cancelled) return;
-      setWorkspace(initialWorkspace);
-      setSelectedCustomerId((current) => (initialWorkspace.customers.some((customer) => customer.id === current) ? current : initialWorkspace.customers[0]?.id ?? ""));
-      setSelectedJobId((current) => (initialWorkspace.jobs.some((job) => job.id === current) ? current : initialWorkspace.jobs[0]?.id ?? ""));
-      setSelectedVisitId((current) => (initialWorkspace.visits.some((visit) => visit.id === current) ? current : initialWorkspace.visits[0]?.id ?? ""));
+      const previousWorkspace = workspaceRef.current;
+      setWorkspace(normalizedInitialWorkspace);
+      setSelectedCustomerId((current) => preserveCustomerSelection(previousWorkspace, normalizedInitialWorkspace, current));
+      setSelectedJobId((current) => preserveJobSelection(previousWorkspace, normalizedInitialWorkspace, current));
+      setSelectedVisitId((current) => preserveVisitSelection(previousWorkspace, normalizedInitialWorkspace, current));
     });
     return () => {
       cancelled = true;
     };
-  }, [initialWorkspace]);
+  }, [normalizedInitialWorkspace]);
 
   const membersById = useMemo(() => new Map(workspace.members.map((member) => [member.id, member])), [workspace.members]);
   const customersById = useMemo(() => new Map(workspace.customers.map((customer) => [customer.id, customer])), [workspace.customers]);
+  const contactsByCustomerId = useMemo(() => {
+    const contacts = new Map<string, WorkspaceSnapshot["contacts"]>();
+    for (const contact of workspace.contacts) {
+      contacts.set(contact.customerId, [...(contacts.get(contact.customerId) ?? []), contact]);
+    }
+    return contacts;
+  }, [workspace.contacts]);
   const propertiesById = useMemo(() => new Map(workspace.properties.map((property) => [property.id, property])), [workspace.properties]);
   const crewsById = useMemo(() => new Map(workspace.crews.map((crew) => [crew.id, crew])), [workspace.crews]);
   const jobsById = useMemo(() => new Map(workspace.jobs.map((job) => [job.id, job])), [workspace.jobs]);
@@ -1689,32 +2539,87 @@ function LandscapeOsWorkspace({
 
   const authConfigured = Boolean(process.env.NEXT_PUBLIC_CLERK_PUBLISHABLE_KEY);
 
-  function createLead(event: FormEvent) {
+  async function createLead(event: FormEvent) {
     event.preventDefault();
-    const customerId = newId("cust");
-    const propertyId = newId("prop");
-    const leadId = newId("lead");
-    const opportunityId = newId("opp");
+    setLeadSubmitState("submitting");
+    setLeadSubmitMessage("");
+
     const createdAt = now();
     const valueCents = Math.max(0, Math.round(Number(leadForm.value || "0") * 100));
     const source = leadForm.source.trim() || "Manual entry";
     const lawnSizeSqFt = numericOrUndefined(leadForm.lawnSizeSqFt);
     const qualityScore = leadQualityScore(leadForm);
+    const followUpDueInDays = Math.max(1, Math.min(30, Math.round(Number(leadForm.followUpDueInDays || "1"))));
+    const callOutcomeLabel = callOutcomeLabels[leadForm.callOutcome];
+    const shouldLogCall = leadForm.leadType === "phone_call";
+    const leadInput = {
+      customerName: leadForm.customerName || "New customer",
+      title: leadForm.title || "New service request",
+      phone: leadForm.phone || undefined,
+      email: leadForm.email || undefined,
+      street: leadForm.street,
+      city: leadForm.city,
+      state: leadForm.state,
+      postalCode: leadForm.postalCode,
+      valueCents,
+      serviceLine: leadForm.serviceLine,
+      source,
+      leadType: leadForm.leadType,
+      accountType: leadForm.accountType,
+      companyAssignment: leadForm.companyAssignment || undefined,
+      lawnSizeSqFt,
+      urgency: leadForm.urgency,
+      message: leadForm.message || undefined,
+      estimateNotes: leadForm.estimateNotes || undefined,
+      callOutcome: shouldLogCall ? leadForm.callOutcome : undefined,
+      createCallFollowUp: shouldLogCall && leadForm.createCallFollowUp,
+      followUpDueInDays,
+    };
+
+    let liveIds: { customerId?: string; leadId?: string; opportunityId?: string } = {};
+    if (liveActions?.createLead) {
+      try {
+        liveIds = (await liveActions.createLead(leadInput)) ?? {};
+      } catch (error) {
+        setLeadSubmitState("error");
+        setLeadSubmitMessage(userFacingWriteError(error));
+        return;
+      }
+    }
+
+    const customerId = liveIds.customerId ?? newId("cust");
+    const contactId = newId("contact");
+    const propertyId = newId("prop");
+    const leadId = liveIds.leadId ?? newId("lead");
+    const opportunityId = liveIds.opportunityId ?? newId("opp");
+    const callActivitySummary = `Phone intake: ${callOutcomeLabel}${leadInput.message ? ` - ${leadInput.message}` : ""}`;
 
     setWorkspace((current) => ({
       ...current,
       customers: [
         {
           id: customerId,
-          name: leadForm.customerName || "New customer",
-          type: leadForm.accountType,
+          name: leadInput.customerName,
+          type: leadInput.accountType,
           status: "prospect",
           phone: leadForm.phone,
           email: leadForm.email,
-          tags: [categoryLabels[leadForm.serviceLine], source],
+          tags: [categoryLabels[leadInput.serviceLine], source],
           ownerId: "u-amy",
         },
         ...current.customers,
+      ],
+      contacts: [
+        {
+          id: contactId,
+          customerId,
+          name: leadInput.customerName,
+          email: leadInput.email,
+          phone: leadInput.phone,
+          roleTitle: leadInput.accountType === "commercial" ? "Primary contact" : "Homeowner",
+          isPrimary: true,
+        },
+        ...current.contacts,
       ],
       properties: [
         {
@@ -1733,20 +2638,20 @@ function LandscapeOsWorkspace({
       leads: [
         {
           id: leadId,
-          title: leadForm.title || "New service request",
+          title: leadInput.title,
           customerId,
           propertyId,
           source,
-          status: leadForm.leadType === "phone_call" ? "contacted" : "new",
-          urgency: leadForm.urgency,
+          status: leadInput.leadType === "phone_call" ? "contacted" : "new",
+          urgency: leadInput.urgency,
           ownerId: "u-amy",
-          leadType: leadForm.leadType,
-          accountType: leadForm.accountType,
-          companyAssignment: leadForm.companyAssignment,
-          programRequests: [leadForm.serviceLine],
+          leadType: leadInput.leadType,
+          accountType: leadInput.accountType,
+          companyAssignment: leadInput.companyAssignment,
+          programRequests: [leadInput.serviceLine],
           lawnSizeSqFt,
-          message: leadForm.message,
-          estimateNotes: leadForm.estimateNotes,
+          message: leadInput.message,
+          estimateNotes: leadInput.estimateNotes,
           qualityScore,
           spamScore: 0,
           receivedAt: createdAt,
@@ -1760,24 +2665,52 @@ function LandscapeOsWorkspace({
           leadId,
           customerId,
           propertyId,
-          title: leadForm.title || "New service request",
+          title: leadInput.title,
           stage: "qualified",
           valueCents,
           closeProbability: 35,
           expectedCloseDate: createdAt + 14 * 24 * 60 * 60 * 1000,
           ownerId: "u-amy",
-          serviceLines: [leadForm.serviceLine],
+          serviceLines: [leadInput.serviceLine],
           updatedAt: createdAt,
         },
         ...current.opportunities,
       ],
+      tasks: leadInput.createCallFollowUp
+        ? [
+            {
+              id: newId("task"),
+              entityType: "customer",
+              entityId: customerId,
+              title: `Call follow-up: ${leadInput.title}`,
+              status: "open",
+              priority: leadInput.urgency === "high" ? "high" : "normal",
+              dueAt: createdAt + followUpDueInDays * 24 * 60 * 60 * 1000,
+              assignedUserId: "u-amy",
+            },
+            ...current.tasks,
+          ]
+        : current.tasks,
       activities: [
+        ...(shouldLogCall
+          ? [
+              {
+                id: newId("act"),
+                entityType: "customer" as const,
+                entityId: customerId,
+                kind: "call" as const,
+                summary: callActivitySummary,
+                actorId: "u-amy",
+                occurredAt: createdAt,
+              },
+            ]
+          : []),
         {
           id: newId("act"),
           entityType: "lead",
           entityId: leadId,
           kind: "system",
-          summary: `Created lead ${leadForm.title || "New service request"}`,
+          summary: `Created lead ${leadInput.title}`,
           actorId: "u-amy",
           occurredAt: createdAt,
         },
@@ -1786,27 +2719,93 @@ function LandscapeOsWorkspace({
     }));
 
     setSelectedCustomerId(customerId);
-    liveActions?.createLead?.({
-      customerName: leadForm.customerName || "New customer",
-      title: leadForm.title || "New service request",
-      phone: leadForm.phone || undefined,
-      email: leadForm.email || undefined,
-      street: leadForm.street,
-      city: leadForm.city,
-          state: leadForm.state,
-          postalCode: leadForm.postalCode,
-          valueCents,
-          serviceLine: leadForm.serviceLine,
-          source,
-          leadType: leadForm.leadType,
-          accountType: leadForm.accountType,
-          companyAssignment: leadForm.companyAssignment || undefined,
-          lawnSizeSqFt,
-          urgency: leadForm.urgency,
-          message: leadForm.message || undefined,
-          estimateNotes: leadForm.estimateNotes || undefined,
-        });
+    setLeadSubmitState("success");
+    setLeadSubmitMessage(`${leadInput.customerName} was added to CRM, Lead Ops, and Pipeline.`);
     setLeadForm(defaultLeadForm());
+  }
+
+  async function createRepeatCustomerLead(input: {
+    customerId: string;
+    propertyId?: string;
+    title: string;
+    source: string;
+    valueCents: number;
+    serviceLine: ServiceCategory;
+    message?: string;
+  }) {
+    const createdAt = now();
+    let liveIds: { leadId?: string; opportunityId?: string } = {};
+    if (liveActions?.createLeadForCustomer) {
+      try {
+        liveIds = (await liveActions.createLeadForCustomer(input)) ?? {};
+      } catch (error) {
+        throw new Error(userFacingWriteError(error));
+      }
+    }
+
+    const leadId = liveIds.leadId ?? newId("lead");
+    const opportunityId = liveIds.opportunityId ?? newId("opp");
+    setWorkspace((current) => {
+      const property = input.propertyId
+        ? current.properties.find((item) => item.id === input.propertyId)
+        : current.properties.find((item) => item.customerId === input.customerId);
+      if (!property) return current;
+      return {
+        ...current,
+        leads: [
+          {
+            id: leadId,
+            title: input.title,
+            customerId: input.customerId,
+            propertyId: property.id,
+            source: input.source,
+            status: "new",
+            urgency: "normal",
+            ownerId: "u-amy",
+            leadType: "other",
+            accountType: "residential",
+            programRequests: [input.serviceLine],
+            message: input.message,
+            qualityScore: 86,
+            spamScore: 0,
+            receivedAt: createdAt,
+            createdAt,
+          },
+          ...current.leads,
+        ],
+        opportunities: [
+          {
+            id: opportunityId,
+            leadId,
+            customerId: input.customerId,
+            propertyId: property.id,
+            title: input.title,
+            stage: "qualified",
+            valueCents: input.valueCents,
+            closeProbability: 45,
+            expectedCloseDate: createdAt + 10 * 24 * 60 * 60 * 1000,
+            ownerId: "u-amy",
+            serviceLines: [input.serviceLine],
+            updatedAt: createdAt,
+          },
+          ...current.opportunities,
+        ],
+        activities: [
+          {
+            id: newId("act"),
+            entityType: "customer",
+            entityId: input.customerId,
+            kind: "system",
+            summary: `Repeat service request created: ${input.title}`,
+            actorId: "u-amy",
+            occurredAt: createdAt,
+          },
+          ...current.activities,
+        ],
+      };
+    });
+
+    return { leadId, opportunityId };
   }
 
   function createClientWorkspace(event: FormEvent) {
@@ -1870,12 +2869,438 @@ function LandscapeOsWorkspace({
     liveActions?.advanceOpportunity?.(opportunity.id, target);
   }
 
+  async function createQuoteFromOpportunity(input: {
+    opportunity: Opportunity;
+    status: "draft" | "sent";
+    lineItemName: string;
+    quantity: number;
+    unit: string;
+    unitPriceCents: number;
+    terms?: string;
+    servicePackageId?: string;
+    serviceCatalogItemId?: string;
+  }) {
+    const createdAt = now();
+    const subtotalCents = Math.max(0, Math.round(input.quantity * input.unitPriceCents));
+    const fallbackEstimateNumber = `EST-${new Date(createdAt).getFullYear()}-${String(createdAt).slice(-6)}`;
+    let liveEstimate: { estimateId?: string; estimateNumber?: string } = {};
+
+    if (liveActions?.createEstimateFromOpportunity) {
+      liveEstimate = (await liveActions.createEstimateFromOpportunity({
+        opportunityId: input.opportunity.id,
+        status: input.status,
+        lineItemName: input.lineItemName,
+        quantity: input.quantity,
+        unit: input.unit,
+        unitPriceCents: input.unitPriceCents,
+        terms: input.terms,
+        servicePackageId: input.servicePackageId,
+        serviceCatalogItemId: input.serviceCatalogItemId,
+      })) ?? {};
+    }
+
+    const estimateId = liveEstimate.estimateId ?? newId("est");
+    const estimateNumberValue = liveEstimate.estimateNumber ?? fallbackEstimateNumber;
+    setWorkspace((current) => ({
+      ...current,
+      estimates: [
+        {
+          id: estimateId,
+          opportunityId: input.opportunity.id,
+          customerId: input.opportunity.customerId,
+          propertyId: input.opportunity.propertyId,
+          estimateNumber: estimateNumberValue,
+          status: input.status,
+          approvalStatus: "not_required",
+          subtotalCents,
+          taxCents: 0,
+          totalCents: subtotalCents,
+          sentAt: input.status === "sent" ? createdAt : undefined,
+          expiresAt: input.status === "sent" ? createdAt + 14 * 24 * 60 * 60 * 1000 : undefined,
+          terms: input.terms,
+        },
+        ...current.estimates.filter((estimate) => estimate.id !== estimateId),
+      ],
+      opportunities: current.opportunities.map((item) =>
+        item.id === input.opportunity.id
+          ? {
+              ...item,
+              stage: input.status === "sent" ? "proposal_sent" : "estimating",
+              valueCents: subtotalCents,
+              updatedAt: createdAt,
+            }
+          : item,
+      ),
+      activities: [
+        {
+          id: newId("act"),
+          entityType: "opportunity",
+          entityId: input.opportunity.id,
+          kind: "estimate",
+          summary: `Created ${estimateNumberValue} from lead context`,
+          actorId: "u-amy",
+          occurredAt: createdAt,
+        },
+        ...current.activities,
+      ],
+    }));
+
+    return { estimateId, estimateNumber: estimateNumberValue };
+  }
+
+  async function sendQuoteToCustomer(estimateId: string) {
+    const sentAt = now();
+    const liveResult = await liveActions?.sendEstimateToCustomer?.(estimateId);
+    const sentAtValue = liveResult?.sentAt ?? sentAt;
+    const expiresAtValue = liveResult?.expiresAt ?? sentAtValue + 14 * 24 * 60 * 60 * 1000;
+    let sentEstimateNumber = liveResult?.estimateNumber;
+
+    setWorkspace((current) => {
+      const estimate = current.estimates.find((item) => item.id === estimateId);
+      if (!estimate) return current;
+      sentEstimateNumber = sentEstimateNumber ?? estimate.estimateNumber;
+      return {
+        ...current,
+        estimates: current.estimates.map((item) =>
+          item.id === estimateId
+            ? {
+                ...item,
+                status: "sent",
+                sentAt: sentAtValue,
+                expiresAt: item.expiresAt ?? expiresAtValue,
+              }
+            : item,
+        ),
+        opportunities: current.opportunities.map((item) =>
+          item.id === estimate.opportunityId
+            ? {
+                ...item,
+                stage: "proposal_sent",
+                updatedAt: sentAtValue,
+              }
+            : item,
+        ),
+        activities: [
+          {
+            id: newId("act"),
+            entityType: "estimate",
+            entityId: estimateId,
+            kind: "estimate",
+            summary: `Sent ${estimate.estimateNumber} to customer`,
+            actorId: "u-amy",
+            occurredAt: sentAtValue,
+          },
+          ...current.activities,
+        ],
+      };
+    });
+
+    return { estimateId, estimateNumber: sentEstimateNumber ?? "Estimate", sentAt: sentAtValue, expiresAt: expiresAtValue };
+  }
+
+  async function acceptQuoteFromCustomer(input: {
+    estimateId: string;
+    acceptedByName?: string;
+    acceptedByEmail?: string;
+    acceptanceSource?: "customer_portal" | "email" | "verbal" | "office";
+    acceptanceNote?: string;
+  }) {
+    const acceptedAt = now();
+    const liveResult = await liveActions?.acceptEstimateFromCustomer?.(input);
+    const acceptedAtValue = liveResult?.acceptedAt ?? acceptedAt;
+    let acceptedEstimateNumber = liveResult?.estimateNumber;
+
+    setWorkspace((current) => {
+      const estimate = current.estimates.find((item) => item.id === input.estimateId);
+      if (!estimate) return current;
+      acceptedEstimateNumber = acceptedEstimateNumber ?? estimate.estimateNumber;
+      return {
+        ...current,
+        estimates: current.estimates.map((item) =>
+          item.id === input.estimateId
+            ? {
+                ...item,
+                status: "accepted",
+                acceptedAt: acceptedAtValue,
+                acceptedByName: input.acceptedByName,
+                acceptedByEmail: input.acceptedByEmail,
+                acceptanceSource: input.acceptanceSource ?? "office",
+                acceptanceNote: input.acceptanceNote,
+              }
+            : item,
+        ),
+        opportunities: current.opportunities.map((item) =>
+          item.id === estimate.opportunityId
+            ? {
+                ...item,
+                stage: "won",
+                closeProbability: 100,
+                updatedAt: acceptedAtValue,
+              }
+            : item,
+        ),
+        activities: [
+          {
+            id: newId("act"),
+            entityType: "estimate",
+            entityId: input.estimateId,
+            kind: "estimate",
+            summary: `Customer accepted ${estimate.estimateNumber}`,
+            actorId: "u-amy",
+            occurredAt: acceptedAtValue,
+          },
+          ...current.activities,
+        ],
+      };
+    });
+
+    return { estimateId: input.estimateId, estimateNumber: acceptedEstimateNumber ?? "Estimate", acceptedAt: acceptedAtValue };
+  }
+
+  async function convertAcceptedQuoteToJob(input: {
+    estimateId: string;
+    scheduledStart?: number;
+    scheduledEnd?: number;
+    crewId?: string;
+  }) {
+    const fallbackStart = (() => {
+      const value = new Date(now() + 24 * 60 * 60 * 1000);
+      value.setHours(8, 30, 0, 0);
+      return value.getTime();
+    })();
+    const scheduledStart = input.scheduledStart ?? fallbackStart;
+    const scheduledEnd = input.scheduledEnd ?? scheduledStart + 2 * 60 * 60 * 1000;
+    const liveResult = await liveActions?.convertEstimateToJob?.({
+      ...input,
+      scheduledStart,
+      scheduledEnd,
+    });
+
+    let estimateNumberValue = liveResult?.estimateNumber ?? "Estimate";
+    let jobIdValue = liveResult?.jobId ?? newId("job");
+    let visitIdValue = liveResult?.visitId ?? newId("visit");
+    let jobTitleValue = liveResult?.jobTitle ?? "Scheduled job";
+
+    setWorkspace((current) => {
+      const estimate = current.estimates.find((item) => item.id === input.estimateId);
+      if (!estimate) return current;
+      const opportunity = current.opportunities.find((item) => item.id === estimate.opportunityId);
+      const existingJob = current.jobs.find((job) => job.estimateId === estimate.id);
+      estimateNumberValue = liveResult?.estimateNumber ?? estimate.estimateNumber;
+      if (existingJob) {
+        const existingVisit = current.visits.find((visit) => visit.jobId === existingJob.id);
+        jobIdValue = existingJob.id;
+        visitIdValue = existingVisit?.id ?? visitIdValue;
+        jobTitleValue = existingJob.title;
+        return current;
+      }
+
+      const crewId = input.crewId ?? current.crews.find((crew) => crew.active)?.id ?? current.crews[0]?.id ?? "";
+      const taskId = newId("task");
+      jobTitleValue = liveResult?.jobTitle ?? opportunity?.title ?? `Job from ${estimate.estimateNumber}`;
+      const propertyId = estimate.propertyId || opportunity?.propertyId || "";
+      const managerId = opportunity?.ownerId ?? current.members[0]?.id ?? "";
+      const createdAt = now();
+
+      return {
+        ...current,
+        jobs: [
+          {
+            id: jobIdValue,
+            customerId: estimate.customerId,
+            propertyId,
+            opportunityId: estimate.opportunityId,
+            estimateId: estimate.id,
+            title: jobTitleValue,
+            status: "scheduled",
+            priority: "normal",
+            managerId,
+            startDate: scheduledStart,
+          },
+          ...current.jobs,
+        ],
+        visits: [
+          {
+            id: visitIdValue,
+            jobId: jobIdValue,
+            customerId: estimate.customerId,
+            propertyId,
+            scheduledStart,
+            scheduledEnd,
+            status: "scheduled",
+            routeOrder: 1,
+            crewId,
+            checklist: [
+              { id: "handoff-1", label: "Confirm approved estimate scope", isDone: false },
+              { id: "handoff-2", label: "Complete approved service scope", isDone: false },
+              { id: "handoff-3", label: "Capture completion photos", isDone: false },
+            ],
+            notes: `Created from approved estimate ${estimate.estimateNumber}.`,
+          },
+          ...current.visits,
+        ],
+        tasks: [
+          {
+            id: taskId,
+            entityType: "job",
+            entityId: jobIdValue,
+            title: "Confirm schedule and crew handoff",
+            status: "open",
+            priority: "high",
+            dueAt: Math.max(createdAt, scheduledStart - 4 * 60 * 60 * 1000),
+            assignedUserId: managerId,
+          },
+          ...current.tasks,
+        ],
+        opportunities: current.opportunities.map((item) =>
+          item.id === estimate.opportunityId
+            ? {
+                ...item,
+                stage: "won",
+                closeProbability: 100,
+                updatedAt: createdAt,
+              }
+            : item,
+        ),
+        activities: [
+          {
+            id: newId("act"),
+            entityType: "job",
+            entityId: jobIdValue,
+            kind: "system",
+            summary: `Converted ${estimate.estimateNumber} to job ${jobTitleValue}`,
+            actorId: managerId,
+            occurredAt: createdAt,
+          },
+          ...current.activities,
+        ],
+      };
+    });
+    setSelectedJobId(jobIdValue);
+    setSelectedVisitId(visitIdValue);
+
+    return { estimateId: input.estimateId, estimateNumber: estimateNumberValue, jobId: jobIdValue, visitId: visitIdValue, jobTitle: jobTitleValue };
+  }
+
   function assignCrew(visitId: string, crewId: string) {
     setWorkspace((current) => ({
       ...current,
       visits: current.visits.map((visit) => (visit.id === visitId ? { ...visit, crewId } : visit)),
     }));
     liveActions?.assignVisit?.(visitId, crewId);
+  }
+
+  function moveRouteStop(visitId: string, direction: "up" | "down") {
+    const orderedVisits = workspaceRef.current.visits
+      .slice()
+      .sort((a, b) => a.routeOrder - b.routeOrder || a.scheduledStart - b.scheduledStart || a.id.localeCompare(b.id));
+    const currentIndex = orderedVisits.findIndex((visit) => visit.id === visitId);
+    const nextIndex = direction === "up" ? currentIndex - 1 : currentIndex + 1;
+    if (currentIndex < 0 || nextIndex < 0 || nextIndex >= orderedVisits.length) return;
+
+    const nextVisits = [...orderedVisits];
+    const [target] = nextVisits.splice(currentIndex, 1);
+    nextVisits.splice(nextIndex, 0, target);
+    const nextRouteOrders = new Map(nextVisits.map((visit, index) => [visit.id, index + 1]));
+
+    setWorkspace((current) => ({
+      ...current,
+      visits: current.visits.map((visit) => ({
+        ...visit,
+        routeOrder: nextRouteOrders.get(visit.id) ?? visit.routeOrder,
+      })),
+    }));
+
+    for (const [id, routeOrder] of nextRouteOrders) {
+      const previous = workspaceRef.current.visits.find((visit) => visit.id === id);
+      if (previous && previous.routeOrder !== routeOrder) {
+        liveActions?.reorderVisit?.(id, routeOrder);
+      }
+    }
+  }
+
+  async function generateRecurringRoute(input: {
+    jobId: string;
+    frequency: "weekly" | "biweekly" | "monthly" | "seasonal" | "custom";
+    count: number;
+    firstStart: number;
+    durationMinutes: number;
+    crewId?: string;
+  }) {
+    const intervalDaysByFrequency = { weekly: 7, biweekly: 14, monthly: 28, seasonal: 90, custom: 7 } as const;
+    const count = Math.max(1, Math.min(26, Math.round(input.count)));
+    const durationMinutes = Math.max(30, Math.min(12 * 60, Math.round(input.durationMinutes)));
+    const intervalDays = intervalDaysByFrequency[input.frequency];
+    const liveResult = await liveActions?.generateRecurringRoute?.({ ...input, count, durationMinutes });
+    const planId = liveResult?.planId ?? newId("rsp");
+    const visitIds = liveResult?.visitIds ?? Array.from({ length: count }, () => newId("visit"));
+    const generatedAt = now();
+    let generatedCount = liveResult?.generatedCount ?? count;
+
+    setWorkspace((current) => {
+      const job = current.jobs.find((item) => item.id === input.jobId);
+      if (!job) return current;
+      const routeOrderStart = current.visits.reduce((max, visit) => Math.max(max, visit.routeOrder), 0);
+      const generatedVisits = visitIds.map((visitId, index) => {
+        const scheduledStart = input.firstStart + index * intervalDays * 24 * 60 * 60 * 1000;
+        return {
+          id: visitId,
+          jobId: job.id,
+          customerId: job.customerId,
+          propertyId: job.propertyId,
+          scheduledStart,
+          scheduledEnd: scheduledStart + durationMinutes * 60 * 1000,
+          status: "scheduled" as const,
+          routeOrder: routeOrderStart + index + 1,
+          crewId: input.crewId ?? current.crews.find((crew) => crew.active)?.id ?? "",
+          checklist: [
+            { id: "recurring-1", label: "Confirm recurring scope and property access", isDone: false },
+            { id: "recurring-2", label: "Complete scheduled recurring service", isDone: false },
+            { id: "recurring-3", label: "Log materials, issues, and customer notes", isDone: false },
+          ],
+          notes: `Generated from recurring plan ${planId}.`,
+        };
+      });
+      generatedCount = generatedVisits.length;
+      const nextRunAt = liveResult?.nextRunAt ?? input.firstStart + generatedCount * intervalDays * 24 * 60 * 60 * 1000;
+      return {
+        ...current,
+        jobs: current.jobs.map((item) => (item.id === job.id ? { ...item, recurrence: input.frequency } : item)),
+        recurringServicePlans: [
+          {
+            id: planId,
+            customerId: job.customerId,
+            propertyId: job.propertyId,
+            jobId: job.id,
+            crewId: input.crewId,
+            name: `${job.title} ${input.frequency} route`,
+            frequency: input.frequency,
+            intervalDays,
+            visitDurationMinutes: durationMinutes,
+            nextRunAt,
+            lastGeneratedAt: generatedAt,
+            generatedVisitIds: visitIds,
+            status: "active",
+          },
+          ...current.recurringServicePlans,
+        ],
+        visits: [...current.visits, ...generatedVisits],
+        activities: [
+          {
+            id: newId("act"),
+            entityType: "job",
+            entityId: job.id,
+            kind: "system",
+            summary: `Generated ${generatedCount} ${input.frequency} visits for ${job.title}`,
+            actorId: job.managerId,
+            occurredAt: generatedAt,
+          },
+          ...current.activities,
+        ],
+      };
+    });
+
+    return { planId, visitIds, generatedCount };
   }
 
   function toggleChecklist(visitId: string, itemId: string) {
@@ -1894,63 +3319,234 @@ function LandscapeOsWorkspace({
     liveActions?.completeChecklistItem?.(visitId, itemId);
   }
 
-  function submitVisit(visit: JobVisit) {
+  async function startFieldVisit(visit: JobVisit) {
+    const result = await liveActions?.startVisit?.(visit.id, "manual");
     setWorkspace((current) => ({
       ...current,
-      visits: current.visits.map((item) => (item.id === visit.id ? { ...item, status: "complete" } : item)),
-      tasks: issueFlag
-        ? [
-            {
-              id: newId("task"),
-              entityType: "visit",
-              entityId: visit.id,
-              title: issueFlag,
-              status: "open",
-              priority: "high",
-              dueAt: now() + 24 * 60 * 60 * 1000,
-              assignedUserId: "u-justin",
-            },
-            ...current.tasks,
-          ]
-        : current.tasks,
+      visits: current.visits.map((item) => (item.id === visit.id ? { ...item, status: "on_site" } : item)),
       activities: [
         {
           id: newId("act"),
           entityType: "visit",
           entityId: visit.id,
           kind: "visit",
-          summary: `Completed ${jobsById.get(visit.jobId)?.title ?? "visit"}`,
+          summary: "Started field visit",
           actorId: "u-nina",
-          occurredAt: now(),
+          occurredAt: result?.startedAt ?? now(),
         },
         ...current.activities,
       ],
     }));
-    liveActions?.submitVisit?.(visit.id, issueFlag || undefined);
-    setIssueFlag("");
+    return result;
   }
 
-  function addJobTask(event: FormEvent) {
-    event.preventDefault();
-    if (!taskTitle.trim() || !selectedJob) return;
+  async function submitVisit(
+    visit: JobVisit,
+    input?: {
+      notes?: string;
+      issue?: FieldIssueSubmitInput;
+      materialApplications?: Array<{ materialId: string; quantity: number; unit: string; targetAreaId?: string; notes?: string }>;
+    },
+  ) {
+    const result = await liveActions?.submitVisit?.(visit.id, {
+      issueFlag: issueFlag || undefined,
+      issue: input?.issue,
+      notes: input?.notes,
+      materialApplications: input?.materialApplications,
+    });
+    const completedAt = now();
+    const issue = input?.issue;
+    const issueTaskTitle = issue ? `${fieldIssueCategoryLabel(issue.category)}: ${issue.summary}` : issueFlag;
     setWorkspace((current) => ({
       ...current,
+      visits: current.visits.map((item) => (item.id === visit.id ? { ...item, status: "complete", notes: input?.notes ?? item.notes } : item)),
+      tasks: issue
+        ? [
+            {
+              id: newId("task"),
+              entityType: "visit",
+              entityId: visit.id,
+              title: issueTaskTitle,
+              description: issue.details,
+              status: "open",
+              priority: issue.severity === "low" ? "low" : issue.severity === "normal" ? "normal" : "high",
+              dueAt: now() + (issue.severity === "urgent" ? 4 : 24) * 60 * 60 * 1000,
+              assignedUserId: "u-justin",
+            },
+            ...current.tasks,
+          ]
+        : current.tasks,
+      opportunities: issue?.createOpportunity
+        ? [
+            {
+              id: result?.issueOpportunityId ?? newId("opp"),
+              customerId: visit.customerId,
+              propertyId: visit.propertyId,
+              title: `Field upsell: ${issue.summary}`,
+              stage: "qualified",
+              valueCents: issue.estimatedValueCents ?? 0,
+              closeProbability: 35,
+              expectedCloseDate: completedAt + 7 * 24 * 60 * 60 * 1000,
+              ownerId: "u-nina",
+              serviceLines: [issue.serviceCategory ?? "maintenance"],
+              updatedAt: completedAt,
+            },
+            ...current.opportunities,
+          ]
+        : current.opportunities,
+      activities: [
+        {
+          id: newId("act"),
+          entityType: "visit",
+          entityId: visit.id,
+          kind: "visit",
+          summary: issue ? `Field issue flagged: ${issue.summary}` : `Completed ${jobsById.get(visit.jobId)?.title ?? "visit"}`,
+          actorId: "u-nina",
+          occurredAt: completedAt,
+        },
+        ...current.activities,
+      ],
+    }));
+    setIssueFlag("");
+    return result;
+  }
+
+  async function addJobTask(event: FormEvent) {
+    event.preventDefault();
+    const title = jobTaskForm.title.trim();
+    if (!title || !selectedJob) return;
+    const dueInDays = Math.max(0, Math.min(365, Math.round(Number(jobTaskForm.dueInDays || "0"))));
+    const dueAt = now() + dueInDays * 24 * 60 * 60 * 1000;
+    const currentMembers = workspaceRef.current.members;
+    const selectedManagerIsValid = currentMembers.some((member) => member.id === selectedJob.managerId);
+    const assignedUserId = jobTaskForm.assignedUserId || (selectedManagerIsValid ? selectedJob.managerId : currentMembers[0]?.id) || "";
+    setJobTaskMessage({ state: "pending", message: `Creating task ${title}.` });
+    try {
+      const liveTaskId = await liveActions?.addTask?.(selectedJob.id, {
+        title,
+        priority: jobTaskForm.priority,
+        dueAt,
+        assignedUserId: assignedUserId || undefined,
+      });
+      setWorkspace((current) => ({
+        ...current,
+        tasks: [
+          {
+            id: typeof liveTaskId === "string" ? liveTaskId : newId("task"),
+            entityType: "job",
+            entityId: selectedJob.id,
+            title,
+            status: "open",
+            priority: jobTaskForm.priority,
+            dueAt,
+            assignedUserId,
+          },
+          ...current.tasks,
+        ],
+      }));
+      setJobTaskForm((current) => ({ ...current, title: "" }));
+      setJobTaskMessage({ state: "success", message: `Task ${title} assigned to ${membersById.get(assignedUserId)?.name ?? "team"}.` });
+    } catch (error) {
+      setJobTaskMessage({ state: "error", message: error instanceof Error ? error.message : "Task could not be created." });
+    }
+  }
+
+  async function createJobChangeOrder(input: {
+    jobId: string;
+    title: string;
+    description: string;
+    requestedByName?: string;
+    revenueDeltaCents: number;
+    estimatedCostDeltaCents: number;
+    scheduleImpactDays: number;
+  }) {
+    const job = workspaceRef.current.jobs.find((item) => item.id === input.jobId);
+    if (!job) throw new Error("Job not found.");
+    const liveResult = await liveActions?.createChangeOrder?.(input);
+    const changeOrderId = typeof liveResult === "string" ? liveResult : liveResult?.changeOrderId ?? newId("co");
+    const requestedAt = now();
+    const grossProfitDeltaCents = input.revenueDeltaCents - input.estimatedCostDeltaCents;
+    const grossMarginPercent = input.revenueDeltaCents > 0 ? Math.round((grossProfitDeltaCents / input.revenueDeltaCents) * 1000) / 10 : 0;
+    setWorkspace((current) => ({
+      ...current,
+      changeOrders: [
+        {
+          id: changeOrderId,
+          jobId: job.id,
+          customerId: job.customerId,
+          propertyId: job.propertyId,
+          estimateId: job.estimateId,
+          title: input.title,
+          description: input.description,
+          status: "pending_approval",
+          requestedByName: input.requestedByName,
+          revenueDeltaCents: input.revenueDeltaCents,
+          estimatedCostDeltaCents: input.estimatedCostDeltaCents,
+          grossProfitDeltaCents,
+          grossMarginPercent,
+          scheduleImpactDays: input.scheduleImpactDays,
+          requestedAt,
+        },
+        ...current.changeOrders,
+      ],
+      activities: [
+        {
+          id: newId("act"),
+          entityType: "job",
+          entityId: job.id,
+          kind: "system",
+          summary: `Created change order ${input.title}`,
+          actorId: job.managerId,
+          occurredAt: requestedAt,
+        },
+        ...current.activities,
+      ],
+    }));
+    return changeOrderId;
+  }
+
+  async function approveJobChangeOrder(input: { changeOrderId: string; approvedByName: string; approvedByEmail?: string }) {
+    const changeOrder = workspaceRef.current.changeOrders.find((item) => item.id === input.changeOrderId);
+    if (!changeOrder) throw new Error("Change order not found.");
+    const job = workspaceRef.current.jobs.find((item) => item.id === changeOrder.jobId);
+    if (!job) throw new Error("Job not found.");
+    const liveResult = await liveActions?.approveChangeOrder?.(input);
+    const approvedAt = now();
+    const taskId = liveResult?.taskId ?? newId("task");
+    setWorkspace((current) => ({
+      ...current,
+      changeOrders: current.changeOrders.map((item) =>
+        item.id === input.changeOrderId
+          ? { ...item, status: "approved", approvedByName: input.approvedByName, approvedByEmail: input.approvedByEmail, approvedAt, taskId }
+          : item,
+      ),
       tasks: [
         {
-          id: newId("task"),
+          id: taskId,
           entityType: "job",
-          entityId: selectedJob.id,
-          title: taskTitle,
+          entityId: job.id,
+          title: `Schedule approved change order: ${changeOrder.title}`,
           status: "open",
-          priority: "normal",
-          dueAt: now() + 48 * 60 * 60 * 1000,
-          assignedUserId: "u-justin",
+          priority: changeOrder.scheduleImpactDays > 0 ? "high" : "normal",
+          dueAt: approvedAt + Math.max(1, changeOrder.scheduleImpactDays || 1) * 24 * 60 * 60 * 1000,
+          assignedUserId: job.managerId,
         },
         ...current.tasks,
       ],
+      activities: [
+        {
+          id: newId("act"),
+          entityType: "job",
+          entityId: job.id,
+          kind: "system",
+          summary: `Approved change order ${changeOrder.title}`,
+          actorId: job.managerId,
+          occurredAt: approvedAt,
+        },
+        ...current.activities,
+      ],
     }));
-    liveActions?.addTask?.(selectedJob.id, taskTitle);
-    setTaskTitle("");
+    return { changeOrderId: input.changeOrderId, taskId };
   }
 
   function addRecordActivity(
@@ -1961,17 +3557,36 @@ function LandscapeOsWorkspace({
     const summary = target.form.body.trim();
     if (!summary) return;
     const dueInDays = Math.max(1, Math.min(30, Math.round(Number(target.form.dueInDays || "2"))));
+    const activitySummary = target.form.kind === "call" ? `Call outcome: ${activityCallOutcomeLabels[target.form.callOutcome]}. ${summary}` : summary;
+    const occurredAt = now();
     setWorkspace((current) => ({
       ...current,
+      opportunities:
+        target.entityType === "customer" && target.form.opportunityImpact !== "none"
+          ? current.opportunities.map((opportunity) => {
+              const activeCustomerOpportunity = current.opportunities
+                .filter((item) => item.customerId === target.entityId && item.stage !== "won" && item.stage !== "lost")
+                .sort((a, b) => b.updatedAt - a.updatedAt)[0];
+              if (!activeCustomerOpportunity || opportunity.id !== activeCustomerOpportunity.id) return opportunity;
+              if (target.form.opportunityImpact === "advance_stage") {
+                const nextStage = nextOpportunityStage[opportunity.stage] ?? opportunity.stage;
+                return { ...opportunity, stage: nextStage, closeProbability: Math.max(opportunity.closeProbability, nextStage === "won" ? 100 : opportunity.closeProbability + 10), updatedAt: occurredAt };
+              }
+              if (target.form.opportunityImpact === "increase_probability") {
+                return { ...opportunity, closeProbability: Math.min(95, opportunity.closeProbability + 10), updatedAt: occurredAt };
+              }
+              return { ...opportunity, closeProbability: Math.max(5, opportunity.closeProbability - 15), updatedAt: occurredAt };
+            })
+          : current.opportunities,
       activities: [
         {
           id: newId("act"),
           entityType: target.entityType,
           entityId: target.entityId,
           kind: target.form.kind,
-          summary,
+          summary: activitySummary,
           actorId: "u-amy",
-          occurredAt: now(),
+          occurredAt,
         },
         ...current.activities,
       ],
@@ -1981,10 +3596,10 @@ function LandscapeOsWorkspace({
               id: newId("task"),
               entityType: target.entityType,
               entityId: target.entityId,
-              title: `Follow up: ${summary.slice(0, 80)}`,
+              title: `Follow up: ${activitySummary.slice(0, 80)}`,
               status: "open",
               priority: "normal",
-              dueAt: now() + dueInDays * 24 * 60 * 60 * 1000,
+              dueAt: occurredAt + dueInDays * 24 * 60 * 60 * 1000,
               assignedUserId: "u-amy",
             },
             ...current.tasks,
@@ -1995,9 +3610,11 @@ function LandscapeOsWorkspace({
       entityType: target.entityType,
       entityId: target.entityId,
       kind: target.form.kind,
-      summary,
+      summary: activitySummary,
       createFollowUp: target.form.createFollowUp,
       dueInDays,
+      callOutcome: target.form.kind === "call" ? target.form.callOutcome : undefined,
+      opportunityImpact: target.form.kind === "call" ? target.form.opportunityImpact : "none",
     });
     target.reset(defaultActivityComposer());
   }
@@ -2035,6 +3652,36 @@ function LandscapeOsWorkspace({
       serviceCatalog: current.serviceCatalog.map((item) => (item.id === itemId ? { ...item, active: !item.active } : item)),
     }));
     liveActions?.toggleService?.(itemId);
+  }
+
+  async function upsertServiceCatalogItem(input: {
+    itemId?: string;
+    name: string;
+    category: ServiceCategory;
+    defaultUnit: string;
+    defaultPriceCents: number;
+    active: boolean;
+  }) {
+    const liveResult = await liveActions?.upsertServiceCatalogItem?.(input);
+    const itemId = typeof liveResult === "string" ? liveResult : input.itemId ?? newId("svc");
+    setWorkspace((current) => {
+      const nextItem = {
+        id: itemId,
+        name: input.name,
+        category: input.category,
+        defaultUnit: input.defaultUnit,
+        defaultPriceCents: input.defaultPriceCents,
+        active: input.active,
+      };
+      const exists = current.serviceCatalog.some((item) => item.id === itemId);
+      return {
+        ...current,
+        serviceCatalog: exists
+          ? current.serviceCatalog.map((item) => (item.id === itemId ? { ...item, ...nextItem } : item))
+          : [nextItem, ...current.serviceCatalog],
+      };
+    });
+    return itemId;
   }
 
   function createCrew(event: FormEvent) {
@@ -2201,6 +3848,7 @@ function LandscapeOsWorkspace({
               <DashboardView workspace={workspace} dashboard={dashboard} crewsById={crewsById} customersById={customersById} jobsById={jobsById} setView={setView} />
             )}
             {view === "prime_time" && <PrimeTimeView />}
+            {view === "journeys" && <JourneyAuditView />}
             {view === "lead_ops" && <LeadOpsView operatingDepth={effectiveOperatingDepth} operatingActions={operatingActions} />}
             {view === "crm" && (
               <CrmView
@@ -2213,14 +3861,17 @@ function LandscapeOsWorkspace({
                 leadForm={leadForm}
                 setLeadForm={setLeadForm}
                 createLead={createLead}
+                createRepeatCustomerLead={createRepeatCustomerLead}
+                leadSubmitState={leadSubmitState}
+                leadSubmitMessage={leadSubmitMessage}
                 activityForm={customerActivityForm}
                 setActivityForm={setCustomerActivityForm}
                 addActivity={addCustomerActivity}
               />
             )}
-            {view === "pipeline" && <PipelineView workspace={workspace} customersById={customersById} moveOpportunity={moveOpportunity} />}
+            {view === "pipeline" && <PipelineView workspace={workspace} customersById={customersById} moveOpportunity={moveOpportunity} createQuoteFromOpportunity={createQuoteFromOpportunity} sendQuoteToCustomer={sendQuoteToCustomer} acceptQuoteFromCustomer={acceptQuoteFromCustomer} convertAcceptedQuoteToJob={convertAcceptedQuoteToJob} openJob={(jobId) => { setSelectedJobId(jobId); setView("jobs"); }} />}
             {view === "dispatch" && (
-              <DispatchView workspace={workspace} operatingDepth={effectiveOperatingDepth} customersById={customersById} propertiesById={propertiesById} crewsById={crewsById} jobsById={jobsById} assignCrew={assignCrew} />
+              <DispatchView workspace={workspace} operatingDepth={effectiveOperatingDepth} customersById={customersById} propertiesById={propertiesById} crewsById={crewsById} jobsById={jobsById} assignCrew={assignCrew} moveRouteStop={moveRouteStop} generateRecurringRoute={generateRecurringRoute} />
             )}
             {view === "jobs" && (
               <JobsView
@@ -2231,13 +3882,17 @@ function LandscapeOsWorkspace({
                 customersById={customersById}
                 propertiesById={propertiesById}
                 crewsById={crewsById}
-                taskTitle={taskTitle}
-                setTaskTitle={setTaskTitle}
+                membersById={membersById}
+                jobTaskForm={jobTaskForm}
+                setJobTaskForm={setJobTaskForm}
+                jobTaskMessage={jobTaskMessage}
                 addJobTask={addJobTask}
                 activityForm={jobActivityForm}
                 setActivityForm={setJobActivityForm}
                 addActivity={addJobActivity}
                 toggleTask={toggleTask}
+                createChangeOrder={createJobChangeOrder}
+                approveChangeOrder={approveJobChangeOrder}
               />
             )}
             {view === "field" && (
@@ -2247,11 +3902,13 @@ function LandscapeOsWorkspace({
                 selectedVisit={selectedVisit}
                 setSelectedVisitId={setSelectedVisitId}
                 customersById={customersById}
+                contactsByCustomerId={contactsByCustomerId}
                 propertiesById={propertiesById}
                 crewsById={crewsById}
                 jobsById={jobsById}
                 issueFlag={issueFlag}
                 setIssueFlag={setIssueFlag}
+                startVisit={startFieldVisit}
                 toggleChecklist={toggleChecklist}
                 submitVisit={submitVisit}
               />
@@ -2269,6 +3926,7 @@ function LandscapeOsWorkspace({
                 setCrewName={setCrewName}
                 createCrew={createCrew}
                 toggleService={toggleService}
+                upsertServiceCatalogItem={upsertServiceCatalogItem}
               />
             )}
             {view === "onboarding" && (
@@ -2279,6 +3937,7 @@ function LandscapeOsWorkspace({
                 createClientWorkspace={createClientWorkspace}
                 authConfigured={authConfigured}
                 operatingDepth={effectiveOperatingDepth}
+                operatingActions={operatingActions}
               />
             )}
             {view === "specs" && <SpecsView backendState={backendState} workspace={workspace} />}
@@ -2448,6 +4107,191 @@ function PrimeTimeView() {
               </div>
             </div>
           ))}
+        </div>
+      </Panel>
+    </div>
+  );
+}
+
+function JourneyAuditView() {
+  const summary = journeyCoverageSummary();
+  const p0Open = customerJourneys.filter((journey) => journey.priority === "P0" && journey.coverage !== "verified");
+  const gapJourneys = customerJourneys.filter((journey) => journey.coverage === "gap");
+
+  return (
+    <div className="grid gap-4">
+      <Panel>
+        <div className="flex flex-wrap items-start justify-between gap-4">
+          <div className="min-w-0">
+            <div className="flex items-center gap-2 text-sm font-semibold text-[#224036]">
+              <ClipboardCheck size={16} />
+              Customer Journey Audit
+            </div>
+            <h2 className="mt-2 text-2xl font-bold tracking-normal">100 Customer Journey Coverage</h2>
+            <p className="mt-2 max-w-4xl text-sm leading-6 text-stone-600">
+              This is the operating QA board for the full customer journey list. Each journey is tied to a product surface, backend objects, acceptance criteria, current proof, and the remaining implementation gap so the goal can be burned down without losing scope.
+            </p>
+          </div>
+          <div className="grid gap-2 text-right">
+            <div className="text-4xl font-bold text-[#224036]">{summary.verifiedPercent}%</div>
+            <div className="text-xs font-semibold uppercase tracking-normal text-stone-500">verified coverage</div>
+          </div>
+        </div>
+        <div className="mt-5 grid gap-3 sm:grid-cols-2 xl:grid-cols-5">
+          <Metric label="Total journeys" value={`${summary.total} journeys`} />
+          <Metric label="Verified" value={summary.byCoverage.verified} tone="success" />
+          <Metric label="Interactive" value={summary.byCoverage.interactive} tone="success" />
+          <Metric label="Modeled" value={summary.byCoverage.modeled} tone="warning" />
+          <Metric label="P0 not verified" value={summary.p0Open} tone={summary.p0Open > 0 ? "danger" : "success"} />
+        </div>
+      </Panel>
+
+      <div className="grid gap-4 xl:grid-cols-[1fr_420px]">
+        <Panel>
+          <div className="flex flex-wrap items-center justify-between gap-3">
+            <h2 className="text-base font-bold">Lifecycle Coverage</h2>
+            <Badge>{customerJourneyCategories.length} journey groups</Badge>
+          </div>
+          <div className="mt-4 grid gap-3 md:grid-cols-2">
+            {customerJourneyCategories.map((category) => {
+              const journeys = customerJourneys.filter((journey) => journey.categoryId === category.id);
+              const verified = journeys.filter((journey) => journey.coverage === "verified").length;
+              const interactive = journeys.filter((journey) => journey.coverage === "interactive").length;
+              const modeled = journeys.filter((journey) => journey.coverage === "modeled").length;
+              const gaps = journeys.filter((journey) => journey.coverage === "gap").length;
+              const score = Math.round(((verified + interactive * 0.65 + modeled * 0.35) / journeys.length) * 100);
+
+              return (
+                <div key={category.id} className="rounded-md border border-stone-200 p-3">
+                  <div className="flex items-start justify-between gap-3">
+                    <div>
+                      <div className="font-semibold">{category.label}</div>
+                      <p className="mt-1 text-sm leading-5 text-stone-500">{category.summary}</p>
+                    </div>
+                    <Badge tone={score >= 70 ? "success" : score >= 45 ? "warning" : "danger"}>{score}%</Badge>
+                  </div>
+                  <div className="mt-3 grid grid-cols-4 gap-2 text-center text-xs">
+                    <div className="rounded-md bg-emerald-50 p-2 text-emerald-800"><div className="font-bold">{verified}</div><div>verified</div></div>
+                    <div className="rounded-md bg-lime-50 p-2 text-lime-800"><div className="font-bold">{interactive}</div><div>live UI</div></div>
+                    <div className="rounded-md bg-amber-50 p-2 text-amber-800"><div className="font-bold">{modeled}</div><div>modeled</div></div>
+                    <div className="rounded-md bg-rose-50 p-2 text-rose-800"><div className="font-bold">{gaps}</div><div>gaps</div></div>
+                  </div>
+                </div>
+              );
+            })}
+          </div>
+        </Panel>
+
+        <div className="grid gap-4">
+          <Panel>
+            <h2 className="text-base font-bold">P0 Journey Work Queue</h2>
+            <div className="mt-4 grid gap-2">
+              {p0Open.slice(0, 12).map((journey) => (
+                <div key={journey.id} className="rounded-md border border-stone-200 p-3">
+                  <div className="flex items-start justify-between gap-3">
+                    <div>
+                      <div className="text-xs font-semibold uppercase tracking-normal text-stone-500">Journey {journey.id} - {journey.priority}</div>
+                      <div className="mt-1 font-semibold">{journey.title}</div>
+                    </div>
+                    <Badge tone={customerJourneyCoverageTone[journey.coverage]}>{customerJourneyCoverageLabels[journey.coverage]}</Badge>
+                  </div>
+                  <div className="mt-2 text-sm leading-5 text-stone-600">{journey.gaps[0]}</div>
+                </div>
+              ))}
+            </div>
+          </Panel>
+
+          <Panel>
+            <h2 className="text-base font-bold">True Product Gaps</h2>
+            <div className="mt-4 grid gap-2">
+              {gapJourneys.map((journey) => (
+                <div key={journey.id} className="rounded-md border border-rose-100 bg-rose-50 p-3">
+                  <div className="font-semibold text-rose-950">Journey {journey.id}</div>
+                  <div className="mt-1 text-sm leading-5 text-rose-900">{journey.title}</div>
+                </div>
+              ))}
+            </div>
+          </Panel>
+        </div>
+      </div>
+
+      <Panel>
+        <div className="flex flex-wrap items-center justify-between gap-3">
+          <h2 className="text-base font-bold">All Journey Evidence</h2>
+          <div className="flex flex-wrap gap-2">
+            {(Object.keys(summary.byCoverage) as Array<keyof typeof summary.byCoverage>).map((coverage) => (
+              <Badge key={coverage} tone={customerJourneyCoverageTone[coverage]}>
+                {customerJourneyCoverageLabels[coverage]}: {summary.byCoverage[coverage]}
+              </Badge>
+            ))}
+          </div>
+        </div>
+        <div className="mt-4 grid gap-4">
+          {customerJourneyCategories.map((category) => {
+            const journeys = customerJourneys.filter((journey) => journey.categoryId === category.id);
+
+            return (
+              <div key={category.id} className="rounded-lg border border-stone-200 bg-stone-50 p-3">
+                <div className="flex flex-wrap items-center justify-between gap-3">
+                  <div>
+                    <h3 className="font-bold">{category.label}</h3>
+                    <p className="mt-1 text-sm leading-5 text-stone-500">{category.summary}</p>
+                  </div>
+                  <Badge>{journeys.length} journeys</Badge>
+                </div>
+                <div className="mt-3 grid gap-3 xl:grid-cols-2">
+                  {journeys.map((journey) => (
+                    <article key={journey.id} className="rounded-md border border-stone-200 bg-white p-3">
+                      <div className="flex flex-wrap items-start justify-between gap-3">
+                        <div className="min-w-0">
+                          <div className="text-xs font-semibold uppercase tracking-normal text-stone-500">Journey {journey.id} - {journey.priority} - {journey.actor}</div>
+                          <h4 className="mt-1 font-semibold">{journey.title}</h4>
+                          <p className="mt-2 text-sm leading-5 text-stone-600">{journey.outcome}</p>
+                        </div>
+                        <Badge tone={customerJourneyCoverageTone[journey.coverage]}>{customerJourneyCoverageLabels[journey.coverage]}</Badge>
+                      </div>
+
+                      <div className="mt-3 grid gap-3 lg:grid-cols-2">
+                        <div>
+                          <div className="text-xs font-semibold uppercase tracking-normal text-stone-500">Surface</div>
+                          <div className="mt-1 text-sm font-semibold text-stone-800">{journey.primarySurface}</div>
+                        </div>
+                        <div>
+                          <div className="text-xs font-semibold uppercase tracking-normal text-stone-500">Backend</div>
+                          <div className="mt-1 flex flex-wrap gap-1">
+                            {journey.backendObjects.slice(0, 5).map((object) => (
+                              <span key={object} className="rounded-md border border-stone-200 bg-stone-50 px-2 py-1 text-xs font-medium text-stone-600">{object}</span>
+                            ))}
+                          </div>
+                        </div>
+                      </div>
+
+                      <div className="mt-3 grid gap-3 lg:grid-cols-3">
+                        <div>
+                          <div className="text-xs font-semibold uppercase tracking-normal text-stone-500">Acceptance</div>
+                          <ul className="mt-2 grid gap-1 text-xs leading-5 text-stone-600">
+                            {journey.acceptance.map((item) => <li key={item}>- {item}</li>)}
+                          </ul>
+                        </div>
+                        <div>
+                          <div className="text-xs font-semibold uppercase tracking-normal text-stone-500">Evidence</div>
+                          <ul className="mt-2 grid gap-1 text-xs leading-5 text-stone-600">
+                            {journey.evidence.map((item) => <li key={item}>- {item}</li>)}
+                          </ul>
+                        </div>
+                        <div>
+                          <div className="text-xs font-semibold uppercase tracking-normal text-stone-500">Remaining gap</div>
+                          <ul className="mt-2 grid gap-1 text-xs leading-5 text-stone-600">
+                            {journey.gaps.map((item) => <li key={item}>- {item}</li>)}
+                          </ul>
+                        </div>
+                      </div>
+                    </article>
+                  ))}
+                </div>
+              </div>
+            );
+          })}
         </div>
       </Panel>
     </div>
@@ -2682,6 +4526,34 @@ function ActivityComposer({
           />
         </Field>
       </div>
+      {form.kind === "call" ? (
+        <div className="mt-3 grid gap-3 sm:grid-cols-2">
+          <Field label="Call outcome">
+            <select
+              aria-label={`${contextLabel} call outcome`}
+              className={inputClass()}
+              value={form.callOutcome}
+              onChange={(event) => setForm({ ...form, callOutcome: event.target.value as ActivityCallOutcome })}
+            >
+              {Object.entries(activityCallOutcomeLabels).map(([value, label]) => (
+                <option key={value} value={value}>{label}</option>
+              ))}
+            </select>
+          </Field>
+          <Field label="Opportunity impact">
+            <select
+              aria-label={`${contextLabel} opportunity impact`}
+              className={inputClass()}
+              value={form.opportunityImpact}
+              onChange={(event) => setForm({ ...form, opportunityImpact: event.target.value as OpportunityImpact })}
+            >
+              {Object.entries(opportunityImpactLabels).map(([value, label]) => (
+                <option key={value} value={value}>{label}</option>
+              ))}
+            </select>
+          </Field>
+        </div>
+      ) : null}
       <div className="mt-3">
         <Field label="Summary">
           <textarea
@@ -2768,6 +4640,9 @@ function CrmView({
   leadForm,
   setLeadForm,
   createLead,
+  createRepeatCustomerLead,
+  leadSubmitState,
+  leadSubmitMessage,
   activityForm,
   setActivityForm,
   addActivity,
@@ -2780,16 +4655,78 @@ function CrmView({
   membersById: Map<string, WorkspaceSnapshot["members"][number]>;
   leadForm: LeadFormState;
   setLeadForm: (value: LeadFormState) => void;
-  createLead: (event: FormEvent) => void;
+  createLead: (event: FormEvent) => void | Promise<void>;
+  createRepeatCustomerLead: (input: { customerId: string; propertyId?: string; title: string; source: string; valueCents: number; serviceLine: ServiceCategory; message?: string }) => Promise<{ leadId: string; opportunityId: string }>;
+  leadSubmitState: "idle" | "submitting" | "success" | "error";
+  leadSubmitMessage: string;
   activityForm: ActivityComposerState;
   setActivityForm: (value: ActivityComposerState) => void;
   addActivity: (event: FormEvent) => void;
 }) {
   const filtered = workspace.customers.filter((customer) => customer.name.toLowerCase().includes(customerSearch.toLowerCase()));
+  const customerContacts = selectedCustomer ? workspace.contacts.filter((contact) => contact.customerId === selectedCustomer.id) : [];
   const customerProperties = selectedCustomer ? workspace.properties.filter((property) => property.customerId === selectedCustomer.id) : [];
   const customerOpps = selectedCustomer ? workspace.opportunities.filter((opp) => opp.customerId === selectedCustomer.id) : [];
+  const customerEstimates = selectedCustomer ? workspace.estimates.filter((estimate) => estimate.customerId === selectedCustomer.id) : [];
+  const customerJobs = selectedCustomer ? workspace.jobs.filter((job) => job.customerId === selectedCustomer.id) : [];
+  const customerInvoices = selectedCustomer ? workspace.invoices.filter((invoice) => invoice.customerId === selectedCustomer.id) : [];
+  const customerPayments = selectedCustomer ? workspace.payments.filter((payment) => payment.customerId === selectedCustomer.id) : [];
   const customerActivities = selectedCustomer ? workspace.activities.filter((activity) => activity.entityType === "customer" && activity.entityId === selectedCustomer.id) : [];
   const customerTasks = selectedCustomer ? workspace.tasks.filter((task) => task.entityType === "customer" && task.entityId === selectedCustomer.id && task.status !== "done") : [];
+  const customerNotes = selectedCustomer ? workspace.notes.filter((note) => note.entityType === "customer" && note.entityId === selectedCustomer.id) : [];
+  const customerPropertyIds = new Set(customerProperties.map((property) => property.id));
+  const customerEstimateIds = new Set(customerEstimates.map((estimate) => estimate.id));
+  const customerJobIds = new Set(customerJobs.map((job) => job.id));
+  const customerFiles = selectedCustomer
+    ? workspace.files.filter((file) =>
+        (file.entityType === "customer" && file.entityId === selectedCustomer.id) ||
+        (file.entityType === "property" && customerPropertyIds.has(file.entityId)) ||
+        (file.entityType === "estimate" && customerEstimateIds.has(file.entityId)) ||
+        (file.entityType === "job" && customerJobIds.has(file.entityId)),
+      )
+    : [];
+  const accountInvoicedCents = customerInvoices.reduce((sum, invoice) => sum + invoice.totalCents, 0);
+  const accountBalanceCents = customerInvoices.reduce((sum, invoice) => sum + Math.max(0, invoice.totalCents - invoice.paidCents), 0);
+  const latestPayment = [...customerPayments].sort((a, b) => b.receivedAt - a.receivedAt)[0];
+  const freeContactLimit = 10;
+  const contactUsagePercent = Math.min(100, Math.round((workspace.customers.length / freeContactLimit) * 100));
+  const isAtFreeLimit = workspace.customers.length >= freeContactLimit;
+  const isOverFreeLimit = workspace.customers.length > freeContactLimit;
+  const [repeatLeadForm, setRepeatLeadForm] = useState<RepeatLeadFormState>(() => defaultRepeatLeadForm());
+  const [repeatLeadState, setRepeatLeadState] = useState<"idle" | "submitting" | "success" | "error">("idle");
+  const [repeatLeadMessage, setRepeatLeadMessage] = useState("");
+
+  async function submitRepeatLead(event: FormEvent) {
+    event.preventDefault();
+    if (!selectedCustomer) return;
+    const property = customerProperties[0];
+    if (!property) {
+      setRepeatLeadState("error");
+      setRepeatLeadMessage("Add a property before creating a repeat service request.");
+      return;
+    }
+    const title = repeatLeadForm.title.trim();
+    if (!title) return;
+    try {
+      setRepeatLeadState("submitting");
+      setRepeatLeadMessage("");
+      await createRepeatCustomerLead({
+        customerId: selectedCustomer.id,
+        propertyId: property.id,
+        title,
+        source: repeatLeadForm.source.trim() || "Repeat customer",
+        valueCents: dollarsToCents(repeatLeadForm.value),
+        serviceLine: repeatLeadForm.serviceLine,
+        message: repeatLeadForm.message.trim() || undefined,
+      });
+      setRepeatLeadState("success");
+      setRepeatLeadMessage(`${selectedCustomer.name} repeat service request added to Pipeline.`);
+      setRepeatLeadForm(defaultRepeatLeadForm());
+    } catch (error) {
+      setRepeatLeadState("error");
+      setRepeatLeadMessage(error instanceof Error ? error.message : "Could not create that repeat service request.");
+    }
+  }
 
   return (
     <div className="grid gap-4 xl:grid-cols-[0.8fr_1.2fr]">
@@ -2838,32 +4775,218 @@ function CrmView({
                 </div>
                 <Badge>{membersById.get(selectedCustomer.ownerId)?.name ?? "Unassigned"}</Badge>
               </div>
-              <div className="mt-4 grid gap-3 md:grid-cols-2">
-                {customerProperties.map((property) => (
-                  <div key={property.id} className="rounded-md border border-stone-200 p-3">
-                    <div className="font-semibold">{property.label}</div>
-                    <div className="mt-1 text-sm text-stone-500">{property.street}, {property.city}</div>
-                    <a className="mt-3 inline-flex items-center gap-2 text-sm font-semibold text-[#224036]" href={googleMapsUrl(`${property.street}, ${property.city}, ${property.state} ${property.postalCode}`)} target="_blank" rel="noreferrer">
-                      <MapPin size={15} />
-                      Maps
-                      <ExternalLink size={13} />
-                    </a>
+              <div className="mt-4 rounded-md border border-stone-200 bg-stone-50 p-3">
+                <div className="flex flex-wrap items-center justify-between gap-3">
+                  <div>
+                    <h3 className="text-sm font-bold">Customer Account Workspace</h3>
+                    <p className="mt-1 text-sm text-stone-500">Contacts, properties, sales, work, finance, notes, and files attached to this account.</p>
                   </div>
-                ))}
-              </div>
-              <div className="mt-4 grid gap-2">
-                {customerOpps.map((opp) => (
-                  <div key={opp.id} className="flex items-center justify-between gap-3 rounded-md border border-stone-200 p-3">
-                    <div className="min-w-0">
-                      <div className="truncate font-semibold">{opp.title}</div>
-                      <div className="text-sm text-stone-500">{currency(opp.valueCents)}</div>
+                  <Badge tone={accountBalanceCents > 0 ? "warning" : "success"}>{accountBalanceCents > 0 ? `${currency(accountBalanceCents)} AR` : "No AR"}</Badge>
+                </div>
+                <div className="mt-3 grid gap-2 sm:grid-cols-2 xl:grid-cols-4">
+                  {[
+                    { label: "Contacts", value: customerContacts.length, icon: <UsersRound size={16} /> },
+                    { label: "Properties", value: customerProperties.length, icon: <MapPin size={16} /> },
+                    { label: "Jobs", value: customerJobs.length, icon: <ClipboardList size={16} /> },
+                    { label: "Estimates", value: customerEstimates.length, icon: <FileText size={16} /> },
+                    { label: "Invoices", value: customerInvoices.length, icon: <Receipt size={16} /> },
+                    { label: "Payments", value: customerPayments.length, icon: <DollarSign size={16} /> },
+                    { label: "Notes", value: customerNotes.length, icon: <ClipboardCheck size={16} /> },
+                    { label: "Files", value: customerFiles.length, icon: <FileText size={16} /> },
+                  ].map((item) => (
+                    <div key={item.label} className="flex items-center justify-between gap-3 rounded-md border border-stone-200 bg-white p-3">
+                      <div>
+                        <div className="text-xs font-semibold uppercase tracking-normal text-stone-500">{item.label}</div>
+                        <div className="mt-1 text-xl font-bold">{item.value}</div>
+                      </div>
+                      <span className="grid h-8 w-8 place-items-center rounded-md bg-[#e8efe8] text-[#224036]">{item.icon}</span>
                     </div>
-                    <Badge tone={statusTone(opp.stage)}>{opportunityStageLabel(opp.stage)}</Badge>
+                  ))}
+                </div>
+                <div className="mt-3 grid gap-3 lg:grid-cols-2">
+                  <section className="rounded-md border border-stone-200 bg-white p-3" aria-label="Contacts">
+                    <div className="flex items-center justify-between gap-2">
+                      <h4 className="text-sm font-bold">Contacts</h4>
+                      <Badge>{customerContacts.length}</Badge>
+                    </div>
+                    <div className="mt-3 grid gap-2">
+                      {customerContacts.slice(0, 4).map((contact) => (
+                        <div key={contact.id} className="rounded-md border border-stone-100 p-2">
+                          <div className="flex flex-wrap items-center justify-between gap-2">
+                            <span className="font-semibold">{contact.name}</span>
+                            <Badge tone={contact.isPrimary ? "success" : "neutral"}>{contact.isPrimary ? "Primary" : contact.roleTitle ?? "Contact"}</Badge>
+                          </div>
+                          <div className="mt-1 text-sm text-stone-500">{[contact.roleTitle, contact.phone, contact.email].filter(Boolean).join(" - ")}</div>
+                        </div>
+                      ))}
+                      {customerContacts.length === 0 ? <div className="text-sm text-stone-500">No contacts are attached yet.</div> : null}
+                    </div>
+                  </section>
+                  <section className="rounded-md border border-stone-200 bg-white p-3" aria-label="Properties">
+                    <div className="flex items-center justify-between gap-2">
+                      <h4 className="text-sm font-bold">Properties</h4>
+                      <Badge>{customerProperties.length}</Badge>
+                    </div>
+                    <div className="mt-3 grid gap-2">
+                      {customerProperties.slice(0, 3).map((property) => (
+                        <div key={property.id} className="rounded-md border border-stone-100 p-2">
+                          <div className="font-semibold">{property.label}</div>
+                          <div className="mt-1 text-sm text-stone-500">{property.street}, {property.city}</div>
+                          <a className="mt-2 inline-flex items-center gap-2 text-sm font-semibold text-[#224036]" href={googleMapsUrl(`${property.street}, ${property.city}, ${property.state} ${property.postalCode}`)} target="_blank" rel="noreferrer">
+                            <MapPin size={15} />
+                            Maps
+                            <ExternalLink size={13} />
+                          </a>
+                        </div>
+                      ))}
+                      {customerProperties.length === 0 ? <div className="text-sm text-stone-500">No properties are attached yet.</div> : null}
+                    </div>
+                  </section>
+                  <section className="rounded-md border border-stone-200 bg-white p-3" aria-label="Jobs and estimates">
+                    <div className="flex items-center justify-between gap-2">
+                      <h4 className="text-sm font-bold">Jobs + Estimates</h4>
+                      <Badge>{customerJobs.length + customerEstimates.length}</Badge>
+                    </div>
+                    <div className="mt-3 grid gap-2">
+                      {customerJobs.slice(0, 3).map((job) => (
+                        <div key={job.id} className="flex items-center justify-between gap-3 rounded-md border border-stone-100 p-2">
+                          <div className="min-w-0">
+                            <div className="truncate font-semibold">{job.title}</div>
+                            <div className="text-sm text-stone-500">Starts {shortDate(job.startDate)}</div>
+                          </div>
+                          <Badge tone={statusTone(job.status)}>{formatStatus(job.status)}</Badge>
+                        </div>
+                      ))}
+                      {customerEstimates.slice(0, 3).map((estimate) => (
+                        <div key={estimate.id} className="flex items-center justify-between gap-3 rounded-md border border-stone-100 p-2">
+                          <div className="min-w-0">
+                            <div className="truncate font-semibold">{estimate.estimateNumber}</div>
+                            <div className="text-sm text-stone-500">{currency(estimate.totalCents)}</div>
+                          </div>
+                          <Badge tone={statusTone(estimate.status)}>{formatStatus(estimate.status)}</Badge>
+                        </div>
+                      ))}
+                      {customerJobs.length === 0 && customerEstimates.length === 0 ? <div className="text-sm text-stone-500">No jobs or estimates are attached yet.</div> : null}
+                    </div>
+                  </section>
+                  <section className="rounded-md border border-stone-200 bg-white p-3" aria-label="Invoices and payments">
+                    <div className="flex items-center justify-between gap-2">
+                      <h4 className="text-sm font-bold">Invoices + Payments</h4>
+                      <Badge>{currency(accountInvoicedCents)}</Badge>
+                    </div>
+                    <div className="mt-3 grid gap-2">
+                      {customerInvoices.slice(0, 3).map((invoice) => (
+                        <div key={invoice.id} className="flex items-center justify-between gap-3 rounded-md border border-stone-100 p-2">
+                          <div className="min-w-0">
+                            <div className="truncate font-semibold">{invoice.invoiceNumber}</div>
+                            <div className="text-sm text-stone-500">{currency(invoice.totalCents)} total - {currency(Math.max(0, invoice.totalCents - invoice.paidCents))} open</div>
+                          </div>
+                          <Badge tone={operatingTone(invoice.status)}>{formatStatus(invoice.status)}</Badge>
+                        </div>
+                      ))}
+                      {latestPayment ? (
+                        <div className="rounded-md border border-emerald-100 bg-emerald-50 p-2 text-sm">
+                          <span className="font-semibold">Latest payment:</span> {currency(latestPayment.amountCents)} by {formatStatus(latestPayment.method)} on {shortDate(latestPayment.receivedAt)}
+                        </div>
+                      ) : null}
+                      {customerInvoices.length === 0 && customerPayments.length === 0 ? <div className="text-sm text-stone-500">No invoices or payments are attached yet.</div> : null}
+                    </div>
+                  </section>
+                  <section className="rounded-md border border-stone-200 bg-white p-3" aria-label="Notes">
+                    <div className="flex items-center justify-between gap-2">
+                      <h4 className="text-sm font-bold">Notes</h4>
+                      <Badge>{customerNotes.length}</Badge>
+                    </div>
+                    <div className="mt-3 grid gap-2">
+                      {customerNotes.slice(0, 3).map((note) => (
+                        <div key={note.id} className="rounded-md border border-stone-100 p-2">
+                          <div className="text-sm leading-5 text-stone-700">{note.body}</div>
+                          <div className="mt-1 text-xs text-stone-500">{formatStatus(note.visibility)} - {shortDate(note.createdAt)}</div>
+                        </div>
+                      ))}
+                      {customerNotes.length === 0 ? <div className="text-sm text-stone-500">No notes are attached yet.</div> : null}
+                    </div>
+                  </section>
+                  <section className="rounded-md border border-stone-200 bg-white p-3" aria-label="Files">
+                    <div className="flex items-center justify-between gap-2">
+                      <h4 className="text-sm font-bold">Files</h4>
+                      <Badge>{customerFiles.length}</Badge>
+                    </div>
+                    <div className="mt-3 grid gap-2">
+                      {customerFiles.slice(0, 4).map((file) => (
+                        <div key={file.id} className="flex items-center justify-between gap-3 rounded-md border border-stone-100 p-2">
+                          <div className="min-w-0">
+                            <div className="truncate font-semibold">{file.fileName}</div>
+                            <div className="text-sm text-stone-500">{formatStatus(file.entityType)} - {shortDate(file.createdAt)}</div>
+                          </div>
+                          <FileText className="shrink-0 text-stone-400" size={16} />
+                        </div>
+                      ))}
+                      {customerFiles.length === 0 ? <div className="text-sm text-stone-500">No files are attached yet.</div> : null}
+                    </div>
+                  </section>
+                </div>
+                <div className="mt-3">
+                  <h4 className="text-sm font-bold">Opportunities</h4>
+                  <div className="mt-2 grid gap-2">
+                    {customerOpps.map((opp) => (
+                      <div key={opp.id} className="flex items-center justify-between gap-3 rounded-md border border-stone-200 bg-white p-3">
+                        <div className="min-w-0">
+                          <div className="truncate font-semibold">{opp.title}</div>
+                          <div className="text-sm text-stone-500">{currency(opp.valueCents)} - {opp.closeProbability}% probability</div>
+                        </div>
+                        <Badge tone={statusTone(opp.stage)}>{opportunityStageLabel(opp.stage)}</Badge>
+                      </div>
+                    ))}
+                    {customerOpps.length === 0 ? <div className="rounded-md border border-dashed border-stone-200 bg-white p-3 text-sm text-stone-500">No opportunities are attached yet.</div> : null}
                   </div>
-                ))}
+                </div>
               </div>
             </>
           ) : null}
+        </Panel>
+
+        <Panel>
+          <div className="flex flex-wrap items-start justify-between gap-3">
+            <div>
+              <h2 className="text-base font-bold">New Service for Customer</h2>
+              <p className="mt-1 text-sm leading-5 text-stone-500">Create a new lead and qualified opportunity tied to the selected customer and property.</p>
+            </div>
+            <Badge>{selectedCustomer ? selectedCustomer.name : "No customer"}</Badge>
+          </div>
+          {repeatLeadMessage ? (
+            <div className={cn("mt-4 rounded-md border p-3 text-sm font-medium", repeatLeadState === "error" ? "border-rose-200 bg-rose-50 text-rose-900" : "border-emerald-200 bg-emerald-50 text-emerald-900")}>
+              {repeatLeadMessage}
+            </div>
+          ) : null}
+          <form onSubmit={submitRepeatLead} className="mt-4 grid gap-3 md:grid-cols-2 xl:grid-cols-4">
+            <Field label="Repeat service request">
+              <input className={inputClass()} value={repeatLeadForm.title} onChange={(event) => setRepeatLeadForm({ ...repeatLeadForm, title: event.target.value })} disabled={!selectedCustomer} required />
+            </Field>
+            <Field label="Repeat service line">
+              <select className={inputClass()} value={repeatLeadForm.serviceLine} onChange={(event) => setRepeatLeadForm({ ...repeatLeadForm, serviceLine: event.target.value as ServiceCategory })} disabled={!selectedCustomer}>
+                {Object.entries(categoryLabels).map(([value, label]) => (
+                  <option key={value} value={value}>{label}</option>
+                ))}
+              </select>
+            </Field>
+            <Field label="Repeat source">
+              <input className={inputClass()} value={repeatLeadForm.source} onChange={(event) => setRepeatLeadForm({ ...repeatLeadForm, source: event.target.value })} disabled={!selectedCustomer} />
+            </Field>
+            <Field label="Repeat value">
+              <input className={inputClass()} value={repeatLeadForm.value} onChange={(event) => setRepeatLeadForm({ ...repeatLeadForm, value: event.target.value })} disabled={!selectedCustomer} inputMode="decimal" />
+            </Field>
+            <div className="md:col-span-2 xl:col-span-3">
+              <Field label="Repeat message">
+                <textarea className={cn(inputClass(), "min-h-20 resize-y py-2")} value={repeatLeadForm.message} onChange={(event) => setRepeatLeadForm({ ...repeatLeadForm, message: event.target.value })} disabled={!selectedCustomer} />
+              </Field>
+            </div>
+            <div className="flex items-end">
+              <TextButton type="submit" icon={<Plus size={16} />} disabled={!selectedCustomer || repeatLeadState === "submitting"} className="w-full">
+                {repeatLeadState === "submitting" ? "Adding" : "Add Customer Service Request"}
+              </TextButton>
+            </div>
+          </form>
         </Panel>
 
         <Panel>
@@ -2885,8 +5008,39 @@ function CrmView({
         </Panel>
 
         <Panel>
-          <h2 className="text-base font-bold">Create Lead</h2>
-          <form onSubmit={createLead} className="mt-4 grid gap-3 md:grid-cols-2">
+          <div className="flex flex-wrap items-start justify-between gap-3">
+            <div>
+              <h2 className="text-base font-bold">Create Lead</h2>
+              <p className="mt-1 text-sm leading-5 text-stone-500">Every new lead creates a customer, contact, property, lead, and opportunity.</p>
+            </div>
+            <Badge tone={isAtFreeLimit ? "warning" : "success"}>{workspace.customers.length}/{freeContactLimit} free contacts</Badge>
+          </div>
+          <div className={cn("mt-4 rounded-md border p-3", isAtFreeLimit ? "border-amber-200 bg-amber-50" : "border-emerald-200 bg-emerald-50")}>
+            <div className="flex flex-wrap items-center justify-between gap-3">
+              <div>
+                <div className="font-semibold">{isOverFreeLimit ? "Pro-scale demo workspace" : isAtFreeLimit ? "Free plan contact cap reached" : "Free plan usage"}</div>
+                <p className="mt-1 text-sm leading-5 text-stone-600">
+                  {isOverFreeLimit
+                    ? "This seeded workspace is above the free cap so we can test larger-company workflows. Production free accounts are blocked at 10 contacts."
+                    : isAtFreeLimit
+                      ? "The backend blocks the 11th contact on free accounts and prompts the operator to upgrade."
+                      : "Free workspaces can create up to 10 contacts before upgrading to the $99/mo All-In Pro plan."}
+                </p>
+              </div>
+              <Link href="/pricing" className="inline-flex min-h-9 items-center justify-center rounded-md border border-stone-200 bg-white px-3 text-sm font-semibold text-stone-800 shadow-sm transition hover:bg-stone-50">
+                Upgrade
+              </Link>
+            </div>
+            <div className="mt-3 h-2 overflow-hidden rounded-full bg-white/80">
+              <div className={cn("h-full rounded-full", isAtFreeLimit ? "bg-amber-600" : "bg-emerald-700")} style={{ width: `${contactUsagePercent}%` }} />
+            </div>
+          </div>
+          {leadSubmitMessage ? (
+            <div className={cn("mt-4 rounded-md border p-3 text-sm font-medium", leadSubmitState === "error" ? "border-rose-200 bg-rose-50 text-rose-900" : "border-emerald-200 bg-emerald-50 text-emerald-900")}>
+              {leadSubmitMessage}
+            </div>
+          ) : null}
+          <form aria-label="Create new lead" onSubmit={createLead} className="mt-4 grid gap-3 md:grid-cols-2">
             <Field label="Customer">
               <input className={inputClass()} value={leadForm.customerName} onChange={(event) => setLeadForm({ ...leadForm, customerName: event.target.value })} required />
             </Field>
@@ -2907,6 +5061,37 @@ function CrmView({
                 ))}
               </select>
             </Field>
+            {leadForm.leadType === "phone_call" ? (
+              <div className="grid gap-3 rounded-md border border-stone-200 bg-stone-50 p-3 md:col-span-2 md:grid-cols-[1fr_auto_auto]">
+                <Field label="Call outcome">
+                  <select className={inputClass()} value={leadForm.callOutcome} onChange={(event) => setLeadForm({ ...leadForm, callOutcome: event.target.value as CallOutcome })}>
+                    {callOutcomeOptions.map((option) => (
+                      <option key={option.value} value={option.value}>{option.label}</option>
+                    ))}
+                  </select>
+                </Field>
+                <Field label="Follow-up days">
+                  <input
+                    aria-label="Call follow-up due days"
+                    className={cn(inputClass(), "w-full md:w-32")}
+                    value={leadForm.followUpDueInDays}
+                    onChange={(event) => setLeadForm({ ...leadForm, followUpDueInDays: event.target.value })}
+                    disabled={!leadForm.createCallFollowUp}
+                    inputMode="numeric"
+                  />
+                </Field>
+                <label className="flex items-center gap-2 self-end rounded-md border border-stone-200 bg-white px-3 py-2 text-sm font-semibold text-stone-700">
+                  <input
+                    aria-label="Create call follow-up"
+                    type="checkbox"
+                    checked={leadForm.createCallFollowUp}
+                    onChange={(event) => setLeadForm({ ...leadForm, createCallFollowUp: event.target.checked })}
+                    className="h-4 w-4 rounded border-stone-300 text-[#224036]"
+                  />
+                  Create follow-up
+                </label>
+              </div>
+            ) : null}
             <Field label="Phone">
               <input className={inputClass()} value={leadForm.phone} onChange={(event) => setLeadForm({ ...leadForm, phone: event.target.value })} />
             </Field>
@@ -2973,8 +5158,8 @@ function CrmView({
             </div>
             <div className="relative z-10 md:col-span-2">
               <div className="pt-1">
-                <TextButton type="submit" icon={<Plus size={16} />} className="w-full sm:w-auto">
-                  Create Lead
+                <TextButton type="submit" icon={<Plus size={16} />} className="w-full sm:w-auto" disabled={leadSubmitState === "submitting"}>
+                  {leadSubmitState === "submitting" ? "Creating..." : "Create Lead"}
                 </TextButton>
               </div>
             </div>
@@ -2989,49 +5174,580 @@ function PipelineView({
   workspace,
   customersById,
   moveOpportunity,
+  createQuoteFromOpportunity,
+  sendQuoteToCustomer,
+  acceptQuoteFromCustomer,
+  convertAcceptedQuoteToJob,
+  openJob,
 }: {
   workspace: WorkspaceSnapshot;
   customersById: Map<string, WorkspaceSnapshot["customers"][number]>;
   moveOpportunity: (opportunity: Opportunity, direction: "next" | "previous" | "lost") => void;
+  createQuoteFromOpportunity: (input: {
+    opportunity: Opportunity;
+    status: "draft" | "sent";
+    lineItemName: string;
+    quantity: number;
+    unit: string;
+    unitPriceCents: number;
+    terms?: string;
+    servicePackageId?: string;
+    serviceCatalogItemId?: string;
+  }) => Promise<{ estimateId: string; estimateNumber: string }>;
+  sendQuoteToCustomer: (estimateId: string) => Promise<{ estimateId: string; estimateNumber: string; sentAt: number; expiresAt: number }>;
+  acceptQuoteFromCustomer: (input: {
+    estimateId: string;
+    acceptedByName?: string;
+    acceptedByEmail?: string;
+    acceptanceSource?: "customer_portal" | "email" | "verbal" | "office";
+    acceptanceNote?: string;
+  }) => Promise<{ estimateId: string; estimateNumber: string; acceptedAt: number }>;
+  convertAcceptedQuoteToJob: (input: {
+    estimateId: string;
+    scheduledStart?: number;
+    scheduledEnd?: number;
+    crewId?: string;
+  }) => Promise<{ estimateId: string; estimateNumber: string; jobId: string; visitId: string; jobTitle: string }>;
+  openJob: (jobId: string) => void;
 }) {
+  const leadsById = new Map(workspace.leads.map((lead) => [lead.id, lead]));
+  const membersById = new Map(workspace.members.map((member) => [member.id, member]));
+  const propertiesById = new Map(workspace.properties.map((property) => [property.id, property]));
+  const primaryContactByCustomerId = new Map(workspace.contacts.filter((contact) => contact.isPrimary).map((contact) => [contact.customerId, contact]));
+  const nowMs = now();
+  const sourceOptions = Array.from(new Set(workspace.leads.map((lead) => lead.source).filter(Boolean))).sort();
+  const ownerOptions = workspace.members.filter((member) => workspace.opportunities.some((opp) => opp.ownerId === member.id));
+  const [search, setSearch] = useState("");
+  const [ownerFilter, setOwnerFilter] = useState("all");
+  const [sourceFilter, setSourceFilter] = useState("all");
+  const [serviceFilter, setServiceFilter] = useState<ServiceCategory | "all">("all");
+  const [ageFilter, setAgeFilter] = useState("all");
+  const [probabilityFilter, setProbabilityFilter] = useState("all");
+  const [minValue, setMinValue] = useState("");
+  const [nextStepFilter, setNextStepFilter] = useState("all");
+  const [quoteMessages, setQuoteMessages] = useState<Record<string, { state: "submitting" | "success" | "error"; message: string }>>({});
+  const [sendMessages, setSendMessages] = useState<Record<string, { state: "submitting" | "success" | "error"; message: string }>>({});
+  const [acceptMessages, setAcceptMessages] = useState<Record<string, { state: "submitting" | "success" | "error"; message: string }>>({});
+  const [convertMessages, setConvertMessages] = useState<Record<string, { state: "submitting" | "success" | "error"; message: string; jobId?: string }>>({});
+  const [selectedPackageByOpportunity, setSelectedPackageByOpportunity] = useState<Record<string, string>>({});
+  const activeServicePackages = workspace.servicePackages.filter((servicePackage) => servicePackage.active);
+  const savedViews = [
+    { id: "all", name: "All Open", filters: { owner: "all", source: "all", service: "all" as const, age: "all", probability: "all", nextStep: "all", minValue: "" } },
+    { id: "hot", name: "Hot Estimates", filters: { owner: "all", source: "all", service: "all" as const, age: "all", probability: "high", nextStep: "proposal", minValue: "1000" } },
+    { id: "stale", name: "Stale Follow-Up", filters: { owner: "all", source: "all", service: "all" as const, age: "stale", probability: "all", nextStep: "follow_up", minValue: "" } },
+    { id: "lawn", name: "Lawn Programs", filters: { owner: "all", source: "all", service: "lawn_care" as const, age: "all", probability: "all", nextStep: "all", minValue: "" } },
+  ];
+
+  function applySavedView(viewId: string) {
+    const view = savedViews.find((item) => item.id === viewId);
+    if (!view) return;
+    setOwnerFilter(view.filters.owner);
+    setSourceFilter(view.filters.source);
+    setServiceFilter(view.filters.service);
+    setAgeFilter(view.filters.age);
+    setProbabilityFilter(view.filters.probability);
+    setNextStepFilter(view.filters.nextStep);
+    setMinValue(view.filters.minValue);
+    setSearch("");
+  }
+
+  const filteredOpportunities = workspace.opportunities.filter((opp) => {
+    const lead = opp.leadId ? leadsById.get(opp.leadId) : undefined;
+    const customer = customersById.get(opp.customerId);
+    const normalizedSearch = search.trim().toLowerCase();
+    if (ownerFilter !== "all" && opp.ownerId !== ownerFilter) return false;
+    if (sourceFilter !== "all" && (lead?.source ?? "Unknown") !== sourceFilter) return false;
+    if (serviceFilter !== "all" && !opp.serviceLines.includes(serviceFilter)) return false;
+    if (probabilityFilter === "high" && opp.closeProbability < 60) return false;
+    if (probabilityFilter === "low" && opp.closeProbability >= 40) return false;
+    if (nextStepFilter === "proposal" && !["estimating", "proposal_sent"].includes(opp.stage)) return false;
+    if (nextStepFilter === "follow_up" && !["new", "qualified"].includes(opp.stage)) return false;
+    if (minValue && opp.valueCents < dollarsToCents(minValue)) return false;
+    const ageDays = Math.floor((nowMs - opp.updatedAt) / (24 * 60 * 60 * 1000));
+    if (ageFilter === "fresh" && ageDays > 7) return false;
+    if (ageFilter === "stale" && ageDays < 14) return false;
+    if (normalizedSearch && ![opp.title, customer?.name, lead?.source, opp.serviceLines.join(" ")].some((value) => (value ?? "").toLowerCase().includes(normalizedSearch))) return false;
+    return true;
+  });
+  const filteredValueCents = filteredOpportunities.reduce((sum, opportunity) => sum + opportunity.valueCents, 0);
+  const weightedValueCents = filteredOpportunities.reduce((sum, opportunity) => sum + Math.round((opportunity.valueCents * opportunity.closeProbability) / 100), 0);
+  const averageProbability = filteredOpportunities.length ? Math.round(filteredOpportunities.reduce((sum, opportunity) => sum + opportunity.closeProbability, 0) / filteredOpportunities.length) : 0;
+
+  function packageOptionsForOpportunity(opportunity: Opportunity) {
+    const matching = activeServicePackages.filter((servicePackage) => opportunity.serviceLines.includes(servicePackage.category));
+    return matching.length > 0 ? matching : activeServicePackages;
+  }
+
+  function quoteUnitForPackage(servicePackage?: WorkspaceSnapshot["servicePackages"][number]) {
+    if (!servicePackage) return "project";
+    if (servicePackage.billingCadence === "seasonal") return "season";
+    if (servicePackage.billingCadence === "annual") return "year";
+    if (servicePackage.billingCadence === "monthly") return "month";
+    return "project";
+  }
+
+  async function handleCreateQuote(opportunity: Opportunity) {
+    const primaryService = opportunity.serviceLines[0];
+    const packageOptions = packageOptionsForOpportunity(opportunity);
+    const selectedServicePackage = packageOptions.find((servicePackage) => servicePackage.id === selectedPackageByOpportunity[opportunity.id]) ?? packageOptions[0];
+    const lineItemName = selectedServicePackage?.name ?? (primaryService ? `${categoryLabels[primaryService]} - ${opportunity.title}` : opportunity.title);
+    setQuoteMessages((current) => ({ ...current, [opportunity.id]: { state: "submitting", message: "Creating quote from lead context..." } }));
+    try {
+      const result = await createQuoteFromOpportunity({
+        opportunity,
+        status: "draft",
+        lineItemName,
+        quantity: 1,
+        unit: quoteUnitForPackage(selectedServicePackage),
+        unitPriceCents: selectedServicePackage?.defaultPriceCents ?? opportunity.valueCents,
+        terms: "Review scope, pricing, add-ons, and expiration before sending to the customer.",
+        servicePackageId: selectedServicePackage?.id,
+        serviceCatalogItemId: selectedServicePackage?.includedServiceCatalogItemIds[0],
+      });
+      setQuoteMessages((current) => ({
+        ...current,
+        [opportunity.id]: { state: "success", message: `Draft quote ${result.estimateNumber} created for ${opportunity.title}${selectedServicePackage ? ` using ${selectedServicePackage.name}` : ""}.` },
+      }));
+    } catch (error) {
+      setQuoteMessages((current) => ({
+        ...current,
+        [opportunity.id]: { state: "error", message: error instanceof Error ? error.message : "Could not create quote." },
+      }));
+    }
+  }
+
+  async function handleSendQuote(estimate: WorkspaceSnapshot["estimates"][number]) {
+    setSendMessages((current) => ({ ...current, [estimate.id]: { state: "submitting", message: `Sending ${estimate.estimateNumber}...` } }));
+    try {
+      const result = await sendQuoteToCustomer(estimate.id);
+      setSendMessages((current) => ({
+        ...current,
+        [estimate.id]: {
+          state: "success",
+          message: `Quote ${result.estimateNumber} sent to customer with 14-day expiration.`,
+        },
+      }));
+    } catch (error) {
+      setSendMessages((current) => ({
+        ...current,
+        [estimate.id]: {
+          state: "error",
+          message: error instanceof Error ? error.message : "Could not send quote.",
+        },
+      }));
+    }
+  }
+
+  async function handleAcceptQuote(estimate: WorkspaceSnapshot["estimates"][number], customer?: WorkspaceSnapshot["customers"][number], primaryContact?: WorkspaceSnapshot["contacts"][number]) {
+    setAcceptMessages((current) => ({ ...current, [estimate.id]: { state: "submitting", message: `Capturing approval for ${estimate.estimateNumber}...` } }));
+    try {
+      const acceptedByName = primaryContact?.name ?? customer?.name ?? "Customer";
+      const result = await acceptQuoteFromCustomer({
+        estimateId: estimate.id,
+        acceptedByName,
+        acceptedByEmail: primaryContact?.email ?? customer?.email,
+        acceptanceSource: "office",
+        acceptanceNote: "Customer approval captured from Pipeline quote package.",
+      });
+      setAcceptMessages((current) => ({
+        ...current,
+        [estimate.id]: {
+          state: "success",
+          message: `Quote ${result.estimateNumber} accepted by customer.`,
+        },
+      }));
+    } catch (error) {
+      setAcceptMessages((current) => ({
+        ...current,
+        [estimate.id]: {
+          state: "error",
+          message: error instanceof Error ? error.message : "Could not capture customer approval.",
+        },
+      }));
+    }
+  }
+
+  async function handleConvertQuote(estimate: WorkspaceSnapshot["estimates"][number]) {
+    const existingJob = workspace.jobs.find((job) => job.estimateId === estimate.id);
+    if (existingJob) {
+      setConvertMessages((current) => ({
+        ...current,
+        [estimate.id]: {
+          state: "success",
+          message: `Job ${existingJob.title} is already linked to ${estimate.estimateNumber}.`,
+          jobId: existingJob.id,
+        },
+      }));
+      return;
+    }
+
+    const scheduledStart = (() => {
+      const value = new Date(now() + 24 * 60 * 60 * 1000);
+      value.setHours(8, 30, 0, 0);
+      return value.getTime();
+    })();
+    const scheduledEnd = scheduledStart + 2 * 60 * 60 * 1000;
+    const crewId = workspace.crews.find((crew) => crew.active)?.id ?? workspace.crews[0]?.id;
+    setConvertMessages((current) => ({ ...current, [estimate.id]: { state: "submitting", message: `Converting ${estimate.estimateNumber} to an operations job...` } }));
+    try {
+      const result = await convertAcceptedQuoteToJob({
+        estimateId: estimate.id,
+        scheduledStart,
+        scheduledEnd,
+        crewId,
+      });
+      setConvertMessages((current) => ({
+        ...current,
+        [estimate.id]: {
+          state: "success",
+          message: `Job ${result.jobTitle} created from ${result.estimateNumber}.`,
+          jobId: result.jobId,
+        },
+      }));
+    } catch (error) {
+      setConvertMessages((current) => ({
+        ...current,
+        [estimate.id]: {
+          state: "error",
+          message: error instanceof Error ? error.message : "Could not convert estimate to job.",
+        },
+      }));
+    }
+  }
+
+  function quoteSendDisabledReason(estimate: WorkspaceSnapshot["estimates"][number]) {
+    if (estimate.status !== "draft") return "Quote has already left draft.";
+    if (estimate.approvalStatus === "pending") return "Internal approval is pending.";
+    if (estimate.approvalStatus === "rejected") return "Internal approval was rejected.";
+    return "";
+  }
+
   return (
-    <div className="grid gap-4 overflow-x-auto pb-2 xl:grid-cols-6">
-      {opportunityStages.map((stage) => {
-        const opportunities = workspace.opportunities.filter((opp) => opp.stage === stage);
-        return (
-          <Panel key={stage} className="min-w-72">
-            <div className="flex items-center justify-between gap-2">
-              <h2 className="text-sm font-bold">{opportunityStageLabel(stage)}</h2>
-              <Badge>{opportunities.length}</Badge>
+    <div className="grid gap-4">
+      <Panel>
+        <div className="flex flex-wrap items-start justify-between gap-4">
+          <div>
+            <div className="flex items-center gap-2 text-sm font-semibold text-[#224036]">
+              <Gauge size={16} />
+              Pipeline Review
             </div>
-            <div className="mt-4 grid gap-3">
-              {opportunities.map((opp) => (
-                <div key={opp.id} className="rounded-md border border-stone-200 p-3">
-                  <div className="font-semibold">{opp.title}</div>
-                  <div className="mt-1 text-sm text-stone-500">{customersById.get(opp.customerId)?.name}</div>
-                  <div className="mt-3 flex items-center justify-between gap-2">
-                    <span className="font-bold">{currency(opp.valueCents)}</span>
-                    <Badge tone={statusTone(opp.stage)}>{opp.closeProbability}%</Badge>
-                  </div>
-                  <div className="mt-3 flex items-center gap-2">
-                    <IconButton title="Move backward" onClick={() => moveOpportunity(opp, "previous")} disabled={!previousOpportunityStage[opp.stage]}>
-                      <ChevronLeft size={16} />
-                    </IconButton>
-                    <IconButton title="Move forward" onClick={() => moveOpportunity(opp, "next")} disabled={!nextOpportunityStage[opp.stage]}>
-                      <ChevronRight size={16} />
-                    </IconButton>
-                    {opp.stage !== "won" && opp.stage !== "lost" ? (
-                      <IconButton title="Mark lost" onClick={() => moveOpportunity(opp, "lost")}>
-                        <X size={16} />
-                      </IconButton>
-                    ) : null}
-                  </div>
-                </div>
-              ))}
-            </div>
-          </Panel>
-        );
-      })}
+            <h2 className="mt-2 text-2xl font-bold tracking-normal">Manager pipeline filters and saved views</h2>
+          </div>
+          <div className="grid grid-cols-2 gap-2 sm:grid-cols-4">
+            <Metric label="Filtered deals" value={filteredOpportunities.length} />
+            <Metric label="Filtered value" value={currency(filteredValueCents)} />
+            <Metric label="Weighted value" value={currency(weightedValueCents)} />
+            <Metric label="Avg probability" value={percent(averageProbability)} />
+          </div>
+        </div>
+        <div className="mt-4 flex flex-wrap gap-2">
+          {savedViews.map((view) => (
+            <button key={view.id} type="button" onClick={() => applySavedView(view.id)} className="inline-flex min-h-9 items-center gap-2 rounded-md border border-stone-200 bg-white px-3 text-sm font-semibold text-stone-800 shadow-sm transition hover:bg-stone-50">
+              <Filter size={15} />
+              {view.name}
+            </button>
+          ))}
+        </div>
+        <div className="mt-4 grid gap-3 lg:grid-cols-[1.2fr_repeat(6,minmax(130px,1fr))]">
+          <Field label="Search">
+            <input aria-label="Pipeline search" className={inputClass()} value={search} onChange={(event) => setSearch(event.target.value)} placeholder="Opportunity, customer, source" />
+          </Field>
+          <Field label="Owner">
+            <select aria-label="Pipeline owner filter" className={inputClass()} value={ownerFilter} onChange={(event) => setOwnerFilter(event.target.value)}>
+              <option value="all">All owners</option>
+              {ownerOptions.map((owner) => <option key={owner.id} value={owner.id}>{owner.name}</option>)}
+            </select>
+          </Field>
+          <Field label="Source">
+            <select aria-label="Pipeline source filter" className={inputClass()} value={sourceFilter} onChange={(event) => setSourceFilter(event.target.value)}>
+              <option value="all">All sources</option>
+              {sourceOptions.map((source) => <option key={source} value={source}>{source}</option>)}
+            </select>
+          </Field>
+          <Field label="Service">
+            <select aria-label="Pipeline service filter" className={inputClass()} value={serviceFilter} onChange={(event) => setServiceFilter(event.target.value as ServiceCategory | "all")}>
+              <option value="all">All services</option>
+              {Object.entries(categoryLabels).map(([value, label]) => <option key={value} value={value}>{label}</option>)}
+            </select>
+          </Field>
+          <Field label="Age">
+            <select aria-label="Pipeline age filter" className={inputClass()} value={ageFilter} onChange={(event) => setAgeFilter(event.target.value)}>
+              <option value="all">All ages</option>
+              <option value="fresh">Updated 7d</option>
+              <option value="stale">Stale 14d+</option>
+            </select>
+          </Field>
+          <Field label="Probability">
+            <select aria-label="Pipeline probability filter" className={inputClass()} value={probabilityFilter} onChange={(event) => setProbabilityFilter(event.target.value)}>
+              <option value="all">All probability</option>
+              <option value="high">60%+</option>
+              <option value="low">Under 40%</option>
+            </select>
+          </Field>
+          <Field label="Min value">
+            <input aria-label="Pipeline minimum value" className={inputClass()} value={minValue} onChange={(event) => setMinValue(event.target.value)} inputMode="decimal" placeholder="0" />
+          </Field>
+        </div>
+        <div className="mt-3 grid gap-3 sm:grid-cols-3">
+          <Field label="Next step">
+            <select aria-label="Pipeline next step filter" className={inputClass()} value={nextStepFilter} onChange={(event) => setNextStepFilter(event.target.value)}>
+              <option value="all">All next steps</option>
+              <option value="proposal">Proposal/estimate action</option>
+              <option value="follow_up">Sales follow-up</option>
+            </select>
+          </Field>
+        </div>
+      </Panel>
+
+      <div className="grid gap-4 overflow-x-auto pb-2 xl:grid-cols-6">
+        {opportunityStages.map((stage) => {
+          const opportunities = filteredOpportunities.filter((opp) => opp.stage === stage);
+          return (
+            <Panel key={stage} className="min-w-72">
+              <div className="flex items-center justify-between gap-2">
+                <h2 className="text-sm font-bold">{opportunityStageLabel(stage)}</h2>
+                <Badge>{opportunities.length}</Badge>
+              </div>
+              <div className="mt-4 grid gap-3">
+                {opportunities.map((opp) => {
+                  const lead = opp.leadId ? leadsById.get(opp.leadId) : undefined;
+                  const customer = customersById.get(opp.customerId);
+                  const property = propertiesById.get(opp.propertyId);
+                  const primaryContact = primaryContactByCustomerId.get(opp.customerId);
+                  const owner = membersById.get(opp.ownerId);
+                  const ageDays = Math.max(0, Math.floor((nowMs - opp.updatedAt) / (24 * 60 * 60 * 1000)));
+                  const nextStep = ["estimating", "proposal_sent"].includes(opp.stage) ? "Proposal action" : opp.stage === "qualified" ? "Sales follow-up" : opp.stage === "new" ? "Qualify lead" : "Closeout";
+                  const existingEstimate = workspace.estimates.find((estimate) => estimate.opportunityId === opp.id);
+                  const quoteMessage = quoteMessages[opp.id];
+                  const sendMessage = existingEstimate ? sendMessages[existingEstimate.id] : undefined;
+                  const acceptMessage = existingEstimate ? acceptMessages[existingEstimate.id] : undefined;
+                  const convertMessage = existingEstimate ? convertMessages[existingEstimate.id] : undefined;
+                  const linkedJob = existingEstimate ? workspace.jobs.find((job) => job.estimateId === existingEstimate.id) : undefined;
+                  const sendDisabledReason = existingEstimate ? quoteSendDisabledReason(existingEstimate) : "";
+                  const packageOptions = packageOptionsForOpportunity(opp);
+                  const selectedServicePackage = packageOptions.find((servicePackage) => servicePackage.id === selectedPackageByOpportunity[opp.id]) ?? packageOptions[0];
+                  return (
+                    <div key={opp.id} className="rounded-md border border-stone-200 p-3">
+                      <div className="font-semibold">{opp.title}</div>
+                      <div className="mt-1 text-sm text-stone-500">{customer?.name}</div>
+                      <div className="mt-3 flex flex-wrap gap-1">
+                        {lead?.source ? <Badge>{lead.source}</Badge> : null}
+                        {opp.serviceLines.map((service) => <Badge key={service}>{categoryLabels[service]}</Badge>)}
+                        {owner ? <Badge>{owner.name}</Badge> : null}
+                      </div>
+                      <div className="mt-3 grid grid-cols-3 gap-2 text-sm">
+                        <div><div className="font-bold">{currency(opp.valueCents)}</div><div className="text-xs text-stone-500">Value</div></div>
+                        <div><div className="font-bold">{opp.closeProbability}%</div><div className="text-xs text-stone-500">Prob.</div></div>
+                        <div><div className="font-bold">{ageDays}d</div><div className="text-xs text-stone-500">Age</div></div>
+                      </div>
+                      <div className="mt-3 rounded-md bg-stone-50 px-2 py-1 text-xs font-semibold text-stone-600">{nextStep}</div>
+                      <div className="mt-3 rounded-md border border-stone-200 bg-stone-50 p-2">
+                        <div className="flex flex-wrap items-center justify-between gap-2">
+                          <div>
+                            <div className="text-xs font-semibold uppercase tracking-normal text-stone-500">Quote from lead</div>
+                            <div className="mt-1 text-xs leading-5 text-stone-500">Uses customer, property, package assumptions, and opportunity value.</div>
+                          </div>
+                          {existingEstimate ? (
+                            <Badge tone={statusTone(existingEstimate.status)}>{existingEstimate.estimateNumber}</Badge>
+                          ) : (
+                            <button
+                              type="button"
+                              aria-label={`Create quote for ${opp.title}`}
+                              onClick={() => void handleCreateQuote(opp)}
+                              disabled={quoteMessage?.state === "submitting" || opp.stage === "won" || opp.stage === "lost"}
+                              className="inline-flex min-h-9 items-center gap-2 rounded-md bg-[#224036] px-3 text-sm font-semibold text-white shadow-sm transition hover:bg-[#1a332b] disabled:cursor-not-allowed disabled:opacity-50"
+                            >
+                              <FileText size={15} />
+                              {quoteMessage?.state === "submitting" ? "Creating" : "Create Quote"}
+                            </button>
+                          )}
+                        </div>
+                        {packageOptions.length > 0 ? (
+                          <div className="mt-3 grid gap-2">
+                            <label className="text-xs font-semibold uppercase tracking-normal text-stone-500" htmlFor={`quote-package-${opp.id}`}>Service package</label>
+                            <select
+                              id={`quote-package-${opp.id}`}
+                              aria-label={`Service package for ${opp.title}`}
+                              className={inputClass()}
+                              value={selectedServicePackage?.id ?? ""}
+                              onChange={(event) => setSelectedPackageByOpportunity((current) => ({ ...current, [opp.id]: event.target.value }))}
+                              disabled={Boolean(existingEstimate) || quoteMessage?.state === "submitting" || opp.stage === "won" || opp.stage === "lost"}
+                            >
+                              {packageOptions.map((servicePackage) => (
+                                <option key={`${opp.id}-${servicePackage.id}`} value={servicePackage.id}>
+                                  {servicePackage.name} - {currency(servicePackage.defaultPriceCents)}
+                                </option>
+                              ))}
+                            </select>
+                            {selectedServicePackage ? (
+                              <div className="grid grid-cols-3 gap-2 text-xs">
+                                <div className="rounded-md border border-stone-200 bg-white p-2">
+                                  <div className="font-semibold">{selectedServicePackage.laborHours ?? 0}h</div>
+                                  <div className="text-stone-500">Labor</div>
+                                </div>
+                                <div className="rounded-md border border-stone-200 bg-white p-2">
+                                  <div className="font-semibold">{currency(selectedServicePackage.materialCostCents ?? 0)}</div>
+                                  <div className="text-stone-500">Materials</div>
+                                </div>
+                                <div className="rounded-md border border-stone-200 bg-white p-2">
+                                  <div className="font-semibold">{percent(selectedServicePackage.targetMarginPercent ?? 0)}</div>
+                                  <div className="text-stone-500">Target margin</div>
+                                </div>
+                              </div>
+                            ) : null}
+                          </div>
+                        ) : null}
+                        {existingEstimate ? (
+                          <div role="region" className="mt-3 rounded-md border border-stone-200 bg-white p-3" aria-label={`Customer quote package ${existingEstimate.estimateNumber}`}>
+                            <div className="flex flex-wrap items-start justify-between gap-3">
+                              <div>
+                                <div className="text-xs font-semibold uppercase tracking-normal text-stone-500">Customer Quote Package</div>
+                                <div className="mt-1 font-semibold">{existingEstimate.estimateNumber} - {customer?.name ?? "Customer"}</div>
+                                <div className="mt-1 text-xs leading-5 text-stone-500">
+                                  {primaryContact?.email ?? primaryContact?.phone ?? "No primary contact"} - {property ? `${property.label}, ${property.city}` : "No property selected"}
+                                </div>
+                              </div>
+                              <Badge tone={statusTone(existingEstimate.status)}>{formatStatus(existingEstimate.status)}</Badge>
+                            </div>
+                            <div className="mt-3 grid gap-2 text-xs sm:grid-cols-4">
+                              <div className="rounded-md border border-stone-200 bg-stone-50 p-2">
+                                <div className="font-semibold">{currency(existingEstimate.totalCents)}</div>
+                                <div className="text-stone-500">Quote total</div>
+                              </div>
+                              <div className="rounded-md border border-stone-200 bg-stone-50 p-2">
+                                <div className="font-semibold">{existingEstimate.expiresAt ? shortDate(existingEstimate.expiresAt) : "14 days after send"}</div>
+                                <div className="text-stone-500">Expiration</div>
+                              </div>
+                              <div className="rounded-md border border-stone-200 bg-stone-50 p-2">
+                                <div className="font-semibold">{formatStatus(existingEstimate.approvalStatus ?? "not_required")}</div>
+                                <div className="text-stone-500">Internal approval</div>
+                              </div>
+                              <div className="rounded-md border border-stone-200 bg-stone-50 p-2">
+                                <div className="font-semibold">{existingEstimate.acceptedAt ? shortDate(existingEstimate.acceptedAt) : "Not captured"}</div>
+                                <div className="text-stone-500">Customer approval</div>
+                              </div>
+                            </div>
+                            <div className="mt-3 rounded-md bg-stone-50 px-3 py-2 text-xs leading-5 text-stone-600">
+                              <span className="font-semibold text-stone-800">Scope: </span>
+                              {opp.serviceLines.map((service) => categoryLabels[service]).join(", ")} for {property?.label ?? customer?.name ?? "customer property"}.
+                            </div>
+                            <div className="mt-2 rounded-md bg-stone-50 px-3 py-2 text-xs leading-5 text-stone-600">
+                              <span className="font-semibold text-stone-800">Terms: </span>
+                              {existingEstimate.terms ?? "Review scope, pricing, add-ons, and expiration before sending to the customer."}
+                            </div>
+                            {existingEstimate.acceptedAt ? (
+                              <div className="mt-2 rounded-md border border-emerald-200 bg-emerald-50 px-3 py-2 text-xs leading-5 text-emerald-900">
+                                <span className="font-semibold">Approved by {existingEstimate.acceptedByName ?? "customer"}</span>
+                                {existingEstimate.acceptedByEmail ? ` - ${existingEstimate.acceptedByEmail}` : ""} via {formatStatus(existingEstimate.acceptanceSource ?? "office")}.
+                              </div>
+                            ) : null}
+                            {linkedJob ? (
+                              <div className="mt-2 rounded-md border border-sky-200 bg-sky-50 px-3 py-2 text-xs leading-5 text-sky-950">
+                                <span className="font-semibold">Operations handoff ready:</span> {linkedJob.title} has {workspace.visits.filter((visit) => visit.jobId === linkedJob.id).length} scheduled visit.
+                              </div>
+                            ) : null}
+                            <div className="mt-3 flex flex-wrap items-center gap-2">
+                              {existingEstimate.status === "draft" ? (
+                                <button
+                                  type="button"
+                                  aria-label={`Send quote ${existingEstimate.estimateNumber}`}
+                                  disabled={Boolean(sendDisabledReason) || sendMessage?.state === "submitting"}
+                                  onClick={() => void handleSendQuote(existingEstimate)}
+                                  className="inline-flex min-h-9 items-center gap-2 rounded-md bg-[#224036] px-3 text-sm font-semibold text-white shadow-sm transition hover:bg-[#1a332b] disabled:cursor-not-allowed disabled:opacity-50"
+                                >
+                                  <Send size={15} />
+                                  {sendMessage?.state === "submitting" ? "Sending" : "Send Quote"}
+                                </button>
+                              ) : existingEstimate.status === "sent" ? (
+                                <>
+                                  <Badge tone="success">Customer-facing link ready</Badge>
+                                  <button
+                                    type="button"
+                                    aria-label={`Capture approval ${existingEstimate.estimateNumber}`}
+                                    disabled={acceptMessage?.state === "submitting"}
+                                    onClick={() => void handleAcceptQuote(existingEstimate, customer, primaryContact)}
+                                    className="inline-flex min-h-9 items-center gap-2 rounded-md bg-[#224036] px-3 text-sm font-semibold text-white shadow-sm transition hover:bg-[#1a332b] disabled:cursor-not-allowed disabled:opacity-50"
+                                  >
+                                    <Check size={15} />
+                                    {acceptMessage?.state === "submitting" ? "Capturing" : "Capture Approval"}
+                                  </button>
+                                </>
+                              ) : existingEstimate.status === "accepted" ? (
+                                <>
+                                  <Badge tone="success">Customer approved</Badge>
+                                  {linkedJob ? (
+                                    <button
+                                      type="button"
+                                      aria-label={`Open job ${linkedJob.title}`}
+                                      onClick={() => openJob(linkedJob.id)}
+                                      className="inline-flex min-h-9 items-center gap-2 rounded-md border border-stone-200 bg-white px-3 text-sm font-semibold text-stone-800 shadow-sm transition hover:bg-stone-50"
+                                    >
+                                      <ClipboardCheck size={15} />
+                                      Open Job
+                                    </button>
+                                  ) : (
+                                    <button
+                                      type="button"
+                                      aria-label={`Convert estimate ${existingEstimate.estimateNumber} to job`}
+                                      disabled={convertMessage?.state === "submitting"}
+                                      onClick={() => void handleConvertQuote(existingEstimate)}
+                                      className="inline-flex min-h-9 items-center gap-2 rounded-md bg-[#224036] px-3 text-sm font-semibold text-white shadow-sm transition hover:bg-[#1a332b] disabled:cursor-not-allowed disabled:opacity-50"
+                                    >
+                                      <ClipboardCheck size={15} />
+                                      {convertMessage?.state === "submitting" ? "Converting" : "Convert to Job"}
+                                    </button>
+                                  )}
+                                </>
+                              ) : (
+                                <Badge>{formatStatus(existingEstimate.status)}</Badge>
+                              )}
+                              {sendDisabledReason ? <span className="text-xs font-semibold text-amber-700">{sendDisabledReason}</span> : null}
+                            </div>
+                            {sendMessage ? (
+                              <div className={cn("mt-2 rounded-md border px-2 py-1 text-xs font-semibold", sendMessage.state === "error" ? "border-rose-200 bg-rose-50 text-rose-800" : "border-emerald-200 bg-emerald-50 text-emerald-800")}>
+                                {sendMessage.message}
+                              </div>
+                            ) : null}
+                            {acceptMessage ? (
+                              <div className={cn("mt-2 rounded-md border px-2 py-1 text-xs font-semibold", acceptMessage.state === "error" ? "border-rose-200 bg-rose-50 text-rose-800" : "border-emerald-200 bg-emerald-50 text-emerald-800")}>
+                                {acceptMessage.message}
+                              </div>
+                            ) : null}
+                            {convertMessage ? (
+                              <div className={cn("mt-2 rounded-md border px-2 py-1 text-xs font-semibold", convertMessage.state === "error" ? "border-rose-200 bg-rose-50 text-rose-800" : "border-sky-200 bg-sky-50 text-sky-900")}>
+                                {convertMessage.message}
+                              </div>
+                            ) : null}
+                          </div>
+                        ) : null}
+                        {quoteMessage ? (
+                          <div className={cn("mt-2 rounded-md border px-2 py-1 text-xs font-semibold", quoteMessage.state === "error" ? "border-rose-200 bg-rose-50 text-rose-800" : "border-emerald-200 bg-emerald-50 text-emerald-800")}>
+                            {quoteMessage.message}
+                          </div>
+                        ) : null}
+                      </div>
+                      <div className="mt-3 flex items-center gap-2">
+                        <IconButton title="Move backward" onClick={() => moveOpportunity(opp, "previous")} disabled={!previousOpportunityStage[opp.stage]}>
+                          <ChevronLeft size={16} />
+                        </IconButton>
+                        <IconButton title="Move forward" onClick={() => moveOpportunity(opp, "next")} disabled={!nextOpportunityStage[opp.stage]}>
+                          <ChevronRight size={16} />
+                        </IconButton>
+                        {opp.stage !== "won" && opp.stage !== "lost" ? (
+                          <IconButton title="Mark lost" onClick={() => moveOpportunity(opp, "lost")}>
+                            <X size={16} />
+                          </IconButton>
+                        ) : null}
+                      </div>
+                    </div>
+                  );
+                })}
+                {opportunities.length === 0 ? <div className="rounded-md border border-dashed border-stone-200 p-4 text-sm text-stone-500">No opportunities match the current filters.</div> : null}
+              </div>
+            </Panel>
+          );
+        })}
+      </div>
     </div>
   );
 }
@@ -3044,6 +5760,8 @@ function DispatchView({
   crewsById,
   jobsById,
   assignCrew,
+  moveRouteStop,
+  generateRecurringRoute,
 }: {
   workspace: WorkspaceSnapshot;
   operatingDepth: OperatingDepth;
@@ -3052,7 +5770,26 @@ function DispatchView({
   crewsById: Map<string, WorkspaceSnapshot["crews"][number]>;
   jobsById: Map<string, WorkspaceSnapshot["jobs"][number]>;
   assignCrew: (visitId: string, crewId: string) => void;
+  moveRouteStop: (visitId: string, direction: "up" | "down") => void;
+  generateRecurringRoute: (input: {
+    jobId: string;
+    frequency: "weekly" | "biweekly" | "monthly" | "seasonal" | "custom";
+    count: number;
+    firstStart: number;
+    durationMinutes: number;
+    crewId?: string;
+  }) => Promise<{ planId: string; visitIds: string[]; generatedCount: number }>;
 }) {
+  const [routeMessages, setRouteMessages] = useState<Record<string, string>>({});
+  const defaultRecurringPlan = workspace.recurringServicePlans.find((plan) => plan.status === "active") ?? workspace.recurringServicePlans[0];
+  const defaultRecurringJobId = defaultRecurringPlan?.jobId ?? workspace.jobs[0]?.id ?? "";
+  const defaultRecurringCrewId = defaultRecurringPlan?.crewId ?? workspace.crews.find((crew) => crew.active)?.id ?? workspace.crews[0]?.id ?? "";
+  const [recurringJobId, setRecurringJobId] = useState(defaultRecurringJobId);
+  const [recurringFrequency, setRecurringFrequency] = useState<"weekly" | "biweekly" | "monthly" | "seasonal" | "custom">(defaultRecurringPlan?.frequency ?? "weekly");
+  const [recurringCount, setRecurringCount] = useState("4");
+  const [recurringDurationMinutes, setRecurringDurationMinutes] = useState(String(defaultRecurringPlan?.visitDurationMinutes ?? 180));
+  const [recurringCrewId, setRecurringCrewId] = useState(defaultRecurringCrewId);
+  const [recurringMessage, setRecurringMessage] = useState<{ state: "success" | "error" | "pending"; message: string } | null>(null);
   const routeByVisitId = new Map(operatingDepth.fieldOps.routeConfidence.map((route) => [route.visitId, route]));
   const equipmentByVisitId = new Map<string, OperatingDepth["fieldOps"]["equipmentCheckouts"]>();
   for (const checkout of operatingDepth.fieldOps.equipmentCheckouts) {
@@ -3060,27 +5797,87 @@ function DispatchView({
     existing.push(checkout);
     equipmentByVisitId.set(checkout.visitId, existing);
   }
+  const sortedVisits = workspace.visits
+    .slice()
+    .sort((a, b) => a.routeOrder - b.routeOrder || a.scheduledStart - b.scheduledStart || a.id.localeCompare(b.id));
+  const activeRecurringPlans = workspace.recurringServicePlans.filter((plan) => plan.status === "active");
+
+  async function handleGenerateRecurringRoute(event: FormEvent) {
+    event.preventDefault();
+    const job = workspace.jobs.find((item) => item.id === recurringJobId) ?? workspace.jobs[0];
+    if (!job) {
+      setRecurringMessage({ state: "error", message: "Choose a job before generating recurring visits." });
+      return;
+    }
+    const count = Number.parseInt(recurringCount, 10);
+    const durationMinutes = Number.parseInt(recurringDurationMinutes, 10);
+    if (!Number.isFinite(count) || count < 1 || !Number.isFinite(durationMinutes) || durationMinutes < 30) {
+      setRecurringMessage({ state: "error", message: "Use at least 1 visit and at least 30 minutes per visit." });
+      return;
+    }
+
+    const firstStart = new Date();
+    firstStart.setDate(firstStart.getDate() + 7);
+    firstStart.setHours(9, 0, 0, 0);
+    setRecurringMessage({ state: "pending", message: `Generating ${count} ${formatStatus(recurringFrequency)} visits for ${job.title}.` });
+
+    try {
+      const result = await generateRecurringRoute({
+        jobId: job.id,
+        frequency: recurringFrequency,
+        count,
+        firstStart: firstStart.getTime(),
+        durationMinutes,
+        crewId: recurringCrewId || undefined,
+      });
+      setRecurringMessage({ state: "success", message: `Generated ${result.generatedCount} ${formatStatus(recurringFrequency)} visits for ${job.title}.` });
+    } catch {
+      setRecurringMessage({ state: "error", message: "Recurring route could not be generated. Check permissions and try again." });
+    }
+  }
 
   return (
     <div className="grid gap-4 xl:grid-cols-[1fr_360px]">
       <Panel>
         <h2 className="text-base font-bold">Schedule</h2>
         <div className="mt-4 grid gap-3">
-          {workspace.visits
-            .slice()
-            .sort((a, b) => a.scheduledStart - b.scheduledStart)
-            .map((visit) => {
+          {sortedVisits
+            .map((visit, index) => {
               const property = visit.propertyId ? propertiesById.get(visit.propertyId) : undefined;
+              const jobTitle = jobsById.get(visit.jobId)?.title ?? "visit";
               const route = routeByVisitId.get(visit.id);
               const equipment = equipmentByVisitId.get(visit.id) ?? [];
               return (
-                <div key={visit.id} className="grid gap-3 rounded-md border border-stone-200 p-3 lg:grid-cols-[150px_1fr_210px_180px_150px] lg:items-center">
+                <div key={visit.id} role="region" aria-label={`Dispatch route stop ${visit.routeOrder} ${jobTitle}`} className="grid gap-3 rounded-md border border-stone-200 p-3 lg:grid-cols-[150px_1fr_210px_180px_150px] lg:items-center">
                   <div>
                     <div className="font-semibold">{timeRange(visit.scheduledStart, visit.scheduledEnd)}</div>
-                    <div className="text-sm text-stone-500">Stop {visit.routeOrder}</div>
+                    <div className="mt-1 text-sm text-stone-500">Stop {visit.routeOrder}</div>
+                    <div className="mt-2 flex gap-1">
+                      <IconButton
+                        title={`Move route stop up for ${jobTitle}`}
+                        onClick={() => {
+                          moveRouteStop(visit.id, "up");
+                          setRouteMessages((current) => ({ ...current, [visit.id]: `${jobTitle} moved earlier in route order.` }));
+                        }}
+                        disabled={index === 0}
+                      >
+                        <ArrowUp size={15} />
+                      </IconButton>
+                      <IconButton
+                        title={`Move route stop down for ${jobTitle}`}
+                        onClick={() => {
+                          moveRouteStop(visit.id, "down");
+                          setRouteMessages((current) => ({ ...current, [visit.id]: `${jobTitle} moved later in route order.` }));
+                        }}
+                        disabled={index === sortedVisits.length - 1}
+                      >
+                        <ArrowDown size={15} />
+                      </IconButton>
+                    </div>
+                    {routeMessages[visit.id] ? <div className="mt-2 text-xs font-semibold text-[#224036]">{routeMessages[visit.id]}</div> : null}
                   </div>
                   <div className="min-w-0">
-                    <div className="truncate font-semibold">{jobsById.get(visit.jobId)?.title}</div>
+                    <div className="truncate font-semibold">{jobTitle}</div>
                     <div className="truncate text-sm text-stone-500">{customersById.get(visit.customerId)?.name}</div>
                     <div className="mt-2 flex flex-wrap gap-1">
                       {route?.requiredSkills.map((skill) => <Badge key={skill}>{skill}</Badge>)}
@@ -3098,7 +5895,7 @@ function DispatchView({
                       <div className="mt-2 text-xs font-semibold text-rose-700">{equipment.filter((item) => item.status === "conflict" || item.maintenanceDue).length} equipment issue</div>
                     ) : null}
                   </div>
-                  <select className={inputClass()} value={visit.crewId} onChange={(event) => assignCrew(visit.id, event.target.value)}>
+                  <select aria-label={`Assign crew for ${jobTitle}`} className={inputClass()} value={visit.crewId} onChange={(event) => assignCrew(visit.id, event.target.value)}>
                     {workspace.crews.map((crew) => (
                       <option key={crew.id} value={crew.id}>{crew.name}</option>
                     ))}
@@ -3114,38 +5911,98 @@ function DispatchView({
             })}
         </div>
       </Panel>
-      <Panel>
-        <h2 className="text-base font-bold">Crew Load</h2>
-        <div className="mt-4 grid gap-3">
-          {workspace.crews.map((crew) => {
-            const visits = workspace.visits.filter((visit) => visit.crewId === crew.id);
-            const routeScores = visits.map((visit) => routeByVisitId.get(visit.id)?.score ?? 0).filter(Boolean);
-            const averageRouteScore = routeScores.length ? Math.round(routeScores.reduce((sum, score) => sum + score, 0) / routeScores.length) : 0;
-            const equipmentIssues = visits.flatMap((visit) => equipmentByVisitId.get(visit.id) ?? []).filter((item) => item.status === "conflict" || item.maintenanceDue);
-            return (
-              <div key={crew.id} className="rounded-md border border-stone-200 p-3">
-                <div className="flex items-center gap-2">
-                  <span className="h-3 w-3 rounded-full" style={{ background: crew.color }} />
-                  <span className="font-semibold">{crewsById.get(crew.id)?.name}</span>
-                </div>
-                <div className="mt-2 text-sm text-stone-500">{visits.length} scheduled visits</div>
-                <div className="mt-3 grid gap-2">
-                  <div className="flex items-center justify-between gap-3 text-sm">
-                    <span className="text-stone-500">Route confidence</span>
-                    <Badge tone={averageRouteScore >= 85 ? "success" : averageRouteScore < 70 ? "danger" : "warning"}>{averageRouteScore || "N/A"}{averageRouteScore ? "%" : ""}</Badge>
-                  </div>
-                  <div className="flex flex-wrap gap-1">
-                    {(routeByVisitId.get(visits[0]?.id ?? "")?.crewSkills ?? ["No skills assigned"]).map((skill) => <Badge key={skill}>{skill}</Badge>)}
-                  </div>
-                  {equipmentIssues.length > 0 ? (
-                    <div className="rounded-md border border-rose-200 bg-rose-50 p-2 text-xs font-semibold text-rose-700">{equipmentIssues.map((item) => item.equipmentName).join(", ")}</div>
-                  ) : null}
-                </div>
+      <div className="grid gap-4">
+        <Panel>
+          <h2 className="text-base font-bold">Recurring Route Generator</h2>
+          <form className="mt-4 grid gap-3" onSubmit={handleGenerateRecurringRoute}>
+            <Field label="Job">
+              <select aria-label="Recurring job" className={inputClass()} value={recurringJobId} onChange={(event) => setRecurringJobId(event.target.value)}>
+                {workspace.jobs.map((job) => (
+                  <option key={job.id} value={job.id}>{job.title}</option>
+                ))}
+              </select>
+            </Field>
+            <div className="grid grid-cols-2 gap-2">
+              <Field label="Frequency">
+                <select aria-label="Recurring frequency" className={inputClass()} value={recurringFrequency} onChange={(event) => setRecurringFrequency(event.target.value as typeof recurringFrequency)}>
+                  <option value="weekly">Weekly</option>
+                  <option value="biweekly">Biweekly</option>
+                  <option value="monthly">Monthly</option>
+                  <option value="seasonal">Seasonal</option>
+                  <option value="custom">Custom</option>
+                </select>
+              </Field>
+              <Field label="Visits">
+                <input aria-label="Recurring visit count" className={inputClass()} value={recurringCount} onChange={(event) => setRecurringCount(event.target.value)} inputMode="numeric" />
+              </Field>
+            </div>
+            <div className="grid grid-cols-2 gap-2">
+              <Field label="Duration">
+                <input aria-label="Recurring visit duration minutes" className={inputClass()} value={recurringDurationMinutes} onChange={(event) => setRecurringDurationMinutes(event.target.value)} inputMode="numeric" />
+              </Field>
+              <Field label="Crew">
+                <select aria-label="Recurring crew" className={inputClass()} value={recurringCrewId} onChange={(event) => setRecurringCrewId(event.target.value)}>
+                  <option value="">Unassigned</option>
+                  {workspace.crews.map((crew) => (
+                    <option key={crew.id} value={crew.id}>{crew.name}</option>
+                  ))}
+                </select>
+              </Field>
+            </div>
+            <button type="submit" className="inline-flex items-center justify-center gap-2 rounded-md bg-[#224036] px-3 py-2 text-sm font-semibold text-white">
+              <Route size={16} />
+              Generate Recurring Route
+            </button>
+            {recurringMessage ? (
+              <div className={cn("rounded-md border px-3 py-2 text-sm font-semibold", recurringMessage.state === "error" ? "border-rose-200 bg-rose-50 text-rose-800" : recurringMessage.state === "pending" ? "border-amber-200 bg-amber-50 text-amber-800" : "border-emerald-200 bg-emerald-50 text-emerald-800")}>
+                {recurringMessage.message}
               </div>
-            );
-          })}
-        </div>
-      </Panel>
+            ) : null}
+          </form>
+          <div className="mt-4 grid gap-2">
+            <div className="text-xs font-semibold uppercase tracking-normal text-stone-500">Active recurring plans</div>
+            {activeRecurringPlans.map((plan) => (
+              <div key={plan.id} className="rounded-md border border-stone-200 p-2 text-sm">
+                <div className="font-semibold">{plan.name}</div>
+                <div className="mt-1 text-xs text-stone-500">{formatStatus(plan.frequency)} - {plan.generatedVisitIds?.length ?? 0} generated - next {shortDate(plan.nextRunAt)}</div>
+              </div>
+            ))}
+            {activeRecurringPlans.length === 0 ? <div className="rounded-md border border-dashed border-stone-200 p-2 text-sm text-stone-500">No active recurring plans yet.</div> : null}
+          </div>
+        </Panel>
+        <Panel>
+          <h2 className="text-base font-bold">Crew Load</h2>
+          <div className="mt-4 grid gap-3">
+            {workspace.crews.map((crew) => {
+              const visits = workspace.visits.filter((visit) => visit.crewId === crew.id);
+              const routeScores = visits.map((visit) => routeByVisitId.get(visit.id)?.score ?? 0).filter(Boolean);
+              const averageRouteScore = routeScores.length ? Math.round(routeScores.reduce((sum, score) => sum + score, 0) / routeScores.length) : 0;
+              const equipmentIssues = visits.flatMap((visit) => equipmentByVisitId.get(visit.id) ?? []).filter((item) => item.status === "conflict" || item.maintenanceDue);
+              return (
+                <div key={crew.id} className="rounded-md border border-stone-200 p-3">
+                  <div className="flex items-center gap-2">
+                    <span className="h-3 w-3 rounded-full" style={{ background: crew.color }} />
+                    <span className="font-semibold">{crewsById.get(crew.id)?.name}</span>
+                  </div>
+                  <div className="mt-2 text-sm text-stone-500">{visits.length} scheduled visits</div>
+                  <div className="mt-3 grid gap-2">
+                    <div className="flex items-center justify-between gap-3 text-sm">
+                      <span className="text-stone-500">Route confidence</span>
+                      <Badge tone={averageRouteScore >= 85 ? "success" : averageRouteScore < 70 ? "danger" : "warning"}>{averageRouteScore || "N/A"}{averageRouteScore ? "%" : ""}</Badge>
+                    </div>
+                    <div className="flex flex-wrap gap-1">
+                      {(routeByVisitId.get(visits[0]?.id ?? "")?.crewSkills ?? ["No skills assigned"]).map((skill) => <Badge key={skill}>{skill}</Badge>)}
+                    </div>
+                    {equipmentIssues.length > 0 ? (
+                      <div className="rounded-md border border-rose-200 bg-rose-50 p-2 text-xs font-semibold text-rose-700">{equipmentIssues.map((item) => item.equipmentName).join(", ")}</div>
+                    ) : null}
+                  </div>
+                </div>
+              );
+            })}
+          </div>
+        </Panel>
+      </div>
     </div>
   );
 }
@@ -3158,13 +6015,17 @@ function JobsView({
   customersById,
   propertiesById,
   crewsById,
-  taskTitle,
-  setTaskTitle,
+  membersById,
+  jobTaskForm,
+  setJobTaskForm,
+  jobTaskMessage,
   addJobTask,
   activityForm,
   setActivityForm,
   addActivity,
   toggleTask,
+  createChangeOrder,
+  approveChangeOrder,
 }: {
   workspace: WorkspaceSnapshot;
   operatingDepth: OperatingDepth;
@@ -3173,24 +6034,92 @@ function JobsView({
   customersById: Map<string, WorkspaceSnapshot["customers"][number]>;
   propertiesById: Map<string, WorkspaceSnapshot["properties"][number]>;
   crewsById: Map<string, WorkspaceSnapshot["crews"][number]>;
-  taskTitle: string;
-  setTaskTitle: (value: string) => void;
+  membersById: Map<string, WorkspaceSnapshot["members"][number]>;
+  jobTaskForm: JobTaskFormState;
+  setJobTaskForm: (value: JobTaskFormState) => void;
+  jobTaskMessage: { state: "success" | "error" | "pending"; message: string } | null;
   addJobTask: (event: FormEvent) => void;
   activityForm: ActivityComposerState;
   setActivityForm: (value: ActivityComposerState) => void;
   addActivity: (event: FormEvent) => void;
   toggleTask: (taskId: string) => void;
+  createChangeOrder: (input: {
+    jobId: string;
+    title: string;
+    description: string;
+    requestedByName?: string;
+    revenueDeltaCents: number;
+    estimatedCostDeltaCents: number;
+    scheduleImpactDays: number;
+  }) => Promise<string>;
+  approveChangeOrder: (input: { changeOrderId: string; approvedByName: string; approvedByEmail?: string }) => Promise<{ changeOrderId: string; taskId: string }>;
 }) {
   const visits = selectedJob ? workspace.visits.filter((visit) => visit.jobId === selectedJob.id) : [];
   const tasks = selectedJob ? workspace.tasks.filter((task) => task.entityType === "job" && task.entityId === selectedJob.id) : [];
   const jobActivities = selectedJob ? workspace.activities.filter((activity) => activity.entityType === "job" && activity.entityId === selectedJob.id) : [];
+  const changeOrders = selectedJob ? workspace.changeOrders.filter((changeOrder) => changeOrder.jobId === selectedJob.id) : [];
   const property = selectedJob?.propertyId ? propertiesById.get(selectedJob.propertyId) : undefined;
   const selectedSummary = selectedJob ? operatingDepth.jobCosting.summaries.find((summary) => summary.jobId === selectedJob.id) : undefined;
   const selectedTime = selectedJob ? operatingDepth.fieldOps.timeBreakdowns.find((row) => row.jobId === selectedJob.id) : undefined;
+  const defaultTaskOwnerId = selectedJob && membersById.has(selectedJob.managerId) ? selectedJob.managerId : workspace.members[0]?.id ?? "";
+  const taskOwnerId = jobTaskForm.assignedUserId || defaultTaskOwnerId;
   const selectedVisitIds = new Set(visits.map((visit) => visit.id));
   const selectedCallbacks = selectedJob ? operatingDepth.fieldOps.callbacks.filter((callback) => callback.jobTitle === selectedJob.title) : [];
   const selectedMaterialLots = operatingDepth.fieldOps.materialLots.filter((lot) => selectedVisitIds.has(lot.visitId));
   const selectedEquipment = operatingDepth.fieldOps.equipmentCheckouts.filter((checkout) => selectedVisitIds.has(checkout.visitId));
+  const [changeOrderForm, setChangeOrderForm] = useState({
+    title: "Additional landscape scope",
+    description: "Customer requested extra work while the job is already active.",
+    requestedByName: "",
+    revenueDelta: "1250",
+    estimatedCostDelta: "520",
+    scheduleImpactDays: "2",
+  });
+  const [changeOrderMessage, setChangeOrderMessage] = useState<{ state: "success" | "error" | "pending"; message: string } | null>(null);
+
+  async function handleCreateChangeOrder(event: FormEvent) {
+    event.preventDefault();
+    if (!selectedJob) return;
+    const title = changeOrderForm.title.trim();
+    const description = changeOrderForm.description.trim();
+    if (!title || !description) {
+      setChangeOrderMessage({ state: "error", message: "Change order title and scope are required." });
+      return;
+    }
+    const revenueDeltaCents = dollarsToCents(changeOrderForm.revenueDelta);
+    const estimatedCostDeltaCents = dollarsToCents(changeOrderForm.estimatedCostDelta);
+    const scheduleImpactDays = Math.max(0, Math.min(90, Math.round(Number(changeOrderForm.scheduleImpactDays || "0"))));
+    setChangeOrderMessage({ state: "pending", message: `Creating change order ${title}.` });
+    try {
+      await createChangeOrder({
+        jobId: selectedJob.id,
+        title,
+        description,
+        requestedByName: changeOrderForm.requestedByName.trim() || undefined,
+        revenueDeltaCents,
+        estimatedCostDeltaCents,
+        scheduleImpactDays,
+      });
+      setChangeOrderMessage({ state: "success", message: `Change order ${title} created for customer approval.` });
+      setChangeOrderForm((current) => ({ ...current, title: "", description: "", requestedByName: "" }));
+    } catch {
+      setChangeOrderMessage({ state: "error", message: "Change order could not be created. Check permissions and try again." });
+    }
+  }
+
+  async function handleApproveChangeOrder(changeOrder: WorkspaceSnapshot["changeOrders"][number]) {
+    setChangeOrderMessage({ state: "pending", message: `Approving change order ${changeOrder.title}.` });
+    try {
+      await approveChangeOrder({
+        changeOrderId: changeOrder.id,
+        approvedByName: changeOrder.requestedByName ?? customersById.get(changeOrder.customerId)?.name ?? "Customer",
+        approvedByEmail: customersById.get(changeOrder.customerId)?.email,
+      });
+      setChangeOrderMessage({ state: "success", message: `Change order ${changeOrder.title} approved and scheduling task created.` });
+    } catch {
+      setChangeOrderMessage({ state: "error", message: "Change order could not be approved. Check approval permission and try again." });
+    }
+  }
 
   return (
     <div className="grid gap-4 xl:grid-cols-[360px_1fr]">
@@ -3230,7 +6159,7 @@ function JobsView({
                 <Metric label="Revenue" value={currency(selectedSummary?.actualRevenueCents ?? 0)} />
                 <Metric label="Profit" value={currency(selectedSummary?.grossProfitCents ?? 0)} tone={(selectedSummary?.grossProfitCents ?? 0) >= 0 ? "success" : "danger"} />
                 <Metric label="Time variance" value={selectedTime ? humanMinutes(selectedTime.varianceMinutes) : "0m"} tone={selectedTime && selectedTime.varianceMinutes > 30 ? "warning" : "success"} />
-                <Metric label="Portal state" value={selectedJob.status === "completed" ? "Ready" : "Draft"} />
+                <Metric label="Change orders" value={String(changeOrders.length)} tone={changeOrders.some((changeOrder) => changeOrder.status === "pending_approval") ? "warning" : "success"} />
               </div>
               <div className="mt-4 grid gap-3 md:grid-cols-2">
                 {visits.map((visit) => (
@@ -3240,6 +6169,14 @@ function JobsView({
                     <div className="mt-3">
                       <Badge tone={statusTone(visit.status)}>{visitStatusLabel(visit.status)}</Badge>
                     </div>
+                    <div className="mt-3 grid gap-1 text-xs text-stone-600">
+                      {visit.checklist.slice(0, 4).map((item) => (
+                        <div key={item.id} className="flex items-center gap-2">
+                          <Check size={13} className={item.isDone ? "text-emerald-700" : "text-stone-300"} />
+                          <span className={cn(item.isDone && "line-through")}>{item.label}</span>
+                        </div>
+                      ))}
+                    </div>
                   </div>
                 ))}
               </div>
@@ -3248,18 +6185,112 @@ function JobsView({
         </Panel>
 
         <Panel>
+          <div className="flex flex-wrap items-center justify-between gap-3">
+            <h2 className="text-base font-bold">Change Orders</h2>
+            <Badge tone={changeOrders.some((changeOrder) => changeOrder.status === "pending_approval") ? "warning" : "success"}>{changeOrders.length} tracked</Badge>
+          </div>
+          {selectedJob ? (
+            <div className="mt-4 grid gap-4 lg:grid-cols-[0.9fr_1.1fr]">
+              <form className="grid gap-3" onSubmit={handleCreateChangeOrder}>
+                <Field label="Title">
+                  <input aria-label="Change order title" className={inputClass()} value={changeOrderForm.title} onChange={(event) => setChangeOrderForm({ ...changeOrderForm, title: event.target.value })} />
+                </Field>
+                <Field label="Scope">
+                  <textarea aria-label="Change order scope" className={cn(inputClass(), "min-h-20 resize-y py-2")} value={changeOrderForm.description} onChange={(event) => setChangeOrderForm({ ...changeOrderForm, description: event.target.value })} />
+                </Field>
+                <Field label="Requested by">
+                  <input aria-label="Change order requested by" className={inputClass()} value={changeOrderForm.requestedByName} onChange={(event) => setChangeOrderForm({ ...changeOrderForm, requestedByName: event.target.value })} />
+                </Field>
+                <div className="grid grid-cols-3 gap-2">
+                  <Field label="Revenue">
+                    <input aria-label="Change order revenue delta" className={inputClass()} value={changeOrderForm.revenueDelta} onChange={(event) => setChangeOrderForm({ ...changeOrderForm, revenueDelta: event.target.value })} inputMode="decimal" />
+                  </Field>
+                  <Field label="Cost">
+                    <input aria-label="Change order cost delta" className={inputClass()} value={changeOrderForm.estimatedCostDelta} onChange={(event) => setChangeOrderForm({ ...changeOrderForm, estimatedCostDelta: event.target.value })} inputMode="decimal" />
+                  </Field>
+                  <Field label="Days">
+                    <input aria-label="Change order schedule impact days" className={inputClass()} value={changeOrderForm.scheduleImpactDays} onChange={(event) => setChangeOrderForm({ ...changeOrderForm, scheduleImpactDays: event.target.value })} inputMode="numeric" />
+                  </Field>
+                </div>
+                <TextButton type="submit" icon={<Plus size={16} />}>Create Change Order</TextButton>
+                {changeOrderMessage ? (
+                  <div className={cn("rounded-md border px-3 py-2 text-sm font-semibold", changeOrderMessage.state === "error" ? "border-rose-200 bg-rose-50 text-rose-800" : changeOrderMessage.state === "pending" ? "border-amber-200 bg-amber-50 text-amber-800" : "border-emerald-200 bg-emerald-50 text-emerald-800")}>
+                    {changeOrderMessage.message}
+                  </div>
+                ) : null}
+              </form>
+              <div className="grid gap-2">
+                {changeOrders.map((changeOrder) => (
+                  <div key={changeOrder.id} className="rounded-md border border-stone-200 p-3">
+                    <div className="flex flex-wrap items-start justify-between gap-2">
+                      <div>
+                        <div className="font-semibold">{changeOrder.title}</div>
+                        <div className="mt-1 text-sm text-stone-500">{changeOrder.description}</div>
+                      </div>
+                      <Badge tone={changeOrder.status === "approved" ? "success" : changeOrder.status === "pending_approval" ? "warning" : "neutral"}>{formatStatus(changeOrder.status)}</Badge>
+                    </div>
+                    <div className="mt-3 grid gap-2 text-sm sm:grid-cols-4">
+                      <div><div className="text-xs font-semibold uppercase tracking-normal text-stone-500">Revenue</div><div className="font-semibold">{currency(changeOrder.revenueDeltaCents)}</div></div>
+                      <div><div className="text-xs font-semibold uppercase tracking-normal text-stone-500">Cost</div><div className="font-semibold">{currency(changeOrder.estimatedCostDeltaCents)}</div></div>
+                      <div><div className="text-xs font-semibold uppercase tracking-normal text-stone-500">Margin</div><div className="font-semibold">{percent(changeOrder.grossMarginPercent)}</div></div>
+                      <div><div className="text-xs font-semibold uppercase tracking-normal text-stone-500">Schedule</div><div className="font-semibold">{changeOrder.scheduleImpactDays}d</div></div>
+                    </div>
+                    <div className="mt-3 flex flex-wrap items-center justify-between gap-2 text-xs text-stone-500">
+                      <span>{changeOrder.approvedAt ? `Approved ${shortDate(changeOrder.approvedAt)}` : `Requested ${shortDate(changeOrder.requestedAt)}`}</span>
+                      {changeOrder.status === "pending_approval" ? (
+                        <TextButton type="button" icon={<Check size={16} />} onClick={() => void handleApproveChangeOrder(changeOrder)}>Approve Change Order</TextButton>
+                      ) : null}
+                    </div>
+                  </div>
+                ))}
+                {changeOrders.length === 0 ? <div className="rounded-md border border-dashed border-stone-200 p-3 text-sm text-stone-500">No change orders for this job yet.</div> : null}
+              </div>
+            </div>
+          ) : null}
+        </Panel>
+
+        <Panel>
           <div className="flex items-center justify-between gap-3">
             <h2 className="text-base font-bold">Tasks</h2>
             <Badge>{tasks.length}</Badge>
           </div>
-          <form onSubmit={addJobTask} className="mt-4 flex flex-col gap-2 sm:flex-row">
-            <input className={cn(inputClass(), "min-w-0 flex-1")} value={taskTitle} onChange={(event) => setTaskTitle(event.target.value)} placeholder="Add task" />
-            <TextButton type="submit" icon={<Plus size={16} />}>Add</TextButton>
+          <form onSubmit={addJobTask} className="mt-4 grid gap-3 lg:grid-cols-[1fr_180px_130px_130px_auto] lg:items-end">
+            <Field label="Task">
+              <input aria-label="Job task title" className={inputClass()} value={jobTaskForm.title} onChange={(event) => setJobTaskForm({ ...jobTaskForm, title: event.target.value })} placeholder="Add internal task" />
+            </Field>
+            <Field label="Owner">
+              <select aria-label="Job task owner" className={inputClass()} value={taskOwnerId} onChange={(event) => setJobTaskForm({ ...jobTaskForm, assignedUserId: event.target.value })}>
+                {workspace.members.map((member) => (
+                  <option key={member.id} value={member.id}>{member.name}</option>
+                ))}
+              </select>
+            </Field>
+            <Field label="Due days">
+              <input aria-label="Job task due days" className={inputClass()} value={jobTaskForm.dueInDays} onChange={(event) => setJobTaskForm({ ...jobTaskForm, dueInDays: event.target.value })} inputMode="numeric" />
+            </Field>
+            <Field label="Priority">
+              <select aria-label="Job task priority" className={inputClass()} value={jobTaskForm.priority} onChange={(event) => setJobTaskForm({ ...jobTaskForm, priority: event.target.value as JobTaskFormState["priority"] })}>
+                <option value="low">Low</option>
+                <option value="normal">Normal</option>
+                <option value="high">High</option>
+              </select>
+            </Field>
+            <TextButton type="submit" icon={<Plus size={16} />}>Add Task</TextButton>
           </form>
+          {jobTaskMessage ? (
+            <div className={cn("mt-3 rounded-md border px-3 py-2 text-sm font-semibold", jobTaskMessage.state === "error" ? "border-rose-200 bg-rose-50 text-rose-800" : jobTaskMessage.state === "pending" ? "border-amber-200 bg-amber-50 text-amber-800" : "border-emerald-200 bg-emerald-50 text-emerald-800")}>
+              {jobTaskMessage.message}
+            </div>
+          ) : null}
           <div className="mt-4 grid gap-2">
             {tasks.map((task) => (
               <button key={task.id} type="button" onClick={() => toggleTask(task.id)} className="flex items-center justify-between gap-3 rounded-md border border-stone-200 p-3 text-left">
-                <span className={cn("min-w-0 truncate font-medium", task.status === "done" && "text-stone-400 line-through")}>{task.title}</span>
+                <span className="min-w-0">
+                  <span className={cn("block truncate font-medium", task.status === "done" && "text-stone-400 line-through")}>{task.title}</span>
+                  <span className="mt-1 block text-xs text-stone-500">
+                    {membersById.get(task.assignedUserId)?.name ?? "Unassigned"} - due {shortDate(task.dueAt)} - {formatStatus(task.priority)}
+                  </span>
+                </span>
                 <Badge tone={statusTone(task.status)}>{task.status}</Badge>
               </button>
             ))}
@@ -3357,11 +6388,13 @@ function FieldView({
   selectedVisit,
   setSelectedVisitId,
   customersById,
+  contactsByCustomerId,
   propertiesById,
   crewsById,
   jobsById,
   issueFlag,
   setIssueFlag,
+  startVisit,
   toggleChecklist,
   submitVisit,
 }: {
@@ -3370,27 +6403,165 @@ function FieldView({
   selectedVisit?: JobVisit;
   setSelectedVisitId: (id: string) => void;
   customersById: Map<string, WorkspaceSnapshot["customers"][number]>;
+  contactsByCustomerId: Map<string, WorkspaceSnapshot["contacts"]>;
   propertiesById: Map<string, WorkspaceSnapshot["properties"][number]>;
   crewsById: Map<string, WorkspaceSnapshot["crews"][number]>;
   jobsById: Map<string, WorkspaceSnapshot["jobs"][number]>;
   issueFlag: string;
   setIssueFlag: (value: string) => void;
+  startVisit: (visit: JobVisit) => Promise<{ visitId?: string; timesheetEntryId?: string; startedAt?: number } | void>;
   toggleChecklist: (visitId: string, itemId: string) => void;
-  submitVisit: (visit: JobVisit) => void;
+  submitVisit: (
+    visit: JobVisit,
+    input?: {
+      notes?: string;
+      issue?: FieldIssueSubmitInput;
+      materialApplications?: Array<{ materialId: string; quantity: number; unit: string; targetAreaId?: string; notes?: string }>;
+    },
+  ) => Promise<{ visitId?: string; timesheetEntryId?: string; fieldIssueId?: string; issueTaskId?: string; issueOpportunityId?: string } | void>;
 }) {
   const property = selectedVisit?.propertyId ? propertiesById.get(selectedVisit.propertyId) : undefined;
+  const customer = selectedVisit ? customersById.get(selectedVisit.customerId) : undefined;
+  const selectedContacts = selectedVisit ? contactsByCustomerId.get(selectedVisit.customerId) ?? [] : [];
+  const primaryContact = selectedContacts.find((contact) => contact.isPrimary) ?? selectedContacts[0];
   const selectedRoute = selectedVisit ? operatingDepth.fieldOps.routeConfidence.find((route) => route.visitId === selectedVisit.id) : undefined;
   const selectedLots = selectedVisit ? operatingDepth.fieldOps.materialLots.filter((lot) => lot.visitId === selectedVisit.id) : [];
   const selectedEquipment = selectedVisit ? operatingDepth.fieldOps.equipmentCheckouts.filter((checkout) => checkout.visitId === selectedVisit.id) : [];
   const selectedTime = selectedVisit ? operatingDepth.fieldOps.timeBreakdowns.find((row) => row.jobId === selectedVisit.jobId) : undefined;
   const selectedWeather = selectedVisit ? operatingDepth.costIntelligence.weatherSnapshots.find((snapshot) => snapshot.id === `weather-${selectedVisit.id}` || snapshot.observedAt === selectedVisit.scheduledStart) : undefined;
+  const selectedPropertyAreas = useMemo(
+    () => (selectedVisit ? workspace.propertyAreas.filter((area) => area.propertyId === selectedVisit.propertyId) : []),
+    [selectedVisit, workspace.propertyAreas],
+  );
+  const fieldRouteVisits = useMemo(
+    () => [...workspace.visits].sort((a, b) => a.routeOrder - b.routeOrder || a.scheduledStart - b.scheduledStart || a.id.localeCompare(b.id)),
+    [workspace.visits],
+  );
+  const defaultMaterial = workspace.materials.find((material) => material.active) ?? workspace.materials[0];
+  const [startMessage, setStartMessage] = useState<{ state: "success" | "error" | "pending"; message: string } | null>(null);
+  const [materialForm, setMaterialForm] = useState({
+    materialId: defaultMaterial?.id ?? "",
+    quantity: "1",
+    unit: defaultMaterial?.unit ?? "unit",
+    targetAreaId: selectedPropertyAreas[0]?.id ?? "",
+    notes: "",
+  });
+  const [pendingMaterialApplications, setPendingMaterialApplications] = useState<Array<{ materialId: string; quantity: number; unit: string; targetAreaId?: string; notes?: string }>>([]);
+  const [materialMessage, setMaterialMessage] = useState<{ state: "success" | "error"; message: string } | null>(null);
+  const [submitMessage, setSubmitMessage] = useState<{ state: "success" | "error" | "pending"; message: string } | null>(null);
+  const [fieldIssueDraft, setFieldIssueDraft] = useState<FieldIssueDraft>({
+    category: "customer_concern",
+    severity: "high",
+    details: "",
+    customerVisible: true,
+    serviceCategory: "maintenance",
+    estimatedValue: "0",
+  });
+  const selectedMaterialId = materialForm.materialId || defaultMaterial?.id || "";
+  const selectedMaterial = workspace.materials.find((item) => item.id === selectedMaterialId) ?? defaultMaterial;
+  const selectedMaterialUnit = materialForm.unit || selectedMaterial?.unit || "unit";
+  const selectedTargetAreaId = selectedPropertyAreas.some((area) => area.id === materialForm.targetAreaId) ? materialForm.targetAreaId : "";
+  const issueCreatesOpportunity = fieldIssueDraft.category === "upsell_opportunity";
+
+  async function handleStartVisit(visit: JobVisit) {
+    setStartMessage({ state: "pending", message: "Starting visit and opening time capture." });
+    try {
+      await startVisit(visit);
+      setStartMessage({ state: "success", message: "Visit started with manual time confirmation." });
+    } catch {
+      setStartMessage({ state: "error", message: "Visit could not be started. Check assignment and try again." });
+    }
+  }
+
+  function handleMaterialChange(materialId: string) {
+    const material = workspace.materials.find((item) => item.id === materialId);
+    setMaterialForm((current) => ({ ...current, materialId, unit: material?.unit ?? current.unit }));
+  }
+
+  function handleAddMaterialUse() {
+    const material = workspace.materials.find((item) => item.id === selectedMaterialId);
+    const quantity = Number(materialForm.quantity);
+    if (!material || !Number.isFinite(quantity) || quantity <= 0 || !selectedMaterialUnit.trim()) {
+      setMaterialMessage({ state: "error", message: "Choose a material, quantity, and unit before adding usage." });
+      return;
+    }
+    setPendingMaterialApplications((current) => [
+      ...current,
+      {
+        materialId: material.id,
+        quantity,
+        unit: selectedMaterialUnit.trim(),
+        targetAreaId: selectedTargetAreaId || undefined,
+        notes: materialForm.notes.trim() || undefined,
+      },
+    ]);
+    setMaterialMessage({ state: "success", message: `${material.name} material use queued for submit.` });
+  }
+
+  function handleIssuePreset(preset: (typeof fieldIssuePresets)[number]) {
+    setIssueFlag(preset.label);
+    setFieldIssueDraft({
+      category: preset.category,
+      severity: preset.severity,
+      details: preset.details,
+      customerVisible: preset.customerVisible ?? false,
+      serviceCategory: preset.serviceCategory ?? "maintenance",
+      estimatedValue: String(Math.round((preset.estimatedValueCents ?? 0) / 100)),
+    });
+  }
+
+  function buildFieldIssueInput(): FieldIssueSubmitInput | undefined {
+    const summary = issueFlag.trim();
+    if (!summary) return undefined;
+    const estimatedValue = Number(fieldIssueDraft.estimatedValue.replace(/[$,]/g, ""));
+    return {
+      category: fieldIssueDraft.category,
+      severity: fieldIssueDraft.severity,
+      summary,
+      details: fieldIssueDraft.details.trim() || undefined,
+      customerVisible: fieldIssueDraft.customerVisible,
+      createOpportunity: issueCreatesOpportunity,
+      serviceCategory: fieldIssueDraft.serviceCategory,
+      estimatedValueCents: Math.max(0, Math.round((Number.isFinite(estimatedValue) ? estimatedValue : 0) * 100)),
+    };
+  }
+
+  async function handleSubmitVisit(visit: JobVisit) {
+    setSubmitMessage({ state: "pending", message: "Submitting visit completion with time and material records." });
+    const issue = buildFieldIssueInput();
+    try {
+      await submitVisit(visit, {
+        notes: visit.notes,
+        issue,
+        materialApplications: pendingMaterialApplications,
+      });
+      setPendingMaterialApplications([]);
+      setSubmitMessage({
+        state: "success",
+        message: `Visit submitted with ${pendingMaterialApplications.length} material record${pendingMaterialApplications.length === 1 ? "" : "s"}${issue ? " and issue follow-up" : ""}.`,
+      });
+      if (issue) {
+        setFieldIssueDraft({
+          category: "customer_concern",
+          severity: "high",
+          details: "",
+          customerVisible: true,
+          serviceCategory: "maintenance",
+          estimatedValue: "0",
+        });
+      }
+    } catch (error) {
+      const message = error instanceof Error ? error.message : "Check material entries and try again.";
+      setSubmitMessage({ state: "error", message: `Visit could not be submitted. ${message}` });
+    }
+  }
 
   return (
     <div className="mx-auto grid max-w-6xl gap-4 lg:grid-cols-[360px_1fr]">
       <Panel>
         <h2 className="text-base font-bold">My Visits</h2>
         <div className="mt-4 grid gap-2">
-          {workspace.visits.map((visit) => (
+          {fieldRouteVisits.map((visit) => (
             <button
               key={visit.id}
               type="button"
@@ -3401,7 +6572,10 @@ function FieldView({
                 <span className="font-semibold">{timeRange(visit.scheduledStart, visit.scheduledEnd)}</span>
                 <Badge tone={statusTone(visit.status)}>{visitStatusLabel(visit.status)}</Badge>
               </div>
-              <div className="mt-2 text-sm text-stone-500">{customersById.get(visit.customerId)?.name}</div>
+              <div className="mt-2 flex flex-wrap items-center gap-2 text-sm text-stone-500">
+                <span className="rounded-full bg-stone-100 px-2 py-0.5 font-semibold text-stone-700">Stop {visit.routeOrder}</span>
+                <span>{customersById.get(visit.customerId)?.name}</span>
+              </div>
             </button>
           ))}
         </div>
@@ -3414,18 +6588,55 @@ function FieldView({
               <div>
                 <h2 className="text-xl font-bold">{jobsById.get(selectedVisit.jobId)?.title}</h2>
                 <div className="mt-1 text-sm text-stone-500">{customersById.get(selectedVisit.customerId)?.name} - {crewsById.get(selectedVisit.crewId)?.name}</div>
+                <div className="mt-2 inline-flex rounded-full bg-stone-100 px-2.5 py-1 text-xs font-bold uppercase tracking-normal text-stone-600">Route stop {selectedVisit.routeOrder}</div>
               </div>
               <Badge tone={statusTone(selectedVisit.status)}>{visitStatusLabel(selectedVisit.status)}</Badge>
             </div>
+            <div className="flex flex-wrap items-center gap-2">
+              <TextButton icon={<Clock size={16} />} onClick={() => void handleStartVisit(selectedVisit)} disabled={selectedVisit.status === "complete" || selectedVisit.status === "canceled"}>
+                Start Visit
+              </TextButton>
+              {startMessage ? (
+                <div className={cn("rounded-md border px-3 py-2 text-sm font-semibold", startMessage.state === "error" ? "border-rose-200 bg-rose-50 text-rose-800" : startMessage.state === "pending" ? "border-amber-200 bg-amber-50 text-amber-800" : "border-emerald-200 bg-emerald-50 text-emerald-800")}>
+                  {startMessage.message}
+                </div>
+              ) : null}
+            </div>
             {property ? (
-              <div className="rounded-md border border-stone-200 p-3">
-                <div className="font-semibold">{property.label}</div>
-                <div className="mt-1 text-sm text-stone-500">{property.street}, {property.city}, {property.state}</div>
-                <a className="mt-3 inline-flex items-center gap-2 text-sm font-semibold text-[#224036]" href={googleMapsUrl(`${property.street}, ${property.city}, ${property.state} ${property.postalCode}`)} target="_blank" rel="noreferrer">
-                  <MapPin size={15} />
-                  Maps
-                  <ExternalLink size={13} />
-                </a>
+              <div className="grid gap-3 md:grid-cols-[1.1fr_0.9fr]">
+                <div className="rounded-md border border-stone-200 p-3">
+                  <div className="flex flex-wrap items-start justify-between gap-3">
+                    <div>
+                      <div className="font-semibold">{property.label}</div>
+                      <div className="mt-1 text-sm text-stone-500">{property.street}, {property.city}, {property.state}</div>
+                    </div>
+                    <a className="inline-flex items-center gap-2 text-sm font-semibold text-[#224036]" href={googleMapsUrl(`${property.street}, ${property.city}, ${property.state} ${property.postalCode}`)} target="_blank" rel="noreferrer">
+                      <MapPin size={15} />
+                      Maps
+                      <ExternalLink size={13} />
+                    </a>
+                  </div>
+                  <div className="mt-3 rounded-md bg-stone-50 p-3 text-sm leading-5 text-stone-700">
+                    <div className="text-xs font-semibold uppercase tracking-normal text-stone-500">Property notes / hazards</div>
+                    <div className="mt-1">{property.notes || "No property notes or hazards on file."}</div>
+                  </div>
+                  <div className="mt-3 rounded-md bg-stone-50 p-3 text-sm leading-5 text-stone-700">
+                    <div className="text-xs font-semibold uppercase tracking-normal text-stone-500">Scope notes</div>
+                    <div className="mt-1">{selectedVisit.notes || "No visit-specific scope notes."}</div>
+                  </div>
+                </div>
+                <div className="rounded-md border border-stone-200 p-3">
+                  <div className="text-xs font-semibold uppercase tracking-normal text-stone-500">Customer contact</div>
+                  <div className="mt-2 font-semibold">{primaryContact?.name ?? customer?.name ?? "No contact"}</div>
+                  <div className="mt-1 text-sm text-stone-500">{primaryContact?.roleTitle ?? "Primary contact"}</div>
+                  <div className="mt-3 grid gap-2 text-sm">
+                    <div><span className="font-semibold">Phone:</span> {primaryContact?.phone ?? customer?.phone ?? "Not provided"}</div>
+                    <div><span className="font-semibold">Email:</span> {primaryContact?.email ?? customer?.email ?? "Not provided"}</div>
+                  </div>
+                  {selectedContacts.length > 1 ? (
+                    <div className="mt-3 text-xs text-stone-500">{selectedContacts.length - 1} alternate contact{selectedContacts.length === 2 ? "" : "s"} on file</div>
+                  ) : null}
+                </div>
               </div>
             ) : null}
 
@@ -3465,6 +6676,54 @@ function FieldView({
                     </div>
                   )) : <div className="text-sm text-stone-500">No material selected.</div>}
                 </div>
+                <div className="mt-3 grid gap-2">
+                  <Field label="Product">
+                    <select aria-label="Material product" className={inputClass()} value={selectedMaterialId} onChange={(event) => handleMaterialChange(event.target.value)}>
+                      {workspace.materials.filter((material) => material.active).map((material) => (
+                        <option key={material.id} value={material.id}>{material.name} - {currency(material.costCents ?? 0)} / {material.unit}</option>
+                      ))}
+                    </select>
+                  </Field>
+                  <div className="grid grid-cols-2 gap-2">
+                    <Field label="Quantity">
+                      <input aria-label="Material quantity" className={inputClass()} value={materialForm.quantity} onChange={(event) => setMaterialForm({ ...materialForm, quantity: event.target.value })} inputMode="decimal" />
+                    </Field>
+                    <Field label="Unit">
+                      <input aria-label="Material unit" className={inputClass()} value={selectedMaterialUnit} onChange={(event) => setMaterialForm({ ...materialForm, unit: event.target.value })} />
+                    </Field>
+                  </div>
+                  <Field label="Target area">
+                    <select aria-label="Material target area" className={inputClass()} value={selectedTargetAreaId} onChange={(event) => setMaterialForm({ ...materialForm, targetAreaId: event.target.value })}>
+                      <option value="">Whole property</option>
+                      {selectedPropertyAreas.map((area) => (
+                        <option key={area.id} value={area.id}>{area.name}{area.size ? ` - ${area.size.toLocaleString()} ${area.unit ?? "sq ft"}` : ""}</option>
+                      ))}
+                    </select>
+                  </Field>
+                  <Field label="Application notes">
+                    <input aria-label="Material application notes" className={inputClass()} value={materialForm.notes} onChange={(event) => setMaterialForm({ ...materialForm, notes: event.target.value })} placeholder="Rate, pest, area, or lot note" />
+                  </Field>
+                  <TextButton type="button" icon={<Package size={16} />} onClick={handleAddMaterialUse}>Add Material Use</TextButton>
+                  {materialMessage ? (
+                    <div className={cn("rounded-md border px-3 py-2 text-sm font-semibold", materialMessage.state === "error" ? "border-rose-200 bg-rose-50 text-rose-800" : "border-emerald-200 bg-emerald-50 text-emerald-800")}>
+                      {materialMessage.message}
+                    </div>
+                  ) : null}
+                  {pendingMaterialApplications.length > 0 ? (
+                    <div className="grid gap-2">
+                      {pendingMaterialApplications.map((application, index) => {
+                        const material = workspace.materials.find((item) => item.id === application.materialId);
+                        const area = selectedPropertyAreas.find((item) => item.id === application.targetAreaId);
+                        return (
+                          <div key={`${application.materialId}-${index}`} className="rounded-md border border-emerald-200 bg-emerald-50 p-2 text-sm text-emerald-900">
+                            <div className="font-semibold">{material?.name ?? "Material"} queued</div>
+                            <div>{application.quantity} {application.unit}{area ? ` - ${area.name}` : " - whole property"}</div>
+                          </div>
+                        );
+                      })}
+                    </div>
+                  ) : null}
+                </div>
               </div>
               <div className="rounded-md border border-stone-200 p-3">
                 <div className="text-xs font-semibold uppercase tracking-normal text-stone-500">Equipment checkout</div>
@@ -3481,7 +6740,7 @@ function FieldView({
 
             <div className="grid gap-2">
               {selectedVisit.checklist.map((item) => (
-                <button key={item.id} type="button" onClick={() => toggleChecklist(selectedVisit.id, item.id)} className="flex items-center gap-3 rounded-md border border-stone-200 p-3 text-left">
+                <button key={item.id} type="button" aria-label={`Checklist ${item.label}`} onClick={() => toggleChecklist(selectedVisit.id, item.id)} className="flex items-center gap-3 rounded-md border border-stone-200 p-3 text-left">
                   <span className={cn("grid h-6 w-6 place-items-center rounded-md border", item.isDone ? "border-emerald-500 bg-emerald-500 text-white" : "border-stone-300 bg-white text-transparent")}>
                     <Check size={15} />
                   </span>
@@ -3490,21 +6749,105 @@ function FieldView({
               ))}
             </div>
 
-            <Field label="Issue flag">
-              <input className={inputClass()} value={issueFlag} onChange={(event) => setIssueFlag(event.target.value)} placeholder="Optional follow-up task" />
-            </Field>
-            <div className="flex flex-wrap gap-2">
-              {["Property damage", "Customer complaint", "Missed area", "Upsell opportunity", "Revisit required"].map((reason) => (
-                <button key={reason} type="button" onClick={() => setIssueFlag(reason)} className="rounded-md border border-stone-200 bg-white px-3 py-2 text-sm font-semibold text-stone-700">
-                  {reason}
-                </button>
-              ))}
+            <div className="rounded-md border border-stone-200 p-3">
+              <div className="flex flex-wrap items-center justify-between gap-2">
+                <div>
+                  <div className="text-xs font-semibold uppercase tracking-normal text-stone-500">Issue capture</div>
+                  <div className="mt-1 text-sm text-stone-600">Damage, access problems, pest activity, customer concerns, and upsell signals.</div>
+                </div>
+                <Badge tone={issueCreatesOpportunity ? "success" : "warning"}>{issueCreatesOpportunity ? "Creates opportunity" : "Creates task"}</Badge>
+              </div>
+              <div className="mt-3 grid gap-2 md:grid-cols-3">
+                <Field label="Issue category">
+                  <select
+                    aria-label="Issue category"
+                    className={inputClass()}
+                    value={fieldIssueDraft.category}
+                    onChange={(event) => setFieldIssueDraft({ ...fieldIssueDraft, category: event.target.value as FieldIssueCategory })}
+                  >
+                    {fieldIssueCategories.map((category) => (
+                      <option key={category} value={category}>{fieldIssueCategoryLabel(category)}</option>
+                    ))}
+                  </select>
+                </Field>
+                <Field label="Issue severity">
+                  <select
+                    aria-label="Issue severity"
+                    className={inputClass()}
+                    value={fieldIssueDraft.severity}
+                    onChange={(event) => setFieldIssueDraft({ ...fieldIssueDraft, severity: event.target.value as FieldIssueSeverity })}
+                  >
+                    {fieldIssueSeverities.map((severity) => (
+                      <option key={severity} value={severity}>{formatStatus(severity)}</option>
+                    ))}
+                  </select>
+                </Field>
+                <label className="flex items-center gap-2 rounded-md border border-stone-200 bg-stone-50 px-3 py-2 text-sm font-semibold text-stone-700 md:mt-5">
+                  <input
+                    aria-label="Customer-visible issue"
+                    type="checkbox"
+                    checked={fieldIssueDraft.customerVisible}
+                    onChange={(event) => setFieldIssueDraft({ ...fieldIssueDraft, customerVisible: event.target.checked })}
+                  />
+                  Customer-visible
+                </label>
+              </div>
+              <div className="mt-2 grid gap-2 md:grid-cols-[1fr_1fr]">
+                <Field label="Issue summary">
+                  <input aria-label="Issue summary" className={inputClass()} value={issueFlag} onChange={(event) => setIssueFlag(event.target.value)} placeholder="Optional follow-up task" />
+                </Field>
+                <Field label="Service line">
+                  <select
+                    aria-label="Issue service line"
+                    className={inputClass()}
+                    value={fieldIssueDraft.serviceCategory}
+                    onChange={(event) => setFieldIssueDraft({ ...fieldIssueDraft, serviceCategory: event.target.value as ServiceCategory })}
+                  >
+                    {Object.entries(categoryLabels).map(([value, label]) => (
+                      <option key={value} value={value}>{label}</option>
+                    ))}
+                  </select>
+                </Field>
+              </div>
+              <div className="mt-2 grid gap-2 md:grid-cols-[1fr_180px]">
+                <Field label="Issue details">
+                  <textarea
+                    aria-label="Issue details"
+                    className={cn(inputClass(), "min-h-20 resize-y")}
+                    value={fieldIssueDraft.details}
+                    onChange={(event) => setFieldIssueDraft({ ...fieldIssueDraft, details: event.target.value })}
+                    placeholder="What happened, where, and what should the office do next?"
+                  />
+                </Field>
+                <Field label="Upsell value">
+                  <input
+                    aria-label="Issue estimated value"
+                    className={inputClass()}
+                    value={fieldIssueDraft.estimatedValue}
+                    onChange={(event) => setFieldIssueDraft({ ...fieldIssueDraft, estimatedValue: event.target.value })}
+                    inputMode="decimal"
+                    disabled={!issueCreatesOpportunity}
+                  />
+                </Field>
+              </div>
+              <div className="mt-3 flex flex-wrap gap-2">
+                {fieldIssuePresets.map((preset) => (
+                  <button key={preset.label} type="button" onClick={() => handleIssuePreset(preset)} className="rounded-md border border-stone-200 bg-white px-3 py-2 text-sm font-semibold text-stone-700">
+                    {preset.label}
+                  </button>
+                ))}
+              </div>
             </div>
             <div className="grid gap-3 md:grid-cols-2">
               <div className="rounded-md border border-dashed border-stone-300 p-3 text-sm text-stone-500">Before/after photo capture queue</div>
               <div className="rounded-md border border-dashed border-stone-300 p-3 text-sm text-stone-500">Customer signature and service receipt preview</div>
             </div>
-            <TextButton icon={<ClipboardCheck size={16} />} onClick={() => submitVisit(selectedVisit)}>
+            {submitMessage ? (
+              <div className={cn("rounded-md border px-3 py-2 text-sm font-semibold", submitMessage.state === "error" ? "border-rose-200 bg-rose-50 text-rose-800" : submitMessage.state === "pending" ? "border-amber-200 bg-amber-50 text-amber-800" : "border-emerald-200 bg-emerald-50 text-emerald-800")}>
+                {submitMessage.message}
+              </div>
+            ) : null}
+            <TextButton icon={<ClipboardCheck size={16} />} onClick={() => void handleSubmitVisit(selectedVisit)}>
               Submit Visit
             </TextButton>
           </div>
@@ -3521,7 +6864,19 @@ function LeadOpsView({ operatingDepth, operatingActions }: { operatingDepth: Ope
   const [selectedIds, setSelectedIds] = useState<string[]>([]);
   const [reviewedDuplicateIds, setReviewedDuplicateIds] = useState<string[]>([]);
   const [selectedLeadId, setSelectedLeadId] = useState<string | undefined>(operatingDepth.leadOps.rows[0]?.id);
+  const [leadOpsImportName, setLeadOpsImportName] = useState("");
+  const [leadOpsImportRows, setLeadOpsImportRows] = useState<ImportPreviewUiRow[]>([]);
+  const [leadOpsImportJobId, setLeadOpsImportJobId] = useState("");
+  const [leadOpsImportState, setLeadOpsImportState] = useState<"idle" | "saving" | "saved" | "committing" | "committed" | "error">("idle");
+  const [leadOpsImportMessage, setLeadOpsImportMessage] = useState("");
+  const [leadOpsImportError, setLeadOpsImportError] = useState("");
+  const [webLeadForm, setWebLeadForm] = useState<WebLeadFormState>(() => defaultWebLeadForm());
+  const [webLeadState, setWebLeadState] = useState<"idle" | "submitting" | "submitted" | "error">("idle");
+  const [webLeadMessage, setWebLeadMessage] = useState("");
+  const [staleCheckState, setStaleCheckState] = useState<"idle" | "running" | "complete" | "error">("idle");
+  const [staleCheckMessage, setStaleCheckMessage] = useState("");
   const statusOptions = operatingDepth.leadOps.statusSettings.length > 0 ? operatingDepth.leadOps.statusSettings : [];
+  const leadOpsImportTerritory = ["Foxborough", "Mansfield", "Sharon", "Wrentham", "Plainville"];
   const rows = useMemo(() => {
     const normalized = query.trim().toLowerCase();
     return operatingDepth.leadOps.rows.filter((row) => {
@@ -3538,6 +6893,13 @@ function LeadOpsView({ operatingDepth, operatingActions }: { operatingDepth: Ope
     .filter((row) => row.duplicateWarnings.length > 0 && !reviewedDuplicateSet.has(row.id))
     .sort((a, b) => b.qualityScore - a.qualityScore)
     .slice(0, 6);
+  const staleIssues = operatingDepth.leadOps.qualityIssues.filter((issue) => issue.kind === "stale_follow_up" && issue.status === "open");
+  const staleRows = rows.filter((row) => row.slaStatus === "overdue" || staleIssues.some((issue) => issue.leadId === row.id)).slice(0, 6);
+  const leadOpsImportCounts = {
+    ready: leadOpsImportRows.filter((row) => row.status === "ready").length,
+    review: leadOpsImportRows.filter((row) => row.status === "needs_review").length,
+    blocked: leadOpsImportRows.filter((row) => row.status === "blocked").length,
+  };
 
   function toggleSelected(id: string) {
     setSelectedIds((current) => (current.includes(id) ? current.filter((item) => item !== id) : [...current, id]));
@@ -3554,6 +6916,93 @@ function LeadOpsView({ operatingDepth, operatingActions }: { operatingDepth: Ope
     setSelectedLeadId(row.id);
     if (action === "hide_duplicate") {
       operatingActions?.updateLead?.(row.id, { status: "lost_confirmed", hidden: true });
+    }
+  }
+
+  async function handleLeadOpsImportUpload(event: ChangeEvent<HTMLInputElement>) {
+    const file = event.target.files?.[0];
+    if (!file) return;
+
+    try {
+      const csv = await file.text();
+      setLeadOpsImportState("saving");
+      setLeadOpsImportMessage("");
+      const previewRows = parseLeadImportCsv(csv, {
+        currentContactCount: 0,
+        freeContactLimit: Number.MAX_SAFE_INTEGER,
+        serviceTerritory: leadOpsImportTerritory,
+      });
+      setLeadOpsImportName(file.name);
+      setLeadOpsImportRows(previewRows);
+      setLeadOpsImportJobId("");
+      setLeadOpsImportError(previewRows.length === 0 ? "No importable rows were found in that CSV." : "");
+      if (previewRows.length > 0 && operatingActions?.createLeadImportPreview) {
+        const persisted = await operatingActions.createLeadImportPreview({ fileName: file.name, csvText: csv });
+        setLeadOpsImportJobId(persisted.importJobId);
+        setLeadOpsImportRows(persisted.rows);
+        setLeadOpsImportState("saved");
+        setLeadOpsImportMessage(`Lead Ops import job saved with ${persisted.rows.length} rows. Commit ready rows after QA.`);
+      } else {
+        setLeadOpsImportState(previewRows.length > 0 ? "saved" : "idle");
+        setLeadOpsImportMessage(previewRows.length > 0 ? "Local preview created. Connect Convex actions to commit these rows." : "");
+      }
+    } catch (error) {
+      setLeadOpsImportName("");
+      setLeadOpsImportRows([]);
+      setLeadOpsImportJobId("");
+      setLeadOpsImportState("error");
+      setLeadOpsImportMessage("");
+      setLeadOpsImportError(error instanceof Error ? userFacingWriteError(error) : "Could not read that CSV file.");
+    } finally {
+      event.currentTarget.value = "";
+    }
+  }
+
+  async function commitLeadOpsImport() {
+    if (!leadOpsImportJobId || !operatingActions?.commitLeadImportRows) return;
+    try {
+      setLeadOpsImportState("committing");
+      const result = await operatingActions.commitLeadImportRows(leadOpsImportJobId);
+      setLeadOpsImportState("committed");
+      setLeadOpsImportMessage(`${result.imported} rows imported, ${result.skipped} skipped, ${result.failed} failed.`);
+    } catch (error) {
+      setLeadOpsImportState("error");
+      setLeadOpsImportMessage(userFacingWriteError(error));
+    }
+  }
+
+  async function submitWebLead(event: FormEvent) {
+    event.preventDefault();
+    if (!operatingActions?.submitWebLead) {
+      setWebLeadState("error");
+      setWebLeadMessage("Connect Convex web lead intake before submitting this form.");
+      return;
+    }
+    const submittedName = webLeadForm.customerName.trim() || "Web form lead";
+    try {
+      setWebLeadState("submitting");
+      setWebLeadMessage("");
+      const result = await operatingActions.submitWebLead(webLeadForm);
+      setWebLeadState("submitted");
+      setWebLeadMessage(`${submittedName} captured from web form as ${formatStatus(result.status)} with spam score ${result.spamScore}.`);
+      setWebLeadForm(defaultWebLeadForm());
+    } catch (error) {
+      setWebLeadState("error");
+      setWebLeadMessage(userFacingWriteError(error));
+    }
+  }
+
+  async function runStaleLeadCheck() {
+    if (!operatingActions?.runStaleLeadCheck) return;
+    try {
+      setStaleCheckState("running");
+      setStaleCheckMessage("");
+      const result = await operatingActions.runStaleLeadCheck();
+      setStaleCheckState("complete");
+      setStaleCheckMessage(`${result.inserted} stale lead${result.inserted === 1 ? "" : "s"} flagged for follow-up.`);
+    } catch (error) {
+      setStaleCheckState("error");
+      setStaleCheckMessage(userFacingWriteError(error));
     }
   }
 
@@ -3610,6 +7059,143 @@ function LeadOpsView({ operatingDepth, operatingActions }: { operatingDepth: Ope
             </button>
           </div>
         </div>
+      </Panel>
+
+      <Panel>
+        <div className="flex flex-wrap items-start justify-between gap-4">
+          <div>
+            <div className="flex items-center gap-2 text-sm font-semibold text-[#224036]">
+              <FileText size={16} />
+              Lead Import Center
+            </div>
+            <h2 className="mt-2 text-xl font-bold tracking-normal">CSV intake with QA, duplicate risk, and commit controls</h2>
+            <p className="mt-2 max-w-3xl text-sm leading-6 text-stone-600">
+              Import lead lists directly into Lead Ops, review row-level blockers, then commit clean records into customers, contacts, properties, leads, and opportunities.
+            </p>
+          </div>
+          <div className="grid min-w-60 grid-cols-3 gap-2 text-center">
+            <div className="rounded-md bg-emerald-50 p-3 text-sm text-emerald-900"><span className="block text-lg font-bold">{leadOpsImportCounts.ready}</span> ready</div>
+            <div className="rounded-md bg-amber-50 p-3 text-sm text-amber-900"><span className="block text-lg font-bold">{leadOpsImportCounts.review}</span> review</div>
+            <div className="rounded-md bg-rose-50 p-3 text-sm text-rose-900"><span className="block text-lg font-bold">{leadOpsImportCounts.blocked}</span> blocked</div>
+          </div>
+        </div>
+        <div className="mt-4 flex flex-wrap items-center gap-2">
+          <label className="inline-flex min-h-10 cursor-pointer items-center justify-center gap-2 rounded-md border border-stone-200 bg-white px-3 text-sm font-semibold text-stone-800 shadow-sm transition hover:bg-stone-50">
+            <FileText size={16} />
+            Upload Lead CSV
+            <input aria-label="Upload Lead Ops import CSV" type="file" accept=".csv,text/csv" className="sr-only" onChange={handleLeadOpsImportUpload} />
+          </label>
+          <TextButton
+            type="button"
+            icon={<Check size={16} />}
+            disabled={!leadOpsImportJobId || !operatingActions?.commitLeadImportRows || leadOpsImportState === "committing" || leadOpsImportState === "committed"}
+            onClick={commitLeadOpsImport}
+          >
+            {leadOpsImportState === "committing" ? "Committing" : "Commit Lead Ops Ready Rows"}
+          </TextButton>
+          <Badge tone={leadOpsImportRows.length > 0 ? "success" : "neutral"}>{leadOpsImportName || "No file uploaded"}</Badge>
+          <Badge>{leadOpsImportRows.length} rows</Badge>
+        </div>
+        {leadOpsImportError ? (
+          <div className="mt-3 rounded-md border border-rose-200 bg-rose-50 p-3 text-sm font-medium text-rose-900">{leadOpsImportError}</div>
+        ) : null}
+        {leadOpsImportMessage ? (
+          <div
+            className={cn(
+              "mt-3 rounded-md border p-3 text-sm font-medium",
+              leadOpsImportState === "error" ? "border-rose-200 bg-rose-50 text-rose-900" : "border-emerald-200 bg-emerald-50 text-emerald-900",
+            )}
+          >
+            {leadOpsImportMessage}
+          </div>
+        ) : null}
+        <div className="mt-4 grid gap-2 lg:grid-cols-3">
+          {leadOpsImportRows.length > 0 ? leadOpsImportRows.slice(0, 6).map((row) => (
+            <div key={row.id ?? `lead-ops-import-${row.rowNumber}`} className="rounded-md border border-stone-200 p-3">
+              <div className="flex flex-wrap items-start justify-between gap-3">
+                <div className="min-w-0">
+                  <div className="truncate font-semibold">Row {row.rowNumber} - {row.customerName || "Unnamed lead"}</div>
+                  <div className="mt-1 truncate text-sm text-stone-500">{row.city || "No city"} - maps to {row.mappedEntity}</div>
+                </div>
+                <Badge tone={row.status === "ready" ? "success" : row.status === "blocked" ? "danger" : "warning"}>{formatStatus(row.status)}</Badge>
+              </div>
+              <div className="mt-3 flex flex-wrap gap-1">
+                {row.issues.length > 0 ? row.issues.map((issue) => <Badge key={`${row.rowNumber}-${issue.message}`} tone="warning">{issue.message}</Badge>) : <Badge tone="success">No issues</Badge>}
+              </div>
+            </div>
+          )) : (
+            <div className="rounded-md border border-dashed border-stone-200 p-4 text-sm text-stone-500 lg:col-span-3">
+              Upload a CSV with Customer, Email, Phone, Street, City, State, Zip, Service, and Source columns to preview import quality before committing.
+            </div>
+          )}
+        </div>
+      </Panel>
+
+      <Panel>
+        <div className="flex flex-wrap items-start justify-between gap-4">
+          <div>
+            <div className="flex items-center gap-2 text-sm font-semibold text-[#224036]">
+              <ExternalLink size={16} />
+              Web Form Intake
+            </div>
+            <h2 className="mt-2 text-xl font-bold tracking-normal">Capture website leads with campaign, service, location, and spam scoring</h2>
+          </div>
+          <Badge tone={webLeadState === "error" ? "danger" : webLeadState === "submitted" ? "success" : "neutral"}>{webLeadState === "submitting" ? "submitting" : webLeadState}</Badge>
+        </div>
+        {webLeadMessage ? (
+          <div className={cn("mt-4 rounded-md border p-3 text-sm font-medium", webLeadState === "error" ? "border-rose-200 bg-rose-50 text-rose-900" : "border-emerald-200 bg-emerald-50 text-emerald-900")}>
+            {webLeadMessage}
+          </div>
+        ) : null}
+        <form onSubmit={submitWebLead} className="mt-4 grid gap-3 md:grid-cols-2 xl:grid-cols-4">
+          <Field label="Web customer">
+            <input className={inputClass()} value={webLeadForm.customerName} onChange={(event) => setWebLeadForm({ ...webLeadForm, customerName: event.target.value })} required />
+          </Field>
+          <Field label="Web email">
+            <input className={inputClass()} value={webLeadForm.email} onChange={(event) => setWebLeadForm({ ...webLeadForm, email: event.target.value })} type="email" />
+          </Field>
+          <Field label="Web phone">
+            <input className={inputClass()} value={webLeadForm.phone} onChange={(event) => setWebLeadForm({ ...webLeadForm, phone: event.target.value })} />
+          </Field>
+          <Field label="Web service">
+            <select className={inputClass()} value={webLeadForm.serviceLine} onChange={(event) => setWebLeadForm({ ...webLeadForm, serviceLine: event.target.value as ServiceCategory })}>
+              {Object.entries(categoryLabels).map(([value, label]) => (
+                <option key={value} value={value}>{label}</option>
+              ))}
+            </select>
+          </Field>
+          <Field label="Web street">
+            <input className={inputClass()} value={webLeadForm.street} onChange={(event) => setWebLeadForm({ ...webLeadForm, street: event.target.value })} />
+          </Field>
+          <Field label="Web city">
+            <input className={inputClass()} value={webLeadForm.city} onChange={(event) => setWebLeadForm({ ...webLeadForm, city: event.target.value })} required />
+          </Field>
+          <Field label="Web state">
+            <input className={inputClass()} value={webLeadForm.state} onChange={(event) => setWebLeadForm({ ...webLeadForm, state: event.target.value.toUpperCase().slice(0, 2) })} required />
+          </Field>
+          <Field label="Web ZIP">
+            <input className={inputClass()} value={webLeadForm.postalCode} onChange={(event) => setWebLeadForm({ ...webLeadForm, postalCode: event.target.value })} />
+          </Field>
+          <Field label="Web campaign">
+            <input className={inputClass()} value={webLeadForm.campaign} onChange={(event) => setWebLeadForm({ ...webLeadForm, campaign: event.target.value })} />
+          </Field>
+          <Field label="Web source detail">
+            <input className={inputClass()} value={webLeadForm.sourceDetail} onChange={(event) => setWebLeadForm({ ...webLeadForm, sourceDetail: event.target.value })} />
+          </Field>
+          <Field label="Web value">
+            <input className={inputClass()} value={webLeadForm.estimatedValue} onChange={(event) => setWebLeadForm({ ...webLeadForm, estimatedValue: event.target.value })} inputMode="decimal" />
+          </Field>
+          <div className="flex items-end">
+            <TextButton type="submit" icon={<Plus size={16} />} disabled={webLeadState === "submitting"} className="w-full">
+              {webLeadState === "submitting" ? "Submitting" : "Submit Web Lead"}
+            </TextButton>
+          </div>
+          <div className="md:col-span-2 xl:col-span-4">
+            <Field label="Web message">
+              <textarea className={cn(inputClass(), "min-h-20 resize-y py-2")} value={webLeadForm.message} onChange={(event) => setWebLeadForm({ ...webLeadForm, message: event.target.value })} />
+            </Field>
+          </div>
+        </form>
       </Panel>
 
       <div className="grid gap-4 xl:grid-cols-[1fr_380px]">
@@ -3844,6 +7430,41 @@ function LeadOpsView({ operatingDepth, operatingActions }: { operatingDepth: Ope
             </div>
           </Panel>
           <Panel>
+            <div className="flex flex-wrap items-start justify-between gap-3">
+              <div>
+                <h2 className="text-base font-bold">Stale Follow-Up Queue</h2>
+                <p className="mt-1 text-sm leading-5 text-stone-500">Overdue lead follow-ups that should be reassigned, advanced, or closed before pipeline value goes stale.</p>
+              </div>
+              <Badge tone={staleRows.length > 0 || staleIssues.length > 0 ? "warning" : "success"}>{Math.max(staleRows.length, staleIssues.length)} open</Badge>
+            </div>
+            <div className="mt-3 flex flex-wrap items-center gap-2">
+              <TextButton type="button" variant="secondary" icon={<Clock size={16} />} disabled={!operatingActions?.runStaleLeadCheck || staleCheckState === "running"} onClick={runStaleLeadCheck}>
+                {staleCheckState === "running" ? "Checking" : "Run Stale Lead Check"}
+              </TextButton>
+            </div>
+            {staleCheckMessage ? (
+              <div className={cn("mt-3 rounded-md border p-3 text-sm font-medium", staleCheckState === "error" ? "border-rose-200 bg-rose-50 text-rose-900" : "border-emerald-200 bg-emerald-50 text-emerald-900")}>
+                {staleCheckMessage}
+              </div>
+            ) : null}
+            <div className="mt-4 grid gap-2">
+              {staleRows.length > 0 ? staleRows.map((row) => (
+                <div key={row.id} className="rounded-md border border-amber-200 bg-amber-50 p-3">
+                  <div className="flex items-start justify-between gap-3">
+                    <div className="min-w-0">
+                      <button type="button" onClick={() => setSelectedLeadId(row.id)} className="truncate text-left font-semibold text-amber-950 hover:text-[#224036]">{row.customerName}</button>
+                      <div className="mt-1 text-sm text-amber-800">{row.title}</div>
+                    </div>
+                    <Badge tone="warning">{formatStatus(row.slaStatus)}</Badge>
+                  </div>
+                  <div className="mt-2 text-xs text-amber-800">Due {dateTime(row.slaDueAt)}</div>
+                </div>
+              )) : (
+                <div className="rounded-md border border-dashed border-stone-200 p-4 text-sm text-stone-500">No stale leads in the current filters.</div>
+              )}
+            </div>
+          </Panel>
+          <Panel>
             <h2 className="text-base font-bold">Quality Queue</h2>
             <div className="mt-4 grid gap-2">
               {operatingDepth.leadOps.qualityIssues.length > 0 ? operatingDepth.leadOps.qualityIssues.slice(0, 6).map((issue) => (
@@ -3899,12 +7520,132 @@ function CostingView({ workspace, operatingDepth, operatingActions }: { workspac
   const guardrailByJobId = new Map(marginGuardrails.map((guardrail) => [guardrail.jobId, guardrail]));
   const atRiskGuardrails = marginGuardrails.filter((guardrail) => guardrail.status !== "on_track");
   const totalPriceLiftCents = atRiskGuardrails.reduce((sum, guardrail) => sum + guardrail.priceLiftCents, 0);
+  const activeServicePackages = workspace.servicePackages.filter((servicePackage) => servicePackage.active);
+  const [selectedPackageId, setSelectedPackageId] = useState(activeServicePackages[0]?.id ?? "");
+  const selectedServicePackage = activeServicePackages.find((servicePackage) => servicePackage.id === selectedPackageId) ?? activeServicePackages[0];
+  const serviceCatalogById = new Map(workspace.serviceCatalog.map((item) => [item.id, item]));
+  const selectedPackageCatalogItems = selectedServicePackage?.includedServiceCatalogItemIds.map((id) => serviceCatalogById.get(id)).filter((item): item is WorkspaceSnapshot["serviceCatalog"][number] => Boolean(item)) ?? [];
+  const selectedPackageLaborCostCents = Math.round((selectedServicePackage?.laborHours ?? 0) * (selectedServicePackage?.laborRateCents ?? 0));
+  const selectedPackageMaterialCostCents = selectedServicePackage?.materialCostCents ?? 0;
+  const selectedPackageEquipmentCostCents = selectedServicePackage?.equipmentCostCents ?? 0;
+  const selectedPackageDirectCostCents = selectedPackageLaborCostCents + selectedPackageMaterialCostCents + selectedPackageEquipmentCostCents;
+  const selectedPackageOverheadCents = Math.round(selectedPackageDirectCostCents * ((selectedServicePackage?.overheadPercent ?? 0) / 100));
+  const selectedPackageTotalCostCents = selectedPackageDirectCostCents + selectedPackageOverheadCents;
+  const selectedPackageRevenueCents = selectedServicePackage?.defaultPriceCents ?? 0;
+  const selectedPackageGrossProfitCents = selectedPackageRevenueCents - selectedPackageTotalCostCents;
+  const selectedPackageMarginPercent = selectedPackageRevenueCents > 0 ? Math.round((selectedPackageGrossProfitCents / selectedPackageRevenueCents) * 100) : 0;
+  const selectedPackageTargetRevenueCents =
+    selectedPackageTotalCostCents > 0 && selectedServicePackage?.targetMarginPercent && selectedServicePackage.targetMarginPercent < 100
+      ? Math.ceil(selectedPackageTotalCostCents / (1 - selectedServicePackage.targetMarginPercent / 100))
+      : selectedPackageRevenueCents;
+  const fertilizationProperties = workspace.properties.filter((property) => property.lawnSizeSqFt || workspace.propertyAreas.some((area) => area.propertyId === property.id && area.unit === "sq_ft"));
+  const fertilizationMaterials = workspace.materials.filter((material) => material.active);
+  const fertilizationPriceBookItems = workspace.priceBookItems.filter((item) => item.active && (item.name.toLowerCase().includes("six-step") || item.pricingModel === "per_sq_ft"));
+  const [fertPropertyId, setFertPropertyId] = useState(fertilizationProperties[0]?.id ?? "");
+  const [fertAreaId, setFertAreaId] = useState("whole");
+  const [fertMaterialId, setFertMaterialId] = useState(fertilizationMaterials.find((material) => material.name.toLowerCase().includes("grub"))?.id ?? fertilizationMaterials[0]?.id ?? "");
+  const [fertPriceBookItemId, setFertPriceBookItemId] = useState(fertilizationPriceBookItems[0]?.id ?? "");
+  const [fertApplications, setFertApplications] = useState("6");
+  const [fertMaterialRate, setFertMaterialRate] = useState("0.008");
+  const [fertLaborHours, setFertLaborHours] = useState("1.5");
+  const [fertLaborRate, setFertLaborRate] = useState("32.00");
+  const [fertEquipmentCost, setFertEquipmentCost] = useState("25.00");
+  const [fertOverheadPercent, setFertOverheadPercent] = useState("18");
+  const [fertTargetMargin, setFertTargetMargin] = useState("42");
+  const [fertSaveState, setFertSaveState] = useState<"idle" | "saving" | "success" | "error">("idle");
+  const [fertSaveMessage, setFertSaveMessage] = useState("");
+  const [approvalMessages, setApprovalMessages] = useState<Record<string, { state: "saving" | "success" | "error"; message: string; status?: "approved" | "rejected" }>>({});
+  const selectedFertProperty = workspace.properties.find((property) => property.id === fertPropertyId) ?? fertilizationProperties[0];
+  const selectedFertAreas = selectedFertProperty ? workspace.propertyAreas.filter((area) => area.propertyId === selectedFertProperty.id && area.unit === "sq_ft") : [];
+  const selectedFertArea = selectedFertAreas.find((area) => area.id === fertAreaId);
+  const selectedFertMaterial = workspace.materials.find((material) => material.id === fertMaterialId) ?? fertilizationMaterials[0];
+  const selectedFertPriceBookItem = workspace.priceBookItems.find((item) => item.id === fertPriceBookItemId) ?? fertilizationPriceBookItems[0];
+  const selectedFertRules = selectedFertPriceBookItem ? workspace.pricingRules.filter((rule) => rule.priceBookItemId === selectedFertPriceBookItem.id) : [];
+  const fertTurfAreaSqFt = Math.round(selectedFertArea?.size ?? selectedFertProperty?.lawnSizeSqFt ?? 0);
+  const fertApplicationCount = Math.max(1, Math.round(Number(fertApplications || "1")));
+  const fertPriceBookRateMatch = selectedFertPriceBookItem?.formula?.match(/lawnSizeSqFt\s*\*\s*([0-9.]+)/)?.[1];
+  const fertPriceBookRateCentsPerSqFt = fertPriceBookRateMatch ? Math.round(Number(fertPriceBookRateMatch) * 1000) / 10 : 1.8;
+  const fertAdjustments = activeFertilizationPricingAdjustments(selectedFertRules, { turfAreaSqFt: fertTurfAreaSqFt, applicationCount: fertApplicationCount });
+  const fertPricing = calculateFertilizationProgramPricing({
+    turfAreaSqFt: fertTurfAreaSqFt,
+    applicationCount: fertApplicationCount,
+    materialUnitCostCents: selectedFertMaterial?.costCents ?? 0,
+    materialRateUnitsPer1000SqFt: Number(fertMaterialRate || "0"),
+    laborHoursPerApplication: Number(fertLaborHours || "0"),
+    laborRateCents: dollarsToCents(fertLaborRate),
+    equipmentCostCentsPerApplication: dollarsToCents(fertEquipmentCost),
+    overheadPercent: Number(fertOverheadPercent || "0"),
+    targetMarginPercent: Number(fertTargetMargin || "0"),
+    priceBookRateCentsPerSqFt: fertPriceBookRateCentsPerSqFt,
+    minPriceCents: selectedFertPriceBookItem?.minPriceCents ?? 0,
+    adjustments: fertAdjustments,
+  });
+  const membersById = new Map(workspace.members.map((member) => [member.id, member]));
+  const approvalRequests = workspace.approvalRequests
+    .slice()
+    .sort((a, b) => (a.status === "pending" ? 0 : 1) - (b.status === "pending" ? 0 : 1) || a.dueAt - b.dueAt);
+  const pendingApprovalRequests = approvalRequests.filter((request) => request.status === "pending");
 
   function submitTimesheet(event: FormEvent) {
     event.preventDefault();
     if (!jobId) return;
     operatingActions?.addTimesheetEntry?.(jobId, roleName, Math.max(0, Number(hours || "0")), dollarsToCents(hourlyRate));
     setHours("1.5");
+  }
+
+  async function saveFertilizationPricing() {
+    if (!selectedFertProperty || !selectedFertMaterial) return;
+    setFertSaveState("saving");
+    setFertSaveMessage("");
+    try {
+      if (operatingActions?.priceFertilizationProgram) {
+        const result = await operatingActions.priceFertilizationProgram({
+          propertyId: selectedFertProperty.id,
+          propertyAreaId: selectedFertArea?.id,
+          materialId: selectedFertMaterial.id,
+          priceBookItemId: selectedFertPriceBookItem?.id,
+          applicationCount: fertApplicationCount,
+          materialRateUnitsPer1000SqFt: Number(fertMaterialRate || "0"),
+          laborHoursPerApplication: Number(fertLaborHours || "0"),
+          laborRateCents: dollarsToCents(fertLaborRate),
+          equipmentCostCentsPerApplication: dollarsToCents(fertEquipmentCost),
+          overheadPercent: Number(fertOverheadPercent || "0"),
+          targetMarginPercent: Number(fertTargetMargin || "0"),
+        });
+        setFertSaveMessage(`Fertilization price session saved at ${currency(result.output.recommendedPriceCents)}.`);
+      } else {
+        setFertSaveMessage(`Fertilization price calculated locally at ${currency(fertPricing.recommendedPriceCents)}.`);
+      }
+      setFertSaveState("success");
+    } catch (error) {
+      setFertSaveState("error");
+      setFertSaveMessage(error instanceof Error ? error.message : "Could not save fertilization pricing.");
+    }
+  }
+
+  async function decideApprovalRequest(request: WorkspaceSnapshot["approvalRequests"][number], decision: "approved" | "rejected") {
+    setApprovalMessages((current) => ({ ...current, [request.id]: { state: "saving", message: `${decision === "approved" ? "Approving" : "Rejecting"} ${request.estimateNumber}...` } }));
+    try {
+      if (operatingActions?.decideEstimateApproval) {
+        await operatingActions.decideEstimateApproval(request.id, decision, decision === "approved" ? "Approved from Costing margin review." : "Rejected from Costing margin review.");
+      }
+      setApprovalMessages((current) => ({
+        ...current,
+        [request.id]: {
+          state: "success",
+          status: decision,
+          message: `Approval ${decision} for ${request.estimateNumber}.`,
+        },
+      }));
+    } catch (error) {
+      setApprovalMessages((current) => ({
+        ...current,
+        [request.id]: {
+          state: "error",
+          message: error instanceof Error ? error.message : "Could not update approval request.",
+        },
+      }));
+    }
   }
 
   return (
@@ -3929,6 +7670,305 @@ function CostingView({ workspace, operatingDepth, operatingActions }: { workspac
           <Metric label="Gross profit" value={currency(operatingDepth.revenue.grossProfitCents)} tone={operatingDepth.revenue.grossProfitCents >= 0 ? "success" : "danger"} />
           <Metric label="Gross margin" value={percent(operatingDepth.revenue.grossMarginPercent)} />
           <Metric label="Worst variance" value={worstVariance ? currency(worstVariance.varianceCents) : "$0"} tone={worstVariance && worstVariance.varianceCents > 0 ? "warning" : "success"} />
+        </div>
+      </Panel>
+
+      <Panel>
+        <div className="flex flex-wrap items-start justify-between gap-4">
+          <div>
+            <h2 className="text-base font-bold">Service Package Picker</h2>
+            <p className="mt-1 max-w-3xl text-sm leading-5 text-stone-500">Catalog-backed package assumptions for labor, materials, equipment, overhead, checklist defaults, price, and margin.</p>
+          </div>
+          {selectedServicePackage ? (
+            <Badge tone={selectedPackageMarginPercent >= (selectedServicePackage.targetMarginPercent ?? 0) ? "success" : "warning"}>
+              Package margin {percent(selectedPackageMarginPercent)}
+            </Badge>
+          ) : null}
+        </div>
+        {activeServicePackages.length > 0 ? (
+          <div className="mt-4 grid gap-4 xl:grid-cols-[360px_1fr]">
+            <div className="grid gap-3">
+              <Field label="Service package">
+                <select aria-label="Service package" className={inputClass()} value={selectedServicePackage?.id ?? ""} onChange={(event) => setSelectedPackageId(event.target.value)}>
+                  {activeServicePackages.map((servicePackage) => (
+                    <option key={servicePackage.id} value={servicePackage.id}>{servicePackage.name}</option>
+                  ))}
+                </select>
+              </Field>
+              {selectedServicePackage ? (
+                <div className="rounded-md border border-stone-200 bg-stone-50 p-3">
+                  <div className="font-semibold">{selectedServicePackage.name}</div>
+                  <div className="mt-1 text-sm leading-5 text-stone-500">{selectedServicePackage.description ?? "No package description."}</div>
+                  <div className="mt-3 flex flex-wrap gap-1">
+                    <Badge>{categoryLabels[selectedServicePackage.category]}</Badge>
+                    <Badge>{formatStatus(selectedServicePackage.billingCadence)}</Badge>
+                    <Badge>{currency(selectedServicePackage.defaultPriceCents)}</Badge>
+                  </div>
+                </div>
+              ) : null}
+            </div>
+            {selectedServicePackage ? (
+              <div className="grid gap-3">
+                <div className="grid gap-3 md:grid-cols-4">
+                  <Metric label="Labor" value={`${selectedServicePackage.laborHours ?? 0}h / ${currency(selectedPackageLaborCostCents)}`} />
+                  <Metric label="Materials" value={currency(selectedPackageMaterialCostCents)} />
+                  <Metric label="Equipment" value={currency(selectedPackageEquipmentCostCents)} />
+                  <Metric label="Overhead" value={currency(selectedPackageOverheadCents)} />
+                </div>
+                <div className="grid gap-3 md:grid-cols-4">
+                  <Metric label="Price" value={currency(selectedPackageRevenueCents)} />
+                  <Metric label="Total cost" value={currency(selectedPackageTotalCostCents)} />
+                  <Metric label="Target margin" value={percent(selectedServicePackage.targetMarginPercent ?? 0)} />
+                  <Metric label="Target revenue" value={currency(selectedPackageTargetRevenueCents)} tone={selectedPackageRevenueCents >= selectedPackageTargetRevenueCents ? "success" : "warning"} />
+                </div>
+                <div className="grid gap-3 lg:grid-cols-2">
+                  <div className="rounded-md border border-stone-200 p-3">
+                    <div className="text-xs font-semibold uppercase tracking-normal text-stone-500">Included catalog items</div>
+                    <div className="mt-3 grid gap-2 text-sm">
+                      {selectedPackageCatalogItems.length > 0 ? selectedPackageCatalogItems.map((item) => (
+                        <div key={item.id} className="flex items-center justify-between gap-3 rounded-md bg-stone-50 px-3 py-2">
+                          <span className="font-medium">{item.name}</span>
+                          <span className="text-stone-500">{currency(item.defaultPriceCents)} / {item.defaultUnit}</span>
+                        </div>
+                      )) : <div className="text-stone-500">No linked catalog items.</div>}
+                    </div>
+                  </div>
+                  <div className="rounded-md border border-stone-200 p-3">
+                    <div className="text-xs font-semibold uppercase tracking-normal text-stone-500">Checklist defaults</div>
+                    <div className="mt-3 grid gap-2 text-sm">
+                      {(selectedServicePackage.checklistDefaults ?? []).length > 0 ? selectedServicePackage.checklistDefaults?.map((item) => (
+                        <div key={item} className="flex gap-2 rounded-md bg-stone-50 px-3 py-2">
+                          <Check size={15} className="mt-0.5 shrink-0 text-[#224036]" />
+                          <span>{item}</span>
+                        </div>
+                      )) : <div className="text-stone-500">No checklist defaults.</div>}
+                    </div>
+                  </div>
+                </div>
+              </div>
+            ) : null}
+          </div>
+        ) : (
+          <div className="mt-4 rounded-md border border-dashed border-stone-200 p-4 text-sm text-stone-500">No active service packages are configured yet.</div>
+        )}
+      </Panel>
+
+      <Panel>
+        <div className="flex flex-wrap items-start justify-between gap-4">
+          <div>
+            <h2 className="text-base font-bold">Fertilization Pricing Calculator</h2>
+            <p className="mt-1 max-w-3xl text-sm leading-5 text-stone-500">Price a lawn program from property area, application count, product rate, material cost, labor, equipment, overhead, price-book rules, and target margin.</p>
+          </div>
+          <Badge tone={fertPricing.grossMarginPercent >= Number(fertTargetMargin || "0") ? "success" : "warning"}>Gross margin {percent(fertPricing.grossMarginPercent)}</Badge>
+        </div>
+
+        <div className="mt-4 grid gap-3 lg:grid-cols-4">
+          <Field label="Property">
+            <select
+              aria-label="Fertilization property"
+              className={inputClass()}
+              value={selectedFertProperty?.id ?? ""}
+              onChange={(event) => {
+                setFertPropertyId(event.target.value);
+                setFertAreaId("whole");
+              }}
+            >
+              {fertilizationProperties.map((property) => (
+                <option key={property.id} value={property.id}>{property.label}</option>
+              ))}
+            </select>
+          </Field>
+          <Field label="Turf area">
+            <select aria-label="Fertilization turf area" className={inputClass()} value={selectedFertArea?.id ?? "whole"} onChange={(event) => setFertAreaId(event.target.value)}>
+              <option value="whole">Whole property - {fertTurfAreaSqFt.toLocaleString()} sq ft</option>
+              {selectedFertAreas.map((area) => (
+                <option key={area.id} value={area.id}>{area.name} - {(area.size ?? 0).toLocaleString()} sq ft</option>
+              ))}
+            </select>
+          </Field>
+          <Field label="Material product">
+            <select aria-label="Fertilization material product" className={inputClass()} value={selectedFertMaterial?.id ?? ""} onChange={(event) => setFertMaterialId(event.target.value)}>
+              {fertilizationMaterials.map((material) => (
+                <option key={material.id} value={material.id}>{material.name} - {currency(material.costCents)} / {material.unit}</option>
+              ))}
+            </select>
+          </Field>
+          <Field label="Price book">
+            <select aria-label="Fertilization price book item" className={inputClass()} value={selectedFertPriceBookItem?.id ?? ""} onChange={(event) => setFertPriceBookItemId(event.target.value)}>
+              {fertilizationPriceBookItems.map((item) => (
+                <option key={item.id} value={item.id}>{item.name}</option>
+              ))}
+            </select>
+          </Field>
+        </div>
+
+        <div className="mt-3 grid gap-3 md:grid-cols-3 xl:grid-cols-7">
+          <Field label="Applications">
+            <input aria-label="Fertilization applications" className={inputClass()} value={fertApplications} onChange={(event) => setFertApplications(event.target.value)} inputMode="numeric" />
+          </Field>
+          <Field label="Material rate / 1k sq ft">
+            <input aria-label="Fertilization material rate" className={inputClass()} value={fertMaterialRate} onChange={(event) => setFertMaterialRate(event.target.value)} inputMode="decimal" />
+          </Field>
+          <Field label="Labor hrs / app">
+            <input aria-label="Fertilization labor hours" className={inputClass()} value={fertLaborHours} onChange={(event) => setFertLaborHours(event.target.value)} inputMode="decimal" />
+          </Field>
+          <Field label="Labor cost / hr">
+            <input aria-label="Fertilization labor rate" className={inputClass()} value={fertLaborRate} onChange={(event) => setFertLaborRate(event.target.value)} inputMode="decimal" />
+          </Field>
+          <Field label="Equipment / app">
+            <input aria-label="Fertilization equipment cost" className={inputClass()} value={fertEquipmentCost} onChange={(event) => setFertEquipmentCost(event.target.value)} inputMode="decimal" />
+          </Field>
+          <Field label="Overhead %">
+            <input aria-label="Fertilization overhead percent" className={inputClass()} value={fertOverheadPercent} onChange={(event) => setFertOverheadPercent(event.target.value)} inputMode="decimal" />
+          </Field>
+          <Field label="Target margin">
+            <input aria-label="Fertilization target margin" className={inputClass()} value={fertTargetMargin} onChange={(event) => setFertTargetMargin(event.target.value)} inputMode="decimal" />
+          </Field>
+        </div>
+
+        <div className="mt-4 grid gap-3 sm:grid-cols-2 xl:grid-cols-6">
+          <Metric label="Recommended price" value={currency(fertPricing.recommendedPriceCents)} tone="success" />
+          <Metric label="Price book" value={currency(fertPricing.priceBookRevenueCents)} />
+          <Metric label="Target revenue" value={currency(fertPricing.targetRevenueCents)} />
+          <Metric label="Material cost" value={currency(fertPricing.materialCostCents)} />
+          <Metric label="Total cost" value={currency(fertPricing.totalCostCents)} />
+          <Metric label="Per application" value={currency(fertPricing.pricePerApplicationCents)} />
+        </div>
+
+        <div className="mt-4 grid gap-3 xl:grid-cols-[1fr_320px]">
+          <div className="rounded-md border border-stone-200 p-3">
+            <div className="text-xs font-semibold uppercase tracking-normal text-stone-500">Price rules</div>
+            <div className="mt-3 grid gap-2 text-sm">
+              {selectedFertRules.length > 0 ? selectedFertRules.map((rule) => {
+                const applied = fertAdjustments.some((adjustment) => adjustment.name === rule.name);
+                return (
+                  <div key={rule.id} className="flex flex-wrap items-center justify-between gap-3 rounded-md bg-stone-50 px-3 py-2">
+                    <div>
+                      <div className="font-semibold">{rule.name}</div>
+                      <div className="text-stone-500">{rule.adjustmentType} {rule.adjustmentValue}{rule.adjustmentType === "percent" ? "%" : ""}</div>
+                    </div>
+                    <Badge tone={applied ? "success" : "neutral"}>{applied ? "applied" : "not applied"}</Badge>
+                  </div>
+                );
+              }) : <div className="text-stone-500">No price rules configured for this item.</div>}
+            </div>
+          </div>
+          <div className="rounded-md border border-stone-200 p-3">
+            <div className="text-xs font-semibold uppercase tracking-normal text-stone-500">Fertilizer math</div>
+            <div className="mt-3 grid gap-2 text-sm">
+              <div className="flex justify-between gap-3"><span>Area</span><strong>{fertPricing.turfAreaSqFt.toLocaleString()} sq ft</strong></div>
+              <div className="flex justify-between gap-3"><span>Units / app</span><strong>{fertPricing.materialUnitsPerApplication}</strong></div>
+              <div className="flex justify-between gap-3"><span>Total units</span><strong>{fertPricing.totalMaterialUnits}</strong></div>
+              <div className="flex justify-between gap-3"><span>Per 1k sq ft</span><strong>{currency(fertPricing.pricePer1000SqFtCents)}</strong></div>
+            </div>
+            <TextButton type="button" icon={<Calculator size={16} />} className="mt-4 w-full" onClick={() => void saveFertilizationPricing()} disabled={fertSaveState === "saving" || !selectedFertProperty || !selectedFertMaterial}>
+              {fertSaveState === "saving" ? "Saving" : "Save Fertilization Price Session"}
+            </TextButton>
+            {fertSaveMessage ? (
+              <div className={cn("mt-3 rounded-md border px-3 py-2 text-sm font-semibold", fertSaveState === "error" ? "border-rose-200 bg-rose-50 text-rose-800" : "border-emerald-200 bg-emerald-50 text-emerald-800")}>{fertSaveMessage}</div>
+            ) : null}
+          </div>
+        </div>
+      </Panel>
+
+      <Panel>
+        <div className="flex flex-wrap items-start justify-between gap-4">
+          <div>
+            <h2 className="text-base font-bold">Estimate Approval Queue</h2>
+            <p className="mt-1 max-w-3xl text-sm leading-5 text-stone-500">Approval required when discounts, low margin, unusual scope, or material constraints make an estimate risky before sending.</p>
+          </div>
+          <div className="grid grid-cols-3 gap-2 text-center">
+            <div className="rounded-md border border-stone-200 bg-stone-50 p-3" aria-label={`Pending approvals ${pendingApprovalRequests.length}`}>
+              <div className="text-xs font-semibold uppercase tracking-normal text-stone-500">Pending</div>
+              <div className="mt-1 text-lg font-bold">{pendingApprovalRequests.length}</div>
+            </div>
+            <div className="rounded-md border border-stone-200 bg-stone-50 p-3">
+              <div className="text-xs font-semibold uppercase tracking-normal text-stone-500">Avg risk</div>
+              <div className="mt-1 text-lg font-bold">{approvalRequests.length ? Math.round(approvalRequests.reduce((sum, request) => sum + request.riskScore, 0) / approvalRequests.length) : 0}</div>
+            </div>
+            <div className="rounded-md border border-stone-200 bg-stone-50 p-3">
+              <div className="text-xs font-semibold uppercase tracking-normal text-stone-500">Blocked value</div>
+              <div className="mt-1 text-lg font-bold">{currency(pendingApprovalRequests.reduce((sum, request) => sum + request.totalCents, 0))}</div>
+            </div>
+          </div>
+        </div>
+        <div className="mt-4 grid gap-3">
+          {approvalRequests.length > 0 ? approvalRequests.slice(0, 5).map((request) => {
+            const localDecision = approvalMessages[request.id]?.status;
+            const displayStatus = localDecision ?? request.status;
+            const assignedApprover = request.assignedApproverUserId ? membersById.get(request.assignedApproverUserId) : undefined;
+            const requester = request.requestedByUserId ? membersById.get(request.requestedByUserId) : undefined;
+            const message = approvalMessages[request.id];
+            return (
+              <div key={request.id} className="rounded-md border border-stone-200 p-3">
+                <div className="flex flex-wrap items-start justify-between gap-3">
+                  <div>
+                    <div className="flex flex-wrap items-center gap-2">
+                      <div className="font-semibold">{request.estimateNumber} - {request.customerName}</div>
+                      <Badge tone={displayStatus === "approved" ? "success" : displayStatus === "rejected" ? "danger" : "warning"}>{displayStatus === "pending" ? "Approval required" : formatStatus(displayStatus)}</Badge>
+                    </div>
+                    <div className="mt-1 text-sm text-stone-500">
+                      Requested by {requester?.name ?? "sales"} - assigned to {assignedApprover?.name ?? "manager"} - due {shortDate(request.dueAt)}
+                    </div>
+                  </div>
+                  <div className="grid grid-cols-3 gap-2 text-right text-sm">
+                    <div>
+                      <div className="font-bold">{percent(request.grossMarginPercent)}</div>
+                      <div className="text-xs text-stone-500">Margin</div>
+                    </div>
+                    <div>
+                      <div className="font-bold">{percent(request.discountPercent)}</div>
+                      <div className="text-xs text-stone-500">Discount</div>
+                    </div>
+                    <div>
+                      <div className="font-bold">{request.riskScore}</div>
+                      <div className="text-xs text-stone-500">Risk</div>
+                    </div>
+                  </div>
+                </div>
+                <div className="mt-3 grid gap-2 lg:grid-cols-[1fr_220px]">
+                  <div>
+                    <div className="text-xs font-semibold uppercase tracking-normal text-stone-500">Risk reasons</div>
+                    <div className="mt-2 flex flex-wrap gap-2">
+                      {request.reasonDetails.map((reason) => (
+                        <div key={`${request.id}-${reason.code}`} className={cn("rounded-md border px-3 py-2 text-sm", reason.severity === "critical" ? "border-rose-200 bg-rose-50 text-rose-900" : "border-amber-200 bg-amber-50 text-amber-900")}>
+                          <div className="font-semibold">{reason.label}</div>
+                          <div className="mt-1 max-w-sm text-xs leading-5">{reason.detail}</div>
+                        </div>
+                      ))}
+                    </div>
+                  </div>
+                  <div className="grid content-start gap-2">
+                    <button
+                      type="button"
+                      aria-label={`Approve estimate ${request.estimateNumber}`}
+                      disabled={displayStatus !== "pending" || message?.state === "saving"}
+                      onClick={() => void decideApprovalRequest(request, "approved")}
+                      className="inline-flex min-h-9 items-center justify-center gap-2 rounded-md bg-[#224036] px-3 text-sm font-semibold text-white shadow-sm transition hover:bg-[#1a332b] disabled:cursor-not-allowed disabled:opacity-50"
+                    >
+                      <Check size={15} />
+                      Approve Estimate
+                    </button>
+                    <button
+                      type="button"
+                      aria-label={`Reject estimate ${request.estimateNumber}`}
+                      disabled={displayStatus !== "pending" || message?.state === "saving"}
+                      onClick={() => void decideApprovalRequest(request, "rejected")}
+                      className="inline-flex min-h-9 items-center justify-center gap-2 rounded-md border border-stone-200 bg-white px-3 text-sm font-semibold text-stone-800 shadow-sm transition hover:bg-stone-50 disabled:cursor-not-allowed disabled:opacity-50"
+                    >
+                      <X size={15} />
+                      Reject Estimate
+                    </button>
+                    {message ? (
+                      <div className={cn("rounded-md border px-3 py-2 text-xs font-semibold", message.state === "error" ? "border-rose-200 bg-rose-50 text-rose-800" : "border-emerald-200 bg-emerald-50 text-emerald-800")}>{message.message}</div>
+                    ) : null}
+                  </div>
+                </div>
+              </div>
+            );
+          }) : (
+            <div className="rounded-md border border-dashed border-stone-200 p-4 text-sm text-stone-500">No approval requests are queued.</div>
+          )}
         </div>
       </Panel>
 
@@ -4216,6 +8256,36 @@ function ProfitView({ operatingDepth }: { operatingDepth: OperatingDepth }) {
         <div className="grid gap-4">
           <Panel className="overflow-hidden p-0">
             <div className="border-b border-stone-200 p-4">
+              <div className="flex items-center justify-between gap-3">
+                <h2 className="text-base font-bold">Service-Line Profitability</h2>
+                <Badge>{operatingDepth.revenue.serviceLineProfitability.length} lines</Badge>
+              </div>
+            </div>
+            <div className="grid gap-2 p-4 md:grid-cols-2">
+              {operatingDepth.revenue.serviceLineProfitability.map((line, index) => (
+                <div key={line.serviceCategory} role="group" aria-label={`Service line profitability ${line.serviceCategory}`} className="rounded-md border border-stone-200 p-3">
+                  <div className="flex items-start justify-between gap-3">
+                    <div>
+                      <div className="text-xs font-semibold uppercase text-stone-500">Rank {index + 1}</div>
+                      <div className="mt-1 font-semibold">{line.label}</div>
+                    </div>
+                    <Badge tone={line.grossMarginPercent >= 35 ? "success" : line.grossMarginPercent < 20 ? "danger" : "warning"}>{percent(line.grossMarginPercent)}</Badge>
+                  </div>
+                  <div className="mt-3 grid grid-cols-3 gap-2 text-sm">
+                    <div><div className="font-bold">{currency(line.revenueCents)}</div><div className="text-xs text-stone-500">Revenue</div></div>
+                    <div><div className="font-bold">{currency(line.grossProfitCents)}</div><div className="text-xs text-stone-500">Profit</div></div>
+                    <div><div className="font-bold">{line.jobCount}</div><div className="text-xs text-stone-500">Jobs</div></div>
+                  </div>
+                  <div className="mt-3 text-xs text-stone-500">
+                    Collected {currency(line.collectedCents)} - Labor {currency(line.laborCostCents)} - Materials {currency(line.materialCostCents)} - Equipment {currency(line.equipmentCostCents)}
+                  </div>
+                </div>
+              ))}
+            </div>
+          </Panel>
+
+          <Panel className="overflow-hidden p-0">
+            <div className="border-b border-stone-200 p-4">
               <h2 className="text-base font-bold">Profitability Drilldown</h2>
             </div>
             <div className="overflow-x-auto">
@@ -4286,20 +8356,36 @@ function CostIntelligenceView({ operatingDepth, operatingActions }: { operatingD
   const [laborRole, setLaborRole] = useState("Technician");
   const [laborCost, setLaborCost] = useState("29.00");
   const [laborBillable, setLaborBillable] = useState("68.00");
+  const [laborRateMessage, setLaborRateMessage] = useState("");
   const [vendorName, setVendorName] = useState("Local supplier");
   const [itemName, setItemName] = useState("19-0-6 fertilizer");
   const [itemCategory, setItemCategory] = useState<ServiceCategory>("lawn_care");
   const [itemUnit, setItemUnit] = useState("bag");
   const [itemCost, setItemCost] = useState("44.00");
+  const [vendorItemMessage, setVendorItemMessage] = useState("");
 
   function submitLabor(event: FormEvent) {
     event.preventDefault();
-    operatingActions?.upsertLaborRate?.({ roleName: laborRole, hourlyCostCents: dollarsToCents(laborCost), billableRateCents: dollarsToCents(laborBillable) });
+    const roleName = laborRole.trim();
+    if (!roleName) {
+      setLaborRateMessage("Labor role is required.");
+      return;
+    }
+    operatingActions?.upsertLaborRate?.({ roleName, hourlyCostCents: dollarsToCents(laborCost), billableRateCents: dollarsToCents(laborBillable) });
+    setLaborRateMessage(`Labor rate ${roleName} saved.`);
   }
 
   function submitVendor(event: FormEvent) {
     event.preventDefault();
-    operatingActions?.upsertVendorCatalogItem?.({ vendorName, itemName, category: itemCategory, unit: itemUnit, unitCostCents: dollarsToCents(itemCost) });
+    const nextVendorName = vendorName.trim();
+    const nextItemName = itemName.trim();
+    const nextUnit = itemUnit.trim();
+    if (!nextVendorName || !nextItemName || !nextUnit) {
+      setVendorItemMessage("Vendor, item, and unit are required.");
+      return;
+    }
+    operatingActions?.upsertVendorCatalogItem?.({ vendorName: nextVendorName, itemName: nextItemName, category: itemCategory, unit: nextUnit, unitCostCents: dollarsToCents(itemCost) });
+    setVendorItemMessage(`Vendor item ${nextItemName} saved.`);
   }
 
   return (
@@ -4375,11 +8461,11 @@ function CostIntelligenceView({ operatingDepth, operatingActions }: { operatingD
             <Panel>
               <h2 className="text-base font-bold">Labor Rate Cards</h2>
               <div className="mt-4 grid gap-2">
-                {operatingDepth.costIntelligence.laborRates.map((rate) => (
-                  <div key={rate.id} className="rounded-md border border-stone-200 p-3">
-                    <div className="flex items-center justify-between gap-3">
-                      <div className="font-semibold">{rate.roleName}</div>
-                      <Badge>{rate.source}</Badge>
+                  {operatingDepth.costIntelligence.laborRates.map((rate) => (
+                    <div key={rate.id} role="group" aria-label={`Labor rate ${rate.roleName}`} className="rounded-md border border-stone-200 p-3">
+                      <div className="flex items-center justify-between gap-3">
+                        <div className="font-semibold">{rate.roleName}</div>
+                        <Badge>{rate.source}</Badge>
                     </div>
                     <div className="mt-1 text-sm text-stone-500">{currency(rate.hourlyCostCents)} cost / {rate.billableRateCents ? `${currency(rate.billableRateCents)} billable` : "no billable rate"}</div>
                   </div>
@@ -4407,30 +8493,32 @@ function CostIntelligenceView({ operatingDepth, operatingActions }: { operatingD
           <Panel>
             <h2 className="text-base font-bold">Labor Override</h2>
             <form onSubmit={submitLabor} className="mt-4 grid gap-3">
-              <Field label="Role"><input className={inputClass()} value={laborRole} onChange={(event) => setLaborRole(event.target.value)} /></Field>
+              <Field label="Role"><input aria-label="Labor rate role" className={inputClass()} value={laborRole} onChange={(event) => setLaborRole(event.target.value)} /></Field>
               <div className="grid grid-cols-2 gap-3">
-                <Field label="Cost / hr"><input className={inputClass()} value={laborCost} onChange={(event) => setLaborCost(event.target.value)} inputMode="decimal" /></Field>
-                <Field label="Bill / hr"><input className={inputClass()} value={laborBillable} onChange={(event) => setLaborBillable(event.target.value)} inputMode="decimal" /></Field>
+                <Field label="Cost / hr"><input aria-label="Labor cost per hour" className={inputClass()} value={laborCost} onChange={(event) => setLaborCost(event.target.value)} inputMode="decimal" /></Field>
+                <Field label="Bill / hr"><input aria-label="Labor billable per hour" className={inputClass()} value={laborBillable} onChange={(event) => setLaborBillable(event.target.value)} inputMode="decimal" /></Field>
               </div>
               <TextButton type="submit" icon={<Plus size={16} />} variant={operatingActions?.upsertLaborRate ? "primary" : "secondary"}>Save Rate</TextButton>
+              {laborRateMessage ? <div className="rounded-md border border-emerald-200 bg-emerald-50 px-3 py-2 text-sm font-semibold text-emerald-900">{laborRateMessage}</div> : null}
             </form>
           </Panel>
 
           <Panel>
             <h2 className="text-base font-bold">Vendor Item</h2>
             <form onSubmit={submitVendor} className="mt-4 grid gap-3">
-              <Field label="Vendor"><input className={inputClass()} value={vendorName} onChange={(event) => setVendorName(event.target.value)} /></Field>
-              <Field label="Item"><input className={inputClass()} value={itemName} onChange={(event) => setItemName(event.target.value)} /></Field>
+              <Field label="Vendor"><input aria-label="Vendor catalog supplier" className={inputClass()} value={vendorName} onChange={(event) => setVendorName(event.target.value)} /></Field>
+              <Field label="Item"><input aria-label="Vendor catalog item name" className={inputClass()} value={itemName} onChange={(event) => setItemName(event.target.value)} /></Field>
               <Field label="Category">
-                <select className={inputClass()} value={itemCategory} onChange={(event) => setItemCategory(event.target.value as ServiceCategory)}>
+                <select aria-label="Vendor catalog category" className={inputClass()} value={itemCategory} onChange={(event) => setItemCategory(event.target.value as ServiceCategory)}>
                   {Object.entries(categoryLabels).map(([value, label]) => <option key={value} value={value}>{label}</option>)}
                 </select>
               </Field>
               <div className="grid grid-cols-2 gap-3">
-                <Field label="Unit"><input className={inputClass()} value={itemUnit} onChange={(event) => setItemUnit(event.target.value)} /></Field>
-                <Field label="Cost"><input className={inputClass()} value={itemCost} onChange={(event) => setItemCost(event.target.value)} inputMode="decimal" /></Field>
+                <Field label="Unit"><input aria-label="Vendor catalog unit" className={inputClass()} value={itemUnit} onChange={(event) => setItemUnit(event.target.value)} /></Field>
+                <Field label="Cost"><input aria-label="Vendor catalog cost per unit" className={inputClass()} value={itemCost} onChange={(event) => setItemCost(event.target.value)} inputMode="decimal" /></Field>
               </div>
               <TextButton type="submit" icon={<Plus size={16} />} variant={operatingActions?.upsertVendorCatalogItem ? "primary" : "secondary"}>Save Item</TextButton>
+              {vendorItemMessage ? <div className="rounded-md border border-emerald-200 bg-emerald-50 px-3 py-2 text-sm font-semibold text-emerald-900">{vendorItemMessage}</div> : null}
             </form>
           </Panel>
 
@@ -4438,7 +8526,7 @@ function CostIntelligenceView({ operatingDepth, operatingActions }: { operatingD
             <h2 className="text-base font-bold">Vendor Catalog</h2>
             <div className="mt-4 grid gap-2">
               {operatingDepth.costIntelligence.vendorCatalogs.slice(0, 6).map((item) => (
-                <div key={item.id} className="rounded-md border border-stone-200 p-3">
+                <div key={item.id} role="group" aria-label={`Vendor catalog item ${item.itemName}`} className="rounded-md border border-stone-200 p-3">
                   <div className="flex items-center justify-between gap-3">
                     <div className="font-semibold">{item.itemName}</div>
                     <Badge>{item.source}</Badge>
@@ -4462,6 +8550,7 @@ function AdminView({
   setCrewName,
   createCrew,
   toggleService,
+  upsertServiceCatalogItem,
 }: {
   workspace: WorkspaceSnapshot;
   operatingDepth: OperatingDepth;
@@ -4471,6 +8560,14 @@ function AdminView({
   setCrewName: (value: string) => void;
   createCrew: (event: FormEvent) => void;
   toggleService: (itemId: string) => void;
+  upsertServiceCatalogItem: (input: {
+    itemId?: string;
+    name: string;
+    category: ServiceCategory;
+    defaultUnit: string;
+    defaultPriceCents: number;
+    active: boolean;
+  }) => Promise<string>;
 }) {
   const roleOptions: Role[] = ["owner", "admin", "manager", "sales", "dispatcher", "crew_lead", "technician"];
   const analytics = operatingDepth.admin.ownerAnalytics;
@@ -4478,6 +8575,177 @@ function AdminView({
     groups[tag.category] = [...(groups[tag.category] ?? []), tag];
     return groups;
   }, {});
+  const [inviteEmail, setInviteEmail] = useState("");
+  const [inviteName, setInviteName] = useState("");
+  const [inviteRole, setInviteRole] = useState<Role>("technician");
+  const [inviteExpiresInDays, setInviteExpiresInDays] = useState("14");
+  const [inviteMessage, setInviteMessage] = useState("");
+  const [optimisticInviteMembers, setOptimisticInviteMembers] = useState<OperatingDepth["admin"]["members"]>([]);
+  const [serviceCatalogForm, setServiceCatalogForm] = useState<ServiceCatalogFormState>(() => defaultServiceCatalogForm());
+  const [serviceCatalogMessage, setServiceCatalogMessage] = useState<{ state: "success" | "error" | "pending"; message: string } | null>(null);
+  const [leadStatusForm, setLeadStatusForm] = useState<LeadStatusSettingFormState>(() => defaultLeadStatusSettingForm());
+  const [leadStatusMessage, setLeadStatusMessage] = useState("");
+  const [auditSearch, setAuditSearch] = useState("");
+  const [auditModuleFilter, setAuditModuleFilter] = useState("all");
+  const [auditActionFilter, setAuditActionFilter] = useState("all");
+  const [auditEntityFilter, setAuditEntityFilter] = useState("all");
+  const [auditActorFilter, setAuditActorFilter] = useState("all");
+  const [auditDateFilter, setAuditDateFilter] = useState("all");
+  const displayedMembers = useMemo(
+    () => [
+      ...optimisticInviteMembers,
+      ...operatingDepth.admin.members.filter((member) => !optimisticInviteMembers.some((optimistic) => optimistic.email === member.email)),
+    ],
+    [operatingDepth.admin.members, optimisticInviteMembers],
+  );
+  const memberStatusCounts = displayedMembers.reduce<Record<string, number>>((counts, member) => {
+    counts[member.status] = (counts[member.status] ?? 0) + 1;
+    return counts;
+  }, {});
+  const sortedWorkflowStatuses = useMemo(
+    () => [...operatingDepth.leadOps.statusSettings].sort((left, right) => left.sortOrder - right.sortOrder),
+    [operatingDepth.leadOps.statusSettings],
+  );
+  const auditEvents = operatingDepth.admin.auditEvents;
+  const auditModuleOptions = useMemo(() => [...new Set(auditEvents.map((event) => event.module))].sort(), [auditEvents]);
+  const auditActionOptions = useMemo(() => [...new Set(auditEvents.map((event) => event.action))].sort(), [auditEvents]);
+  const auditEntityOptions = useMemo(() => [...new Set(auditEvents.map((event) => event.entityType))].sort(), [auditEvents]);
+  const auditActorOptions = useMemo(() => [...new Set(auditEvents.map((event) => event.actorName))].sort(), [auditEvents]);
+  const filteredAuditEvents = useMemo(() => {
+    const normalizedSearch = auditSearch.trim().toLowerCase();
+    const auditTimeAnchor = auditEvents[0]?.createdAt ?? 0;
+    const cutoff =
+      auditDateFilter === "today"
+        ? auditTimeAnchor - 24 * 60 * 60 * 1000
+        : auditDateFilter === "7d"
+          ? auditTimeAnchor - 7 * 24 * 60 * 60 * 1000
+          : auditDateFilter === "30d"
+            ? auditTimeAnchor - 30 * 24 * 60 * 60 * 1000
+            : 0;
+
+    return auditEvents.filter((event) => {
+      const searchable = [event.action, event.summary, event.entityType, event.entityId, event.actorName, event.module, event.exportState, event.requestId ?? "", ...event.changedFields].join(" ").toLowerCase();
+      return (
+        (!normalizedSearch || searchable.includes(normalizedSearch)) &&
+        (auditModuleFilter === "all" || event.module === auditModuleFilter) &&
+        (auditActionFilter === "all" || event.action === auditActionFilter) &&
+        (auditEntityFilter === "all" || event.entityType === auditEntityFilter) &&
+        (auditActorFilter === "all" || event.actorName === auditActorFilter) &&
+        (!cutoff || event.createdAt >= cutoff)
+      );
+    });
+  }, [auditActionFilter, auditActorFilter, auditDateFilter, auditEntityFilter, auditEvents, auditModuleFilter, auditSearch]);
+  const auditExportCount = filteredAuditEvents.filter((event) => event.exportState !== "not_exported").length;
+  const auditChangedFieldCount = filteredAuditEvents.reduce((total, event) => total + event.changedFields.length, 0);
+
+  function submitInvite(event: FormEvent) {
+    event.preventDefault();
+    const email = inviteEmail.trim().toLowerCase();
+    if (!email) return;
+    const optimisticMember = {
+      id: `local-invite-${Date.now()}`,
+      userId: `local-user-${email}`,
+      name: inviteName.trim() || email,
+      email,
+      role: inviteRole,
+      status: "invited",
+    };
+    setOptimisticInviteMembers((current) => [optimisticMember, ...current.filter((member) => member.email !== email)]);
+    operatingActions?.inviteMember?.({
+      email,
+      name: inviteName.trim() || undefined,
+      role: inviteRole,
+      expiresInDays: Math.max(1, Math.min(30, Math.round(Number(inviteExpiresInDays || "14")))),
+    });
+    setInviteMessage(`Invitation queued for ${email}.`);
+    setInviteEmail("");
+    setInviteName("");
+    setInviteRole("technician");
+    setInviteExpiresInDays("14");
+  }
+
+  function updateOptimisticInvite(memberId: string, status: "expired" | "revoked") {
+    setOptimisticInviteMembers((current) => current.map((member) => (member.id === memberId ? { ...member, status } : member)));
+  }
+
+  function expireInvite(memberId: string) {
+    updateOptimisticInvite(memberId, "expired");
+    if (!memberId.startsWith("local-invite-")) operatingActions?.expireMemberInvite?.(memberId);
+  }
+
+  function revokeInvite(memberId: string) {
+    updateOptimisticInvite(memberId, "revoked");
+    if (!memberId.startsWith("local-invite-")) operatingActions?.revokeMemberInvite?.(memberId);
+  }
+
+  function editServiceCatalogItem(item: WorkspaceSnapshot["serviceCatalog"][number]) {
+    setServiceCatalogForm({
+      itemId: item.id,
+      name: item.name,
+      category: item.category,
+      defaultUnit: item.defaultUnit,
+      defaultPrice: String(Math.round(item.defaultPriceCents / 100)),
+      active: item.active,
+    });
+  }
+
+  function editLeadStatusSetting(setting: OperatingDepth["leadOps"]["statusSettings"][number]) {
+    setLeadStatusForm({
+      settingId: setting.id,
+      status: setting.status,
+      label: setting.label,
+      color: setting.color,
+      sortOrder: String(setting.sortOrder),
+      terminal: setting.terminal,
+      active: setting.active,
+    });
+    setLeadStatusMessage("");
+  }
+
+  function submitLeadStatusSetting(event: FormEvent) {
+    event.preventDefault();
+    const label = leadStatusForm.label.trim();
+    if (!label) {
+      setLeadStatusMessage("Workflow status label is required.");
+      return;
+    }
+    operatingActions?.upsertLeadStatusSetting?.({
+      id: leadStatusForm.settingId || undefined,
+      status: leadStatusForm.status,
+      label,
+      color: leadStatusForm.color.trim() || "#64748b",
+      sortOrder: Math.max(0, Math.round(Number(leadStatusForm.sortOrder || "0"))),
+      terminal: leadStatusForm.terminal,
+      active: leadStatusForm.active,
+    });
+    setLeadStatusMessage(`Workflow status ${label} saved.`);
+  }
+
+  async function submitServiceCatalogItem(event: FormEvent) {
+    event.preventDefault();
+    const name = serviceCatalogForm.name.trim();
+    const defaultUnit = serviceCatalogForm.defaultUnit.trim();
+    if (!name || !defaultUnit) {
+      setServiceCatalogMessage({ state: "error", message: "Service name and unit are required." });
+      return;
+    }
+    setServiceCatalogMessage({ state: "pending", message: `Saving service ${name}.` });
+    try {
+      const wasEditing = Boolean(serviceCatalogForm.itemId);
+      await upsertServiceCatalogItem({
+        itemId: serviceCatalogForm.itemId || undefined,
+        name,
+        category: serviceCatalogForm.category,
+        defaultUnit,
+        defaultPriceCents: dollarsToCents(serviceCatalogForm.defaultPrice),
+        active: serviceCatalogForm.active,
+      });
+      setServiceCatalogMessage({ state: "success", message: `Service ${name} saved to catalog.` });
+      if (!wasEditing) setServiceCatalogForm(defaultServiceCatalogForm());
+    } catch (error) {
+      setServiceCatalogMessage({ state: "error", message: error instanceof Error ? error.message : "Service could not be saved." });
+    }
+  }
 
   return (
     <div className="grid gap-4">
@@ -4491,7 +8759,7 @@ function AdminView({
             <h2 className="mt-2 text-2xl font-bold tracking-normal">Tenant settings, permissions, crews, and catalog</h2>
           </div>
           <div className="grid grid-cols-2 gap-2 sm:grid-cols-4">
-            <Metric label="Members" value={operatingDepth.admin.members.length} />
+            <Metric label="Members" value={displayedMembers.length} />
             <Metric label="Flags" value={operatingDepth.admin.featureFlags.length} />
             <Metric label="Crews" value={workspace.crews.length} />
             <Metric label="Catalog" value={workspace.serviceCatalog.length} />
@@ -4552,6 +8820,75 @@ function AdminView({
               </div>
             ))}
           </div>
+          <div className="mt-5 border-t border-stone-200 pt-4">
+            <h3 className="text-sm font-bold">Lead Quality Thresholds</h3>
+            <div className="mt-3 grid gap-2">
+              {leadQualityThresholds.map((threshold) => (
+                <div key={threshold.band} className="flex items-center justify-between gap-3 rounded-md border border-stone-200 bg-stone-50 p-2 text-sm">
+                  <div>
+                    <div className="font-semibold">{threshold.label}</div>
+                    <div className="text-xs text-stone-500">{threshold.action}</div>
+                  </div>
+                  <Badge tone={threshold.minimumScore >= 85 ? "success" : threshold.minimumScore >= 55 ? "warning" : "danger"}>{threshold.minimumScore}+</Badge>
+                </div>
+              ))}
+            </div>
+          </div>
+          <div className="mt-5 border-t border-stone-200 pt-4">
+            <h3 className="text-sm font-bold">Workflow Status Settings</h3>
+            <form onSubmit={submitLeadStatusSetting} className="mt-3 grid gap-3 rounded-md border border-stone-200 bg-stone-50 p-3">
+              <Field label="Status">
+                <select aria-label="Workflow status code" className={inputClass()} value={leadStatusForm.status} onChange={(event) => setLeadStatusForm({ ...leadStatusForm, status: event.target.value as LeadStatusSettingCode })}>
+                  {sortedWorkflowStatuses.map((setting) => (
+                    <option key={setting.status} value={setting.status}>{formatStatus(setting.status)}</option>
+                  ))}
+                </select>
+              </Field>
+              <Field label="Label">
+                <input aria-label="Workflow status label" className={inputClass()} value={leadStatusForm.label} onChange={(event) => setLeadStatusForm({ ...leadStatusForm, label: event.target.value })} />
+              </Field>
+              <div className="grid grid-cols-[1fr_110px] gap-3">
+                <Field label="Color">
+                  <input aria-label="Workflow status color" className={inputClass()} value={leadStatusForm.color} onChange={(event) => setLeadStatusForm({ ...leadStatusForm, color: event.target.value })} />
+                </Field>
+                <Field label="Order">
+                  <input aria-label="Workflow status order" className={inputClass()} value={leadStatusForm.sortOrder} onChange={(event) => setLeadStatusForm({ ...leadStatusForm, sortOrder: event.target.value })} inputMode="numeric" />
+                </Field>
+              </div>
+              <div className="grid gap-2 sm:grid-cols-2">
+                <label className="flex h-10 items-center gap-2 rounded-md border border-stone-200 bg-white px-3 text-sm font-semibold text-stone-700">
+                  <input aria-label="Workflow status terminal" type="checkbox" checked={leadStatusForm.terminal} onChange={(event) => setLeadStatusForm({ ...leadStatusForm, terminal: event.target.checked })} />
+                  Terminal
+                </label>
+                <label className="flex h-10 items-center gap-2 rounded-md border border-stone-200 bg-white px-3 text-sm font-semibold text-stone-700">
+                  <input aria-label="Workflow status active" type="checkbox" checked={leadStatusForm.active} onChange={(event) => setLeadStatusForm({ ...leadStatusForm, active: event.target.checked })} />
+                  Active
+                </label>
+              </div>
+              <TextButton type="submit" icon={<Settings size={16} />} disabled={!operatingActions?.upsertLeadStatusSetting}>Save Workflow Status</TextButton>
+              {leadStatusMessage ? <div className="rounded-md border border-emerald-200 bg-emerald-50 px-3 py-2 text-sm font-semibold text-emerald-900">{leadStatusMessage}</div> : null}
+            </form>
+            <div className="mt-3 grid gap-2">
+              {sortedWorkflowStatuses.map((setting) => (
+                <div key={setting.id} role="group" aria-label={`Workflow status ${setting.status}`} className="rounded-md border border-stone-200 p-3">
+                  <div className="flex items-start justify-between gap-3">
+                    <div>
+                      <div className="flex items-center gap-2 font-semibold">
+                        <span className="h-2.5 w-2.5 rounded-full" style={{ background: setting.color }} />
+                        {setting.label}
+                      </div>
+                      <div className="mt-1 text-xs text-stone-500">{setting.status} - order {setting.sortOrder}</div>
+                    </div>
+                    <div className="flex flex-wrap justify-end gap-1">
+                      <Badge tone={setting.active ? "success" : "neutral"}>{setting.active ? "active" : "inactive"}</Badge>
+                      <Badge tone={setting.terminal ? "warning" : "neutral"}>{setting.terminal ? "terminal" : "open"}</Badge>
+                      <TextButton type="button" variant="secondary" icon={<Settings size={16} />} onClick={() => editLeadStatusSetting(setting)}>Edit</TextButton>
+                    </div>
+                  </div>
+                </div>
+              ))}
+            </div>
+          </div>
         </Panel>
       </div>
 
@@ -4592,13 +8929,46 @@ function AdminView({
       <div className="grid gap-4 xl:grid-cols-[1fr_420px]">
         <div className="grid gap-4">
           <Panel>
-            <div className="flex items-center gap-2">
-              <UsersRound size={18} className="text-[#224036]" />
-              <h2 className="text-base font-bold">Members + Roles</h2>
+            <div className="flex flex-wrap items-start justify-between gap-3">
+              <div className="flex items-center gap-2">
+                <UsersRound size={18} className="text-[#224036]" />
+                <h2 className="text-base font-bold">Members + Roles</h2>
+              </div>
+              <div className="flex flex-wrap gap-2">
+                {["active", "invited", "expired", "revoked"].map((status) => (
+                  <Badge key={status} tone={status === "active" ? "success" : status === "invited" ? "warning" : status === "revoked" ? "danger" : "neutral"}>
+                    {memberStatusCounts[status] ?? 0} {status}
+                  </Badge>
+                ))}
+              </div>
             </div>
+            <form onSubmit={submitInvite} className="mt-4 rounded-md border border-stone-200 bg-stone-50 p-3">
+              <div className="grid gap-3 md:grid-cols-2 xl:grid-cols-4">
+                <Field label="Invite email">
+                  <input className={inputClass()} value={inviteEmail} onChange={(event) => setInviteEmail(event.target.value)} type="email" required />
+                </Field>
+                <Field label="Invite name">
+                  <input className={inputClass()} value={inviteName} onChange={(event) => setInviteName(event.target.value)} />
+                </Field>
+                <Field label="Invite role">
+                  <select className={inputClass()} value={inviteRole} onChange={(event) => setInviteRole(event.target.value as Role)}>
+                    {roleOptions.filter((role) => role !== "owner").map((role) => (
+                      <option key={role} value={role}>{roleLabel(role)}</option>
+                    ))}
+                  </select>
+                </Field>
+                <Field label="Expires days">
+                  <input className={inputClass()} value={inviteExpiresInDays} onChange={(event) => setInviteExpiresInDays(event.target.value)} inputMode="numeric" />
+                </Field>
+              </div>
+              <div className="mt-3 flex flex-wrap items-center gap-3">
+                <TextButton type="submit" icon={<Plus size={16} />} disabled={!operatingActions?.inviteMember}>Send Invite</TextButton>
+                {inviteMessage ? <span className="text-sm font-medium text-emerald-800">{inviteMessage}</span> : null}
+              </div>
+            </form>
             <div className="mt-4 grid gap-2 md:grid-cols-2">
-              {operatingDepth.admin.members.map((member) => (
-                <div key={member.id} className="rounded-md border border-stone-200 p-3">
+              {displayedMembers.map((member) => (
+                <div key={member.id} role="group" aria-label={`Member ${member.email}`} className="rounded-md border border-stone-200 p-3">
                   <div className="flex items-start justify-between gap-3">
                     <div>
                       <div className="font-semibold">{member.name}</div>
@@ -4607,12 +8977,33 @@ function AdminView({
                     <Badge tone={operatingTone(member.status)}>{member.status}</Badge>
                   </div>
                   <div className="mt-3">
-                    <select className={inputClass()} value={member.role} disabled={!operatingActions?.updateMemberRole} onChange={(event) => operatingActions?.updateMemberRole?.(member.id, event.target.value as Role)}>
+                    <select
+                      className={inputClass()}
+                      value={member.role}
+                      disabled={!operatingActions?.updateMemberRole && !member.id.startsWith("local-invite-")}
+                      onChange={(event) => {
+                        const nextRole = event.target.value as Role;
+                        setOptimisticInviteMembers((current) => current.map((candidate) => (candidate.id === member.id ? { ...candidate, role: nextRole } : candidate)));
+                        if (!member.id.startsWith("local-invite-")) operatingActions?.updateMemberRole?.(member.id, nextRole);
+                      }}
+                    >
                       {roleOptions.map((role) => (
                         <option key={role} value={role}>{roleLabel(role)}</option>
                       ))}
                     </select>
                   </div>
+                  {member.status === "invited" || member.status === "expired" ? (
+                    <div className="mt-3 flex flex-wrap gap-2">
+                      {member.status === "invited" ? (
+                        <TextButton variant="secondary" icon={<CalendarDays size={16} />} onClick={() => expireInvite(member.id)}>
+                          Expire Invite
+                        </TextButton>
+                      ) : null}
+                      <TextButton variant="ghost" icon={<X size={16} />} onClick={() => revokeInvite(member.id)}>
+                        Revoke Invite
+                      </TextButton>
+                    </div>
+                  ) : null}
                 </div>
               ))}
             </div>
@@ -4673,17 +9064,57 @@ function AdminView({
 
             <Panel>
               <h2 className="text-base font-bold">Service Catalog</h2>
+              <form onSubmit={submitServiceCatalogItem} className="mt-4 grid gap-3">
+                <div className="grid gap-3 md:grid-cols-[1fr_170px]">
+                  <Field label="Service name">
+                    <input aria-label="Catalog service name" className={inputClass()} value={serviceCatalogForm.name} onChange={(event) => setServiceCatalogForm({ ...serviceCatalogForm, name: event.target.value })} />
+                  </Field>
+                  <Field label="Category">
+                    <select aria-label="Catalog service category" className={inputClass()} value={serviceCatalogForm.category} onChange={(event) => setServiceCatalogForm({ ...serviceCatalogForm, category: event.target.value as ServiceCategory })}>
+                      {Object.entries(categoryLabels).map(([value, label]) => <option key={value} value={value}>{label}</option>)}
+                    </select>
+                  </Field>
+                </div>
+                <div className="grid grid-cols-[1fr_1fr_auto] gap-3">
+                  <Field label="Unit">
+                    <input aria-label="Catalog service unit" className={inputClass()} value={serviceCatalogForm.defaultUnit} onChange={(event) => setServiceCatalogForm({ ...serviceCatalogForm, defaultUnit: event.target.value })} />
+                  </Field>
+                  <Field label="Price">
+                    <input aria-label="Catalog service price" className={inputClass()} value={serviceCatalogForm.defaultPrice} onChange={(event) => setServiceCatalogForm({ ...serviceCatalogForm, defaultPrice: event.target.value })} inputMode="decimal" />
+                  </Field>
+                  <label className="mt-5 flex h-10 items-center gap-2 rounded-md border border-stone-200 bg-stone-50 px-3 text-sm font-semibold text-stone-700">
+                    <input aria-label="Catalog service active" type="checkbox" checked={serviceCatalogForm.active} onChange={(event) => setServiceCatalogForm({ ...serviceCatalogForm, active: event.target.checked })} />
+                    Active
+                  </label>
+                </div>
+                <div className="flex flex-wrap gap-2">
+                  <TextButton type="submit" icon={<Plus size={16} />}>{serviceCatalogForm.itemId ? "Save Service" : "Create Service"}</TextButton>
+                  {serviceCatalogForm.itemId ? (
+                    <TextButton type="button" variant="secondary" icon={<X size={16} />} onClick={() => setServiceCatalogForm(defaultServiceCatalogForm())}>
+                      New Service
+                    </TextButton>
+                  ) : null}
+                </div>
+                {serviceCatalogMessage ? (
+                  <div className={cn("rounded-md border px-3 py-2 text-sm font-semibold", serviceCatalogMessage.state === "error" ? "border-rose-200 bg-rose-50 text-rose-800" : serviceCatalogMessage.state === "pending" ? "border-amber-200 bg-amber-50 text-amber-800" : "border-emerald-200 bg-emerald-50 text-emerald-800")}>
+                    {serviceCatalogMessage.message}
+                  </div>
+                ) : null}
+              </form>
               <div className="mt-4 grid gap-2">
                 {workspace.serviceCatalog.map((item) => (
-                  <div key={item.id} className="rounded-md border border-stone-200 p-3">
+                  <div key={item.id} role="group" aria-label={`Service catalog item ${item.name}`} className="rounded-md border border-stone-200 p-3">
                     <div className="flex items-start justify-between gap-3">
                       <div>
                         <div className="font-semibold">{item.name}</div>
                         <div className="mt-1 text-sm text-stone-500">{categoryLabels[item.category]} - {currency(item.defaultPriceCents)} / {item.defaultUnit}</div>
                       </div>
-                      <button type="button" onClick={() => toggleService(item.id)} className={cn("h-6 w-11 rounded-full p-0.5 transition", item.active ? "bg-[#224036]" : "bg-stone-300")} aria-label="Toggle service">
-                        <span className={cn("block h-5 w-5 rounded-full bg-white transition", item.active && "translate-x-5")} />
-                      </button>
+                      <div className="flex shrink-0 items-center gap-2">
+                        <TextButton type="button" variant="secondary" icon={<Settings size={16} />} onClick={() => editServiceCatalogItem(item)}>Edit</TextButton>
+                        <button type="button" onClick={() => toggleService(item.id)} className={cn("h-6 w-11 rounded-full p-0.5 transition", item.active ? "bg-[#224036]" : "bg-stone-300")} aria-label={`Toggle service ${item.name}`}>
+                          <span className={cn("block h-5 w-5 rounded-full bg-white transition", item.active && "translate-x-5")} />
+                        </button>
+                      </div>
                     </div>
                   </div>
                 ))}
@@ -4706,18 +9137,101 @@ function AdminView({
           </Panel>
 
           <Panel>
-            <h2 className="text-base font-bold">Audit Log</h2>
-            <div className="mt-4 grid gap-2">
-              {operatingDepth.admin.auditEvents.map((event) => (
-                <div key={event.id} className="rounded-md border border-stone-200 p-3">
-                  <div className="flex items-center justify-between gap-3">
-                    <div className="font-semibold">{event.action}</div>
-                    <Badge>{event.entityType}</Badge>
+            <div className="flex items-center gap-2">
+              <ShieldCheck size={18} className="text-[#224036]" />
+              <h2 className="text-base font-bold">Audit Log</h2>
+            </div>
+            <div className="mt-4 grid gap-3 sm:grid-cols-3">
+              <Metric label="Filtered events" value={filteredAuditEvents.length} />
+              <Metric label="Changed fields" value={auditChangedFieldCount} />
+              <Metric label="Export events" value={auditExportCount} />
+            </div>
+            <div className="mt-4 grid gap-3">
+              <Field label="Audit search">
+                <input
+                  aria-label="Audit search"
+                  className={inputClass()}
+                  value={auditSearch}
+                  onChange={(event) => setAuditSearch(event.target.value)}
+                  placeholder="Search summary, actor, action, entity, request"
+                />
+              </Field>
+              <div className="grid gap-3 sm:grid-cols-2">
+                <Field label="Audit module">
+                  <select aria-label="Audit module filter" className={inputClass()} value={auditModuleFilter} onChange={(event) => setAuditModuleFilter(event.target.value)}>
+                    <option value="all">All modules</option>
+                    {auditModuleOptions.map((module) => (
+                      <option key={module} value={module}>{module}</option>
+                    ))}
+                  </select>
+                </Field>
+                <Field label="Audit action">
+                  <select aria-label="Audit action filter" className={inputClass()} value={auditActionFilter} onChange={(event) => setAuditActionFilter(event.target.value)}>
+                    <option value="all">All actions</option>
+                    {auditActionOptions.map((action) => (
+                      <option key={action} value={action}>{action}</option>
+                    ))}
+                  </select>
+                </Field>
+                <Field label="Audit entity">
+                  <select aria-label="Audit entity filter" className={inputClass()} value={auditEntityFilter} onChange={(event) => setAuditEntityFilter(event.target.value)}>
+                    <option value="all">All entities</option>
+                    {auditEntityOptions.map((entity) => (
+                      <option key={entity} value={entity}>{formatStatus(entity)}</option>
+                    ))}
+                  </select>
+                </Field>
+                <Field label="Audit actor">
+                  <select aria-label="Audit actor filter" className={inputClass()} value={auditActorFilter} onChange={(event) => setAuditActorFilter(event.target.value)}>
+                    <option value="all">All actors</option>
+                    {auditActorOptions.map((actor) => (
+                      <option key={actor} value={actor}>{actor}</option>
+                    ))}
+                  </select>
+                </Field>
+                <Field label="Audit date">
+                  <select aria-label="Audit date filter" className={inputClass()} value={auditDateFilter} onChange={(event) => setAuditDateFilter(event.target.value)}>
+                    <option value="all">All dates</option>
+                    <option value="today">Last 24 hours</option>
+                    <option value="7d">Last 7 days</option>
+                    <option value="30d">Last 30 days</option>
+                  </select>
+                </Field>
+              </div>
+            </div>
+            <div className="mt-4 grid max-h-[520px] gap-2 overflow-y-auto pr-1">
+              {filteredAuditEvents.length === 0 ? (
+                <div className="rounded-md border border-dashed border-stone-300 p-4 text-sm text-stone-500">No audit events match the current filters.</div>
+              ) : (
+                filteredAuditEvents.map((event) => (
+                  <div key={event.id} role="group" aria-label={`Audit event ${event.action} ${event.summary}`} className="rounded-md border border-stone-200 p-3">
+                    <div className="flex items-start justify-between gap-3">
+                      <div className="min-w-0">
+                        <div className="truncate font-semibold">{event.action}</div>
+                        <div className="mt-1 text-sm text-stone-500">{event.summary}</div>
+                      </div>
+                      <div className="flex shrink-0 flex-wrap justify-end gap-1">
+                        <Badge>{event.module}</Badge>
+                        <Badge>{formatStatus(event.entityType)}</Badge>
+                      </div>
+                    </div>
+                    <div className="mt-3 grid gap-2 text-xs text-stone-500">
+                      <div><span className="font-semibold text-stone-700">Actor:</span> {event.actorName}</div>
+                      <div><span className="font-semibold text-stone-700">Entity:</span> {event.entityType} / {event.entityId}</div>
+                      <div><span className="font-semibold text-stone-700">When:</span> {dateTime(event.createdAt)}</div>
+                      <div><span className="font-semibold text-stone-700">Export:</span> {formatStatus(event.exportState)}</div>
+                      {event.requestId ? <div><span className="font-semibold text-stone-700">Request:</span> {event.requestId}</div> : null}
+                    </div>
+                    {event.changedFields.length > 0 ? (
+                      <div className="mt-3 flex flex-wrap gap-1">
+                        {event.changedFields.map((field) => (
+                          <Badge key={field}>{formatStatus(field)}</Badge>
+                        ))}
+                      </div>
+                    ) : null}
                   </div>
-                  <div className="mt-1 text-sm text-stone-500">{event.summary}</div>
-                  <div className="mt-2 text-xs text-stone-400">{dateTime(event.createdAt)}</div>
-                </div>
-              ))}
+                ))
+              )}
             </div>
           </Panel>
         </div>
@@ -4733,6 +9247,7 @@ function ClientOnboardingView({
   createClientWorkspace,
   authConfigured,
   operatingDepth,
+  operatingActions,
 }: {
   form: ClientOnboardingFormState;
   setForm: (value: ClientOnboardingFormState) => void;
@@ -4740,6 +9255,7 @@ function ClientOnboardingView({
   createClientWorkspace: (event: FormEvent) => void;
   authConfigured: boolean;
   operatingDepth: OperatingDepth;
+  operatingActions?: OperatingActions;
 }) {
   function toggleService(service: ServiceCategory) {
     setForm({
@@ -4755,6 +9271,77 @@ function ClientOnboardingView({
     ["Import data", "CSV or connector imports customers, properties, leads, notes, and historical jobs into quality queues."],
     ["Launch", "Team receives invites and starts lead-to-job, dispatch, field, costing, and profit workflows."],
   ];
+  const [uploadedImportName, setUploadedImportName] = useState("");
+  const [uploadedImportRows, setUploadedImportRows] = useState<ImportPreviewUiRow[]>([]);
+  const [persistedImportJobId, setPersistedImportJobId] = useState("");
+  const [importCommitState, setImportCommitState] = useState<"idle" | "saving" | "saved" | "committing" | "committed" | "error">("idle");
+  const [importCommitMessage, setImportCommitMessage] = useState("");
+  const [importUploadError, setImportUploadError] = useState("");
+  const serviceTerritory = form.serviceTerritory.split(",").map((city) => city.trim()).filter(Boolean);
+  const uploadedQaRows = uploadedImportRows.map((row) => ({
+    id: row.id ?? `uploaded-${row.rowNumber}`,
+    source: uploadedImportName || "Uploaded CSV",
+    rowLabel: `Row ${row.rowNumber} - ${row.customerName || "Unnamed lead"}`,
+    status: row.status,
+    issues: row.issues.map((issue) => issue.message),
+    mappedEntity: row.mappedEntity,
+  }));
+  const importQaRows = uploadedQaRows.length > 0 ? uploadedQaRows : operatingDepth.fieldOps.importQaRows;
+  const importCounts = {
+    ready: importQaRows.filter((row) => row.status === "ready").length,
+    review: importQaRows.filter((row) => row.status === "needs_review").length,
+    blocked: importQaRows.filter((row) => row.status === "blocked").length,
+  };
+
+  async function handleLeadImportUpload(event: ChangeEvent<HTMLInputElement>) {
+    const file = event.target.files?.[0];
+    if (!file) return;
+
+    try {
+      const csv = await file.text();
+      setImportCommitState("saving");
+      setImportCommitMessage("");
+      const rows = parseLeadImportCsv(csv, {
+        currentContactCount: 0,
+        freeContactLimit: form.billingPlan === "free" ? 10 : Number.MAX_SAFE_INTEGER,
+        serviceTerritory,
+      });
+      setUploadedImportName(file.name);
+      setUploadedImportRows(rows);
+      setPersistedImportJobId("");
+      setImportUploadError(rows.length === 0 ? "No importable rows were found in that CSV." : "");
+      if (rows.length > 0 && operatingActions?.createLeadImportPreview) {
+        const persisted = await operatingActions.createLeadImportPreview({ fileName: file.name, csvText: csv });
+        setPersistedImportJobId(persisted.importJobId);
+        setUploadedImportRows(persisted.rows);
+        setImportCommitState("saved");
+        setImportCommitMessage(`Import job saved with ${persisted.rows.length} rows. Commit ready rows when QA is done.`);
+      } else {
+        setImportCommitState(rows.length > 0 ? "saved" : "idle");
+        setImportCommitMessage(rows.length > 0 ? "Local preview created. Connect Convex actions to commit these rows." : "");
+      }
+    } catch (error) {
+      setUploadedImportName("");
+      setUploadedImportRows([]);
+      setPersistedImportJobId("");
+      setImportCommitState("error");
+      setImportCommitMessage("");
+      setImportUploadError(error instanceof Error ? userFacingWriteError(error) : "Could not read that CSV file.");
+    }
+  }
+
+  async function commitUploadedImport() {
+    if (!persistedImportJobId || !operatingActions?.commitLeadImportRows) return;
+    try {
+      setImportCommitState("committing");
+      const result = await operatingActions.commitLeadImportRows(persistedImportJobId);
+      setImportCommitState("committed");
+      setImportCommitMessage(`${result.imported} rows imported, ${result.skipped} skipped, ${result.failed} failed.`);
+    } catch (error) {
+      setImportCommitState("error");
+      setImportCommitMessage(userFacingWriteError(error));
+    }
+  }
 
   return (
     <div className="grid gap-4">
@@ -4880,10 +9467,44 @@ function ClientOnboardingView({
           <Panel>
             <div className="flex items-center justify-between gap-3">
               <h2 className="text-base font-bold">Import QA Preview</h2>
-              <Badge tone={operatingDepth.fieldOps.importQaRows.some((row) => row.status === "blocked") ? "warning" : "success"}>{operatingDepth.fieldOps.importQaRows.length} rows</Badge>
+              <Badge tone={importCounts.blocked > 0 ? "warning" : "success"}>{importQaRows.length} rows</Badge>
+            </div>
+            <div className="mt-4 flex flex-wrap items-center gap-2">
+              <label className="inline-flex min-h-10 cursor-pointer items-center justify-center gap-2 rounded-md border border-stone-200 bg-white px-3 text-sm font-semibold text-stone-800 shadow-sm transition hover:bg-stone-50">
+                <FileText size={16} />
+                Upload CSV
+                <input aria-label="Upload lead import CSV" type="file" accept=".csv,text/csv" className="sr-only" onChange={handleLeadImportUpload} />
+              </label>
+              <TextButton
+                type="button"
+                icon={<Check size={16} />}
+                disabled={!persistedImportJobId || !operatingActions?.commitLeadImportRows || importCommitState === "committing" || importCommitState === "committed"}
+                onClick={commitUploadedImport}
+              >
+                {importCommitState === "committing" ? "Committing" : "Commit Ready Rows"}
+              </TextButton>
+              <Badge tone={uploadedImportRows.length > 0 ? "success" : "neutral"}>{uploadedImportName || "Sample rows"}</Badge>
+            </div>
+            {importUploadError ? (
+              <div className="mt-3 rounded-md border border-rose-200 bg-rose-50 p-3 text-sm font-medium text-rose-900">{importUploadError}</div>
+            ) : null}
+            {importCommitMessage ? (
+              <div
+                className={cn(
+                  "mt-3 rounded-md border p-3 text-sm font-medium",
+                  importCommitState === "error" ? "border-rose-200 bg-rose-50 text-rose-900" : "border-emerald-200 bg-emerald-50 text-emerald-900",
+                )}
+              >
+                {importCommitMessage}
+              </div>
+            ) : null}
+            <div className="mt-4 grid gap-2 sm:grid-cols-3">
+              <div className="rounded-md bg-emerald-50 p-3 text-sm text-emerald-900"><span className="font-bold">{importCounts.ready}</span> ready</div>
+              <div className="rounded-md bg-amber-50 p-3 text-sm text-amber-900"><span className="font-bold">{importCounts.review}</span> needs review</div>
+              <div className="rounded-md bg-rose-50 p-3 text-sm text-rose-900"><span className="font-bold">{importCounts.blocked}</span> blocked</div>
             </div>
             <div className="mt-4 grid gap-2">
-              {operatingDepth.fieldOps.importQaRows.map((row) => (
+              {importQaRows.map((row) => (
                 <div key={row.id} className="rounded-md border border-stone-200 p-3">
                   <div className="flex flex-wrap items-start justify-between gap-3">
                     <div>

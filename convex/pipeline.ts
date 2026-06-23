@@ -12,15 +12,31 @@ const opportunityStage = v.union(
   v.literal("won"),
   v.literal("lost"),
 );
+const serviceCategory = v.union(v.literal("lawn_care"), v.literal("landscaping"), v.literal("pest_control"), v.literal("tree_shrub"), v.literal("irrigation"), v.literal("snow"), v.literal("maintenance"));
 
 export const listOpportunities = query({
   args: {
     organizationId: v.id("organizations"),
     stage: v.optional(opportunityStage),
+    ownerUserId: v.optional(v.id("users")),
+    source: v.optional(v.string()),
+    serviceLine: v.optional(serviceCategory),
+    minProbability: v.optional(v.number()),
+    maxProbability: v.optional(v.number()),
+    minValueCents: v.optional(v.number()),
+    staleDays: v.optional(v.number()),
+    nextStep: v.optional(v.union(v.literal("proposal"), v.literal("follow_up"))),
+    search: v.optional(v.string()),
   },
   handler: async (ctx, args) => {
     await requireMembership(ctx, args.organizationId);
-    const opportunities = args.stage
+    const opportunities = args.ownerUserId
+      ? await ctx.db
+          .query("opportunities")
+          .withIndex("by_org_owner", (q) => q.eq("organizationId", args.organizationId).eq("ownerUserId", args.ownerUserId))
+          .order("desc")
+          .collect()
+      : args.stage
       ? await ctx.db
           .query("opportunities")
           .withIndex("by_org_stage", (q) => q.eq("organizationId", args.organizationId).eq("stage", args.stage!))
@@ -32,16 +48,33 @@ export const listOpportunities = query({
           .order("desc")
           .take(100);
 
-    return await Promise.all(
+    const rows = await Promise.all(
       opportunities.map(async (opportunity) => {
-        const [customer, property, estimate] = await Promise.all([
+        const [customer, property, estimate, lead] = await Promise.all([
           ctx.db.get(opportunity.customerId),
           opportunity.propertyId ? ctx.db.get(opportunity.propertyId) : null,
           ctx.db.query("estimates").withIndex("by_opportunity", (q) => q.eq("opportunityId", opportunity._id)).order("desc").first(),
+          opportunity.leadId ? ctx.db.get(opportunity.leadId) : null,
         ]);
-        return { opportunity, customer, property, estimate };
+        return { opportunity, customer, property, estimate, lead };
       }),
     );
+
+    const now = Date.now();
+    const search = args.search?.trim().toLowerCase();
+    return rows.filter((row) => {
+      if (args.stage && row.opportunity.stage !== args.stage) return false;
+      if (args.source && row.lead?.source !== args.source) return false;
+      if (args.serviceLine && !row.opportunity.serviceLines.includes(args.serviceLine)) return false;
+      if (typeof args.minProbability === "number" && row.opportunity.closeProbability < args.minProbability) return false;
+      if (typeof args.maxProbability === "number" && row.opportunity.closeProbability > args.maxProbability) return false;
+      if (typeof args.minValueCents === "number" && row.opportunity.valueCents < args.minValueCents) return false;
+      if (typeof args.staleDays === "number" && now - row.opportunity.updatedAt < args.staleDays * 24 * 60 * 60 * 1000) return false;
+      if (args.nextStep === "proposal" && !["estimating", "proposal_sent"].includes(row.opportunity.stage)) return false;
+      if (args.nextStep === "follow_up" && !["new", "qualified"].includes(row.opportunity.stage)) return false;
+      if (search && ![row.opportunity.title, row.customer?.name, row.lead?.source, row.opportunity.serviceLines.join(" ")].some((value) => (value ?? "").toLowerCase().includes(search))) return false;
+      return true;
+    });
   },
 });
 

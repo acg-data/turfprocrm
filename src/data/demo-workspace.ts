@@ -49,6 +49,53 @@ const baseDemoWorkspace: WorkspaceSnapshot = {
       ownerId: "u-justin",
     },
   ],
+  contacts: [
+    {
+      id: "contact-brookside-board",
+      customerId: "cust-brookside",
+      name: "Brookside Board",
+      email: "board@brookside.example",
+      phone: "(508) 555-0148",
+      roleTitle: "Board inbox",
+      isPrimary: true,
+    },
+    {
+      id: "contact-brookside-site",
+      customerId: "cust-brookside",
+      name: "Lena Park",
+      email: "lena@brookside.example",
+      phone: "(508) 555-0172",
+      roleTitle: "Site contact",
+      isPrimary: false,
+    },
+    {
+      id: "contact-walsh",
+      customerId: "cust-walsh",
+      name: "Megan Walsh",
+      email: "megan@example.com",
+      phone: "(508) 555-0188",
+      roleTitle: "Homeowner",
+      isPrimary: true,
+    },
+    {
+      id: "contact-northgate-facilities",
+      customerId: "cust-northgate",
+      name: "Facilities Office",
+      email: "facilities@northgate.example",
+      phone: "(781) 555-0199",
+      roleTitle: "Facilities",
+      isPrimary: true,
+    },
+    {
+      id: "contact-northgate-billing",
+      customerId: "cust-northgate",
+      name: "Rina Shah",
+      email: "ap@northgate.example",
+      phone: "(781) 555-0181",
+      roleTitle: "Billing",
+      isPrimary: false,
+    },
+  ],
   properties: [
     {
       id: "prop-brookside",
@@ -59,6 +106,7 @@ const baseDemoWorkspace: WorkspaceSnapshot = {
       state: "MA",
       postalCode: "02035",
       notes: "Gate code changes monthly. Notify board before treatment.",
+      lawnSizeSqFt: 92000,
     },
     {
       id: "prop-walsh",
@@ -69,6 +117,7 @@ const baseDemoWorkspace: WorkspaceSnapshot = {
       state: "MA",
       postalCode: "02048",
       notes: "Backyard has a wetland buffer. Avoid spraying within marked area.",
+      lawnSizeSqFt: 14500,
     },
     {
       id: "prop-northgate",
@@ -79,7 +128,15 @@ const baseDemoWorkspace: WorkspaceSnapshot = {
       state: "MA",
       postalCode: "02067",
       notes: "Service loading dock before office lawn.",
+      lawnSizeSqFt: 188000,
     },
+  ],
+  propertyAreas: [
+    { id: "area-brookside-common", propertyId: "prop-brookside", name: "Common turf zones", kind: "front_lawn", size: 55000, unit: "sq_ft", notes: "Primary HOA turf zone for six-step fertilization." },
+    { id: "area-brookside-entry", propertyId: "prop-brookside", name: "North entrance turf", kind: "front_lawn", size: 12000, unit: "sq_ft", notes: "High-visibility entry area near playground." },
+    { id: "area-walsh-front", propertyId: "prop-walsh", name: "Front lawn", kind: "front_lawn", size: 6500, unit: "sq_ft", notes: "Visible front turf near driveway." },
+    { id: "area-walsh-back", propertyId: "prop-walsh", name: "Back lawn", kind: "back_lawn", size: 8000, unit: "sq_ft", notes: "Wetland buffer at rear edge." },
+    { id: "area-northgate-office", propertyId: "prop-northgate", name: "Office lawn", kind: "front_lawn", size: 62000, unit: "sq_ft", notes: "Main public-facing lawn near office entrance." },
   ],
   leads: [
     {
@@ -156,9 +213,14 @@ const baseDemoWorkspace: WorkspaceSnapshot = {
       propertyId: "prop-walsh",
       estimateNumber: "EST-1024",
       status: "sent",
+      approvalStatus: "pending",
       subtotalCents: 78000,
+      discountCents: 12000,
       taxCents: 0,
       totalCents: 78000,
+      sentAt: at(14, 15),
+      expiresAt: at(17, 0, 14),
+      terms: "Customer may approve the seasonal mosquito package within 14 days. Wetland buffer treatment notes must remain attached to the quote.",
     },
     {
       id: "est-brookside",
@@ -167,9 +229,106 @@ const baseDemoWorkspace: WorkspaceSnapshot = {
       propertyId: "prop-brookside",
       estimateNumber: "EST-1019",
       status: "accepted",
+      approvalStatus: "not_required",
       subtotalCents: 920000,
       taxCents: 0,
       totalCents: 920000,
+      sentAt: at(9, 0, -1),
+      acceptedAt: at(10, 20, -1),
+      acceptedByName: "Brookside Board",
+      acceptedByEmail: "board@brookside.example",
+      acceptanceSource: "email",
+      acceptanceNote: "Board approved the seasonal renewal by email.",
+      expiresAt: at(17, 0, 13),
+      terms: "Seasonal lawn-health renewal includes the six-step program, grub prevention, route notes, and board communication before each application.",
+    },
+  ],
+  approvalRequests: [
+    {
+      id: "approval-walsh-low-margin",
+      estimateId: "est-walsh",
+      estimateNumber: "EST-1024",
+      opportunityId: "opp-walsh",
+      customerId: "cust-walsh",
+      customerName: "Megan Walsh",
+      requestedByUserId: "u-amy",
+      assignedApproverUserId: "u-justin",
+      status: "pending",
+      reasonDetails: [
+        {
+          code: "low_margin",
+          label: "Low margin",
+          severity: "critical",
+          detail: "Gross margin 18.5% is below 30% target.",
+          impactCents: 18500,
+        },
+        {
+          code: "material_constraint",
+          label: "Material constraint",
+          severity: "critical",
+          detail: "Wetland buffer requires product and application review before sending.",
+        },
+      ],
+      riskScore: 70,
+      grossMarginPercent: 18.5,
+      discountCents: 12000,
+      discountPercent: 13.3,
+      estimatedCostCents: 63570,
+      totalCents: 78000,
+      dueAt: at(12, 0, 1),
+      requestedAt: at(14, 30),
+    },
+  ],
+  invoices: [
+    {
+      id: "inv-brookside-1020",
+      customerId: "cust-brookside",
+      jobId: "job-brookside",
+      estimateId: "est-brookside",
+      invoiceNumber: "INV-1020",
+      status: "sent",
+      subtotalCents: 420000,
+      taxCents: 0,
+      totalCents: 420000,
+      paidCents: 0,
+      dueAt: at(17, 0, 14),
+      sentAt: at(10, 30, -1),
+    },
+    {
+      id: "inv-northgate-1018",
+      customerId: "cust-northgate",
+      jobId: "job-northgate",
+      invoiceNumber: "INV-1018",
+      status: "partially_paid",
+      subtotalCents: 680000,
+      taxCents: 0,
+      totalCents: 680000,
+      paidCents: 300000,
+      dueAt: at(17, 0, 7),
+      sentAt: at(9, 45, -3),
+    },
+    {
+      id: "inv-walsh-1024",
+      customerId: "cust-walsh",
+      estimateId: "est-walsh",
+      invoiceNumber: "INV-1024",
+      status: "draft",
+      subtotalCents: 78000,
+      taxCents: 0,
+      totalCents: 78000,
+      paidCents: 0,
+    },
+  ],
+  payments: [
+    {
+      id: "pay-northgate-3000",
+      customerId: "cust-northgate",
+      invoiceId: "inv-northgate-1018",
+      status: "posted",
+      method: "ach",
+      amountCents: 300000,
+      receivedAt: at(13, 15, -1),
+      reference: "ACH-7781",
     },
   ],
   serviceCatalog: [
@@ -177,6 +336,104 @@ const baseDemoWorkspace: WorkspaceSnapshot = {
     { id: "svc-mosquito", name: "Mosquito and tick barrier", category: "pest_control", defaultUnit: "visit", defaultPriceCents: 13000, active: true },
     { id: "svc-aeration", name: "Core aeration and overseeding", category: "lawn_care", defaultUnit: "acre", defaultPriceCents: 42000, active: true },
     { id: "svc-cleanup", name: "Spring cleanup", category: "landscaping", defaultUnit: "crew hour", defaultPriceCents: 9500, active: true },
+  ],
+  servicePackages: [
+    {
+      id: "pkg-lawn-season",
+      name: "Lawn health season package",
+      category: "lawn_care",
+      description: "Six-step fertility, grub prevention, aeration, and overseeding assumptions for a full lawn-care season.",
+      includedServiceCatalogItemIds: ["svc-fert", "svc-aeration"],
+      defaultPriceCents: 185000,
+      billingCadence: "seasonal",
+      laborHours: 5.5,
+      laborRateCents: 3200,
+      materialCostCents: 38500,
+      equipmentCostCents: 14500,
+      overheadPercent: 18,
+      targetMarginPercent: 42,
+      checklistDefaults: ["Measure turf zones", "Confirm fertilizer rate", "Flag treated areas", "Capture before/after photos"],
+      active: true,
+    },
+    {
+      id: "pkg-pest-barrier",
+      name: "Mosquito and tick protection package",
+      category: "pest_control",
+      description: "Seasonal barrier program with chemical, route, applicator, and compliance defaults.",
+      includedServiceCatalogItemIds: ["svc-mosquito"],
+      defaultPriceCents: 78000,
+      billingCadence: "seasonal",
+      laborHours: 3.5,
+      laborRateCents: 3400,
+      materialCostCents: 12600,
+      equipmentCostCents: 5800,
+      overheadPercent: 16,
+      targetMarginPercent: 45,
+      checklistDefaults: ["Confirm wetland buffer", "Record product and EPA label", "Capture weather snapshot", "Notify customer after service"],
+      active: true,
+    },
+    {
+      id: "pkg-spring-cleanup",
+      name: "Spring cleanup production package",
+      category: "landscaping",
+      description: "Crew-hour cleanup package with disposal, equipment, and margin assumptions.",
+      includedServiceCatalogItemIds: ["svc-cleanup"],
+      defaultPriceCents: 152000,
+      billingCadence: "one_time",
+      laborHours: 12,
+      laborRateCents: 3000,
+      materialCostCents: 9000,
+      equipmentCostCents: 22000,
+      overheadPercent: 18,
+      targetMarginPercent: 38,
+      checklistDefaults: ["Walk property with customer notes", "Stage debris removal", "Inspect beds and edges", "Log disposal or dump fees"],
+      active: true,
+    },
+  ],
+  priceBookItems: [
+    {
+      id: "pbi-six-step-area",
+      serviceCatalogItemId: "svc-fert",
+      name: "Six-step program by lawn size",
+      unit: "season",
+      basePriceCents: 165000,
+      minPriceCents: 62000,
+      pricingModel: "per_sq_ft",
+      formula: "max(minPrice, lawnSizeSqFt * 0.018)",
+      active: true,
+    },
+    {
+      id: "pbi-mosquito-visit",
+      serviceCatalogItemId: "svc-mosquito",
+      name: "Mosquito barrier visit",
+      unit: "visit",
+      basePriceCents: 13000,
+      minPriceCents: 9500,
+      pricingModel: "per_visit",
+      active: true,
+    },
+  ],
+  pricingRules: [
+    {
+      id: "rule-large-turf-complexity",
+      priceBookItemId: "pbi-six-step-area",
+      name: "Large turf production complexity",
+      condition: { minAreaSqFt: 50000 },
+      adjustmentType: "percent",
+      adjustmentValue: 8,
+      order: 1,
+      active: true,
+    },
+    {
+      id: "rule-small-property-minimum",
+      priceBookItemId: "pbi-six-step-area",
+      name: "Small property minimum handling",
+      condition: { maxAreaSqFt: 10000 },
+      adjustmentType: "fixed",
+      adjustmentValue: 15000,
+      order: 2,
+      active: true,
+    },
   ],
   crews: [
     { id: "crew-alpha", name: "Alpha Lawn", color: "#2f6b4f", active: true },
@@ -188,6 +445,8 @@ const baseDemoWorkspace: WorkspaceSnapshot = {
       id: "job-brookside",
       customerId: "cust-brookside",
       propertyId: "prop-brookside",
+      opportunityId: "opp-brookside",
+      estimateId: "est-brookside",
       title: "Brookside six-step season",
       status: "scheduled",
       priority: "normal",
@@ -198,11 +457,13 @@ const baseDemoWorkspace: WorkspaceSnapshot = {
       id: "job-northgate",
       customerId: "cust-northgate",
       propertyId: "prop-northgate",
+      opportunityId: "opp-northgate",
       title: "Northgate weekly maintenance",
       status: "in_progress",
       priority: "high",
       managerId: "u-justin",
       startDate: at(7, 30),
+      recurrence: "weekly",
     },
   ],
   visits: [
@@ -239,6 +500,40 @@ const baseDemoWorkspace: WorkspaceSnapshot = {
         { id: "c6", label: "Log irrigation leak near dock", isDone: false },
       ],
       notes: "Facilities asked for a quote on mulch refresh.",
+    },
+  ],
+  recurringServicePlans: [
+    {
+      id: "rsp-northgate-weekly",
+      customerId: "cust-northgate",
+      propertyId: "prop-northgate",
+      jobId: "job-northgate",
+      crewId: "crew-charlie",
+      name: "Northgate weekly maintenance route",
+      frequency: "weekly",
+      intervalDays: 7,
+      visitDurationMinutes: 180,
+      nextRunAt: at(9, 0, 7),
+      status: "active",
+    },
+  ],
+  changeOrders: [
+    {
+      id: "co-brookside-playground-edge",
+      jobId: "job-brookside",
+      customerId: "cust-brookside",
+      propertyId: "prop-brookside",
+      estimateId: "est-brookside",
+      title: "Add playground perimeter edging",
+      description: "Board requested additional edging and debris removal around playground border.",
+      status: "pending_approval",
+      requestedByName: "Brookside Board",
+      revenueDeltaCents: 185000,
+      estimatedCostDeltaCents: 72000,
+      grossProfitDeltaCents: 113000,
+      grossMarginPercent: 61,
+      scheduleImpactDays: 2,
+      requestedAt: at(13, 15, -1),
     },
   ],
   tasks: [
@@ -290,6 +585,67 @@ const baseDemoWorkspace: WorkspaceSnapshot = {
       summary: "Brookside opportunity won and converted to job",
       actorId: "u-justin",
       occurredAt: at(10, 20, -1),
+    },
+  ],
+  notes: [
+    {
+      id: "note-brookside-access",
+      entityType: "customer",
+      entityId: "cust-brookside",
+      body: "Board prefers treatment notices 24 hours before applications and photos after playground service.",
+      visibility: "internal",
+      createdByUserId: "u-amy",
+      createdAt: at(15, 20, -2),
+    },
+    {
+      id: "note-walsh-buffer",
+      entityType: "customer",
+      entityId: "cust-walsh",
+      body: "Wetland buffer in backyard. Keep mosquito application notes customer-ready.",
+      visibility: "internal",
+      createdByUserId: "u-amy",
+      createdAt: at(9, 40, -1),
+    },
+    {
+      id: "note-northgate-billing",
+      entityType: "customer",
+      entityId: "cust-northgate",
+      body: "Billing contact wants invoices grouped by building and paid by ACH.",
+      visibility: "internal",
+      createdByUserId: "u-justin",
+      createdAt: at(11, 25, -3),
+    },
+  ],
+  files: [
+    {
+      id: "file-brookside-agreement",
+      entityType: "customer",
+      entityId: "cust-brookside",
+      fileName: "Brookside HOA service agreement.pdf",
+      contentType: "application/pdf",
+      size: 248000,
+      createdByUserId: "u-justin",
+      createdAt: at(10, 0, -5),
+    },
+    {
+      id: "file-brookside-map",
+      entityType: "property",
+      entityId: "prop-brookside",
+      fileName: "Brookside common-area treatment map.png",
+      contentType: "image/png",
+      size: 913000,
+      createdByUserId: "u-nina",
+      createdAt: at(12, 20, -1),
+    },
+    {
+      id: "file-walsh-estimate",
+      entityType: "estimate",
+      entityId: "est-walsh",
+      fileName: "Walsh mosquito estimate package.pdf",
+      contentType: "application/pdf",
+      size: 175000,
+      createdByUserId: "u-amy",
+      createdAt: at(14, 20),
     },
   ],
   materials: [
@@ -366,13 +722,19 @@ function buildScaledDemoWorkspace(workspace: WorkspaceSnapshot): WorkspaceSnapsh
   });
 
   const syntheticCustomers: WorkspaceSnapshot["customers"] = [];
+  const syntheticContacts: WorkspaceSnapshot["contacts"] = [];
   const syntheticProperties: WorkspaceSnapshot["properties"] = [];
+  const syntheticPropertyAreas: WorkspaceSnapshot["propertyAreas"] = [];
   const syntheticLeads: WorkspaceSnapshot["leads"] = [];
   const syntheticOpportunities: WorkspaceSnapshot["opportunities"] = [];
   const syntheticJobs: WorkspaceSnapshot["jobs"] = [];
   const syntheticVisits: WorkspaceSnapshot["visits"] = [];
   const syntheticTasks: WorkspaceSnapshot["tasks"] = [];
   const syntheticActivities: WorkspaceSnapshot["activities"] = [];
+  const syntheticInvoices: WorkspaceSnapshot["invoices"] = [];
+  const syntheticPayments: WorkspaceSnapshot["payments"] = [];
+  const syntheticNotes: WorkspaceSnapshot["notes"] = [];
+  const syntheticFiles: WorkspaceSnapshot["files"] = [];
 
   for (let index = 0; index < 100; index += 1) {
     const number = index + 1;
@@ -398,6 +760,15 @@ function buildScaledDemoWorkspace(workspace: WorkspaceSnapshot): WorkspaceSnapsh
       tags: ["scale-test", program, accountType],
       ownerId: owner.id,
     });
+    syntheticContacts.push({
+      id: `contact-scale-${padded}`,
+      customerId: `cust-scale-${padded}`,
+      name: accountType === "commercial" ? `${lastName} Operations` : `${firstName} ${lastName}`,
+      email: `${firstName.toLowerCase()}.${lastName.toLowerCase()}${padded}@example.test`,
+      phone: `(508) 555-${String(1000 + number).slice(-4)}`,
+      roleTitle: accountType === "commercial" ? "Operations" : "Primary contact",
+      isPrimary: true,
+    });
 
     syntheticProperties.push({
       id: `prop-scale-${padded}`,
@@ -409,6 +780,15 @@ function buildScaledDemoWorkspace(workspace: WorkspaceSnapshot): WorkspaceSnapsh
       postalCode: `02${String(30 + (index % 60)).padStart(3, "0")}`,
       notes: index % 7 === 0 ? "Gate code required. Confirm access before dispatch." : "Synthetic scale-test property.",
       lawnSizeSqFt: 6500 + (index % 30) * 1750 + (accountType === "commercial" ? 72000 : 0),
+    });
+    syntheticPropertyAreas.push({
+      id: `area-scale-turf-${padded}`,
+      propertyId: `prop-scale-${padded}`,
+      name: accountType === "commercial" ? "Primary commercial turf" : "Primary lawn",
+      kind: index % 3 === 0 ? "back_lawn" : "front_lawn",
+      size: 5000 + (index % 22) * 1250 + (accountType === "commercial" ? 35000 : 0),
+      unit: "sq_ft",
+      notes: "Synthetic turf area for pricing calculator and measurement workflows.",
     });
 
     syntheticLeads.push({
@@ -487,6 +867,32 @@ function buildScaledDemoWorkspace(workspace: WorkspaceSnapshot): WorkspaceSnapsh
         dueAt: at(15, 0, index % 9),
         assignedUserId: owner.id,
       });
+      syntheticInvoices.push({
+        id: `inv-scale-${padded}`,
+        customerId: `cust-scale-${padded}`,
+        jobId: `job-scale-${padded}`,
+        invoiceNumber: `INV-S${padded}`,
+        status: index % 6 === 0 ? "paid" : index % 4 === 0 ? "overdue" : "sent",
+        subtotalCents: valueCents,
+        taxCents: 0,
+        totalCents: valueCents,
+        paidCents: index % 6 === 0 ? valueCents : index % 4 === 0 ? Math.round(valueCents * 0.35) : 0,
+        dueAt: at(17, 0, 14 + (index % 12)),
+        sentAt: at(9, 30, -1 * (index % 8)),
+        ...(index % 6 === 0 ? { paidAt: at(13, 0, -1) } : {}),
+      });
+      if (index % 6 === 0 || index % 4 === 0) {
+        syntheticPayments.push({
+          id: `pay-scale-${padded}`,
+          customerId: `cust-scale-${padded}`,
+          invoiceId: `inv-scale-${padded}`,
+          status: "posted",
+          method: index % 2 === 0 ? "ach" : "card",
+          amountCents: index % 6 === 0 ? valueCents : Math.round(valueCents * 0.35),
+          receivedAt: at(12, 45, -1 * (index % 5)),
+          reference: `SCALE-${padded}`,
+        });
+      }
     }
 
     if (index < 50) {
@@ -500,19 +906,48 @@ function buildScaledDemoWorkspace(workspace: WorkspaceSnapshot): WorkspaceSnapsh
         occurredAt: at(10 + (index % 6), (index * 5) % 60, -1 * (index % 14)),
       });
     }
+    if (index < 40) {
+      syntheticNotes.push({
+        id: `note-scale-${padded}`,
+        entityType: "customer",
+        entityId: `cust-scale-${padded}`,
+        body: "Synthetic account note for customer profile, follow-up, and service-history testing.",
+        visibility: "internal",
+        createdByUserId: owner.id,
+        createdAt: at(11, (index * 3) % 60, -1 * (index % 9)),
+      });
+    }
+    if (index < 24) {
+      syntheticFiles.push({
+        id: `file-scale-${padded}`,
+        entityType: "customer",
+        entityId: `cust-scale-${padded}`,
+        fileName: `Scale account service packet ${padded}.pdf`,
+        contentType: "application/pdf",
+        size: 128000 + index * 1000,
+        createdByUserId: owner.id,
+        createdAt: at(10, (index * 4) % 60, -1 * (index % 10)),
+      });
+    }
   }
 
   return {
     ...workspace,
     members: [...workspace.members, ...syntheticMembers],
     customers: [...workspace.customers, ...syntheticCustomers],
+    contacts: [...workspace.contacts, ...syntheticContacts],
     properties: [...workspace.properties, ...syntheticProperties],
+    propertyAreas: [...workspace.propertyAreas, ...syntheticPropertyAreas],
     leads: [...workspace.leads, ...syntheticLeads],
     opportunities: [...workspace.opportunities, ...syntheticOpportunities],
+    invoices: [...workspace.invoices, ...syntheticInvoices],
+    payments: [...workspace.payments, ...syntheticPayments],
     jobs: [...workspace.jobs, ...syntheticJobs],
     visits: [...workspace.visits, ...syntheticVisits],
     tasks: [...workspace.tasks, ...syntheticTasks],
     activities: [...workspace.activities, ...syntheticActivities],
+    notes: [...workspace.notes, ...syntheticNotes],
+    files: [...workspace.files, ...syntheticFiles],
   };
 }
 

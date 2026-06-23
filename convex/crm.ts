@@ -17,6 +17,15 @@ const serviceCategory = v.union(
 const leadType = v.union(v.literal("phone_call"), v.literal("form"), v.literal("direct_email"), v.literal("referral"), v.literal("other"));
 const accountType = v.union(v.literal("residential"), v.literal("commercial"));
 const urgency = v.union(v.literal("low"), v.literal("normal"), v.literal("high"));
+const callOutcome = v.union(v.literal("estimate_requested"), v.literal("needs_callback"), v.literal("price_shopping"), v.literal("not_a_fit"), v.literal("emergency"));
+
+const callOutcomeLabels: Record<string, string> = {
+  estimate_requested: "Estimate requested",
+  needs_callback: "Needs callback",
+  price_shopping: "Price shopping",
+  not_a_fit: "Not a fit",
+  emergency: "Emergency service",
+};
 
 function leadQualityIssues(input: { email?: string; phone?: string; street?: string; city?: string; postalCode?: string }) {
   const issues: Array<{ kind: "bad_phone" | "invalid_email" | "missing_address"; severity: "warning"; summary: string; fieldName?: string; currentValue?: string }> = [];
@@ -31,6 +40,15 @@ function contactLimitForPlan(plan?: string) {
   if (plan === "free") return 10;
   if (plan === "starter") return 250;
   return null;
+}
+
+function callOutcomeLabel(value?: string) {
+  return value ? (callOutcomeLabels[value] ?? value) : "Call logged";
+}
+
+function followUpDays(value?: number) {
+  if (typeof value !== "number" || !Number.isFinite(value)) return 1;
+  return Math.max(1, Math.min(30, Math.round(value)));
 }
 
 async function assertCanCreateContact(ctx: MutationCtx, organizationId: Id<"organizations">) {
@@ -98,17 +116,32 @@ export const getCustomerProfile = query({
     if (!customer) throw new ConvexError({ code: "NOT_FOUND", message: "Customer not found." });
     assertOrg(customer, args.organizationId);
 
-    const [contacts, properties, opportunities, estimates, jobs, activities, notes] = await Promise.all([
+    const [contacts, properties, opportunities, estimates, jobs, invoices, payments, activities, notes, files] = await Promise.all([
       ctx.db.query("contacts").withIndex("by_org_customer", (q) => q.eq("organizationId", args.organizationId).eq("customerId", args.customerId)).collect(),
       ctx.db.query("properties").withIndex("by_org_customer", (q) => q.eq("organizationId", args.organizationId).eq("customerId", args.customerId)).collect(),
       ctx.db.query("opportunities").withIndex("by_customer", (q) => q.eq("customerId", args.customerId)).collect(),
       ctx.db.query("estimates").withIndex("by_customer", (q) => q.eq("customerId", args.customerId)).collect(),
       ctx.db.query("jobs").withIndex("by_customer", (q) => q.eq("customerId", args.customerId)).collect(),
+      ctx.db.query("customerInvoices").withIndex("by_customer", (q) => q.eq("customerId", args.customerId)).collect(),
+      ctx.db.query("customerPayments").withIndex("by_customer", (q) => q.eq("customerId", args.customerId)).collect(),
       ctx.db.query("activities").withIndex("by_entity", (q) => q.eq("entityType", "customer").eq("entityId", args.customerId)).order("desc").take(20),
       ctx.db.query("notes").withIndex("by_entity", (q) => q.eq("entityType", "customer").eq("entityId", args.customerId)).order("desc").take(20),
+      ctx.db.query("files").withIndex("by_entity", (q) => q.eq("entityType", "customer").eq("entityId", args.customerId)).order("desc").take(20),
     ]);
 
-    return { customer, contacts, properties, opportunities, estimates, jobs, activities, notes };
+    return {
+      customer,
+      contacts: contacts.filter((contact) => contact.organizationId === args.organizationId),
+      properties: properties.filter((property) => property.organizationId === args.organizationId),
+      opportunities: opportunities.filter((opportunity) => opportunity.organizationId === args.organizationId),
+      estimates: estimates.filter((estimate) => estimate.organizationId === args.organizationId),
+      jobs: jobs.filter((job) => job.organizationId === args.organizationId),
+      invoices: invoices.filter((invoice) => invoice.organizationId === args.organizationId),
+      payments: payments.filter((payment) => payment.organizationId === args.organizationId),
+      activities: activities.filter((activity) => activity.organizationId === args.organizationId),
+      notes: notes.filter((note) => note.organizationId === args.organizationId),
+      files: files.filter((file) => file.organizationId === args.organizationId),
+    };
   },
 });
 
@@ -136,6 +169,9 @@ export const createLead = mutation({
     urgency: v.optional(urgency),
     message: v.optional(v.string()),
     estimateNotes: v.optional(v.string()),
+    callOutcome: v.optional(callOutcome),
+    createCallFollowUp: v.optional(v.boolean()),
+    followUpDueInDays: v.optional(v.number()),
     valueCents: v.number(),
     serviceLines: v.array(serviceCategory),
   },
@@ -229,6 +265,45 @@ export const createLead = mutation({
       updatedAt: now,
     });
 
+    const shouldLogCall = args.leadType === "phone_call" || Boolean(args.callOutcome);
+    if (shouldLogCall) {
+      await ctx.db.insert("activities", {
+        organizationId: args.organizationId,
+        entityType: "customer",
+        entityId: customerId,
+        kind: "call",
+        summary: `Phone intake: ${callOutcomeLabel(args.callOutcome)}${args.message ? ` - ${args.message}` : ""}`,
+        metadata: {
+          leadId,
+          opportunityId,
+          phone: args.phone,
+          source: args.source,
+          urgency: args.urgency ?? "normal",
+          callOutcome: args.callOutcome,
+        },
+        actorUserId: user._id,
+        occurredAt: now,
+      });
+    }
+
+    if (args.createCallFollowUp) {
+      const days = followUpDays(args.followUpDueInDays);
+      await ctx.db.insert("tasks", {
+        organizationId: args.organizationId,
+        entityType: "customer",
+        entityId: customerId,
+        title: `Call follow-up: ${args.title}`,
+        description: args.message,
+        status: "open",
+        priority: (args.urgency ?? "normal") === "high" ? "high" : "normal",
+        dueAt: now + days * 24 * 60 * 60 * 1000,
+        assignedUserId: user._id,
+        createdByUserId: user._id,
+        createdAt: now,
+        updatedAt: now,
+      });
+    }
+
     await audit(ctx, {
       organizationId: args.organizationId,
       actorUserId: user._id,
@@ -256,6 +331,109 @@ export const createLead = mutation({
     }
 
     return { customerId, contactId, propertyId, leadId, opportunityId };
+  },
+});
+
+export const createLeadForCustomer = mutation({
+  args: {
+    organizationId: v.id("organizations"),
+    customerId: v.id("customers"),
+    propertyId: v.optional(v.id("properties")),
+    title: v.string(),
+    source: v.string(),
+    message: v.optional(v.string()),
+    estimateNotes: v.optional(v.string()),
+    valueCents: v.number(),
+    serviceLines: v.array(serviceCategory),
+  },
+  handler: async (ctx, args) => {
+    const { user } = await requireMembership(ctx, args.organizationId, "managePipeline");
+    const customer = await ctx.db.get(args.customerId);
+    if (!customer) throw new ConvexError({ code: "NOT_FOUND", message: "Customer not found." });
+    assertOrg(customer, args.organizationId);
+
+    const property = args.propertyId
+      ? await ctx.db.get(args.propertyId)
+      : await ctx.db.query("properties").withIndex("by_org_customer", (q) => q.eq("organizationId", args.organizationId).eq("customerId", args.customerId)).first();
+    if (!property || property.customerId !== args.customerId) {
+      throw new ConvexError({ code: "NOT_FOUND", message: "Property not found for this customer." });
+    }
+    assertOrg(property, args.organizationId);
+
+    const contact = await ctx.db
+      .query("contacts")
+      .withIndex("by_org_customer", (q) => q.eq("organizationId", args.organizationId).eq("customerId", args.customerId))
+      .filter((q) => q.eq(q.field("isPrimary"), true))
+      .first();
+    const now = Date.now();
+    const accountType = customer.type === "commercial" ? "commercial" : "residential";
+
+    const leadId = await ctx.db.insert("leads", {
+      organizationId: args.organizationId,
+      customerId: args.customerId,
+      contactId: contact?._id,
+      propertyId: property._id,
+      title: args.title,
+      source: args.source,
+      leadType: "other",
+      accountType,
+      email: contact?.email,
+      mobilePhone: contact?.phone ?? contact?.mobilePhone,
+      normalizedPhone: (contact?.phone ?? contact?.mobilePhone)?.replace(/\D/g, ""),
+      message: args.message,
+      estimateNotes: args.estimateNotes,
+      programRequests: args.serviceLines,
+      grade: "ungraded",
+      status: "new",
+      urgency: "normal",
+      ownerUserId: user._id,
+      spamScore: 0,
+      spamReasons: [],
+      qualityScore: 86,
+      receivedAt: now,
+      rawPayload: args,
+      createdAt: now,
+      updatedAt: now,
+    });
+
+    const opportunityId = await ctx.db.insert("opportunities", {
+      organizationId: args.organizationId,
+      leadId,
+      customerId: args.customerId,
+      propertyId: property._id,
+      title: args.title,
+      stage: "qualified",
+      valueCents: args.valueCents,
+      closeProbability: 45,
+      expectedCloseDate: now + 10 * 24 * 60 * 60 * 1000,
+      ownerUserId: user._id,
+      serviceLines: args.serviceLines,
+      createdAt: now,
+      updatedAt: now,
+    });
+
+    await ctx.db.insert("activities", {
+      organizationId: args.organizationId,
+      entityType: "customer",
+      entityId: args.customerId,
+      kind: "system",
+      summary: `Repeat service request created: ${args.title}`,
+      metadata: { leadId, opportunityId, source: args.source, serviceLines: args.serviceLines },
+      actorUserId: user._id,
+      occurredAt: now,
+    });
+
+    await audit(ctx, {
+      organizationId: args.organizationId,
+      actorUserId: user._id,
+      action: "lead.create_repeat_customer",
+      entityType: "lead",
+      entityId: leadId,
+      summary: `Created repeat-customer lead ${args.title}`,
+      after: { leadId, opportunityId, customerId: args.customerId, propertyId: property._id },
+    });
+
+    return { leadId, opportunityId };
   },
 });
 

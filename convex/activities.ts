@@ -2,6 +2,7 @@ import { v } from "convex/values";
 import { mutation } from "./_generated/server";
 import { requireMembership } from "./lib/auth";
 import { audit } from "./lib/audit";
+import { assertEntityInOrganization } from "./lib/entities";
 
 const entityType = v.union(
   v.literal("customer"),
@@ -23,6 +24,7 @@ export const addNote = mutation({
   },
   handler: async (ctx, args) => {
     const { user } = await requireMembership(ctx, args.organizationId, "addInternalNotes");
+    await assertEntityInOrganization(ctx, args.organizationId, args.entityType, args.entityId);
     const now = Date.now();
     const noteId = await ctx.db.insert("notes", {
       organizationId: args.organizationId,

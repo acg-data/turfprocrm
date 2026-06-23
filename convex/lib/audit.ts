@@ -1,7 +1,18 @@
 import type { MutationCtx } from "../_generated/server";
 import type { Id } from "../_generated/dataModel";
 
-type EntityType = "customer" | "lead" | "opportunity" | "estimate" | "job" | "visit" | "property";
+type EntityType =
+  | "organization"
+  | "customer"
+  | "lead"
+  | "opportunity"
+  | "estimate"
+  | "job"
+  | "visit"
+  | "property"
+  | "task"
+  | "service_catalog_item"
+  | "import";
 
 export async function audit(
   ctx: MutationCtx,

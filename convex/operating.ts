@@ -2,6 +2,8 @@ import { v } from "convex/values";
 import { internalMutation, mutation, query } from "./_generated/server";
 import type { Doc, Id } from "./_generated/dataModel";
 import type { MutationCtx, QueryCtx } from "./_generated/server";
+import { activeFertilizationPricingAdjustments, calculateFertilizationProgramPricing } from "../src/domain/fertilization-pricing";
+import { commitLeadImportJob, createLeadImportPreviewJob } from "./lib/importRecords";
 
 const DEMO_SLUG = "greenline-demo";
 
@@ -42,6 +44,10 @@ function pct(numerator: number, denominator: number) {
   return Math.round((numerator / denominator) * 1000) / 10;
 }
 
+function normalizeEmail(email: string) {
+  return email.trim().toLowerCase();
+}
+
 function avg(values: number[]) {
   if (values.length === 0) return 0;
   return Math.round(values.reduce((sum, value) => sum + value, 0) / values.length);
@@ -59,6 +65,27 @@ function formatStatus(value: string) {
 
 function moneyPerHour(hours: number, hourlyCostCents: number) {
   return Math.round(hours * hourlyCostCents);
+}
+
+function allocateCents(value: number, divisor: number) {
+  return Math.round(value / Math.max(1, divisor));
+}
+
+function inferPriceBookRateCentsPerSqFt(priceBookItem?: Doc<"priceBookItems"> | null) {
+  const formulaRate = priceBookItem?.formula?.match(/lawnSizeSqFt\s*\*\s*([0-9.]+)/)?.[1];
+  if (formulaRate) return Math.round(Number(formulaRate) * 1000) / 10;
+  return priceBookItem?.pricingModel === "per_sq_ft" ? 1.8 : 1.8;
+}
+
+function normalizeRuleCondition(condition: unknown) {
+  if (!condition || typeof condition !== "object") return undefined;
+  const value = condition as Record<string, unknown>;
+  return {
+    minAreaSqFt: typeof value.minAreaSqFt === "number" ? value.minAreaSqFt : undefined,
+    maxAreaSqFt: typeof value.maxAreaSqFt === "number" ? value.maxAreaSqFt : undefined,
+    minApplications: typeof value.minApplications === "number" ? value.minApplications : undefined,
+    maxApplications: typeof value.maxApplications === "number" ? value.maxApplications : undefined,
+  };
 }
 
 const terminalLeadStatuses = new Set(["converted", "lost_confirmed", "lost_assumed", "spam", "disqualified", "unqualified", "passed_on"]);
@@ -98,6 +125,42 @@ function serviceFit(programs: string[]) {
   return `Catalog fit: ${programs.map((program) => categoryLabels[program] ?? program).join(" + ")}`;
 }
 
+function auditModule(action: string) {
+  const [prefix] = action.split(".");
+  const moduleLabels: Record<string, string> = {
+    catalog: "Admin",
+    demo: "Demo/Admin",
+    lead: "Lead Ops",
+    labor_rate: "Cost Intel/Admin",
+    member: "Admin",
+    organization: "Admin",
+    payment: "Revenue",
+    revenue: "Revenue",
+    route: "Dispatch",
+    schedule: "Dispatch",
+    task: "Jobs",
+    vendor_catalog: "Cost Intel/Admin",
+    visit: "Field",
+    workflow_status: "Admin",
+  };
+  return moduleLabels[prefix] ?? formatStatus(prefix || "system");
+}
+
+function auditExportState(action: string, after: unknown) {
+  if (action.toLowerCase().includes("export")) return "export_event";
+  if (after && typeof after === "object" && "reportingMirror" in after) return "reporting_boundary";
+  return "not_exported";
+}
+
+function auditChangedFields(before: unknown, after: unknown) {
+  if (!before || !after || typeof before !== "object" || typeof after !== "object") return [];
+  const beforeRecord = before as Record<string, unknown>;
+  const afterRecord = after as Record<string, unknown>;
+  return Object.keys(afterRecord)
+    .filter((key) => JSON.stringify(beforeRecord[key]) !== JSON.stringify(afterRecord[key]))
+    .slice(0, 12);
+}
+
 function duplicateWarningsForLead(row: { id: string; title: string; customerName: string; city: string; source: string }, peers: Array<{ id: string; title: string; customerName: string; city: string; source: string }>) {
   const normalizedName = row.customerName.trim().toLowerCase();
   const normalizedCity = row.city.trim().toLowerCase();
@@ -128,6 +191,8 @@ async function getOperatingCollections(ctx: Ctx, organizationId: Id<"organizatio
     crews,
     tasks,
     estimates,
+    estimateLineItems,
+    serviceCatalogItems,
     materials,
     materialApplications,
     laborRates,
@@ -167,6 +232,8 @@ async function getOperatingCollections(ctx: Ctx, organizationId: Id<"organizatio
     ctx.db.query("crews").withIndex("by_org", (q) => q.eq("organizationId", organizationId)).collect(),
     ctx.db.query("tasks").withIndex("by_org", (q) => q.eq("organizationId", organizationId)).collect(),
     ctx.db.query("estimates").withIndex("by_org", (q) => q.eq("organizationId", organizationId)).collect(),
+    ctx.db.query("estimateLineItems").withIndex("by_org", (q) => q.eq("organizationId", organizationId)).collect(),
+    ctx.db.query("serviceCatalogItems").withIndex("by_org", (q) => q.eq("organizationId", organizationId)).collect(),
     ctx.db.query("materials").withIndex("by_org", (q) => q.eq("organizationId", organizationId)).collect(),
     ctx.db.query("materialApplications").withIndex("by_org", (q) => q.eq("organizationId", organizationId)).collect(),
     ctx.db.query("laborRateCards").withIndex("by_org", (q) => q.eq("organizationId", organizationId)).collect(),
@@ -190,7 +257,7 @@ async function getOperatingCollections(ctx: Ctx, organizationId: Id<"organizatio
     ctx.db.query("dataQualityIssues").withIndex("by_org", (q) => q.eq("organizationId", organizationId)).collect(),
     ctx.db.query("leadStatusSettings").withIndex("by_org", (q) => q.eq("organizationId", organizationId)).collect(),
     ctx.db.query("featureFlags").withIndex("by_org", (q) => q.eq("organizationId", organizationId)).collect(),
-    ctx.db.query("auditEvents").withIndex("by_org_time", (q) => q.eq("organizationId", organizationId)).order("desc").take(20),
+    ctx.db.query("auditEvents").withIndex("by_org_time", (q) => q.eq("organizationId", organizationId)).order("desc").take(50),
     ctx.db.query("importJobs").withIndex("by_org", (q) => q.eq("organizationId", organizationId)).collect(),
     ctx.db.query("importRows").withIndex("by_org", (q) => q.eq("organizationId", organizationId)).collect(),
   ]);
@@ -208,6 +275,8 @@ async function getOperatingCollections(ctx: Ctx, organizationId: Id<"organizatio
     crews,
     tasks,
     estimates,
+    estimateLineItems,
+    serviceCatalogItems,
     materials,
     materialApplications,
     laborRates,
@@ -293,6 +362,86 @@ function computeJobSummary(
   };
 }
 
+type OperatingServiceCategory = Doc<"serviceCatalogItems">["category"];
+
+function serviceCategoriesForJob(job: Doc<"jobs">, collections: Awaited<ReturnType<typeof getOperatingCollections>>): OperatingServiceCategory[] {
+  const serviceCatalogById = new Map(collections.serviceCatalogItems.map((item) => [item._id, item]));
+  const estimateLineItems = job.estimateId ? collections.estimateLineItems.filter((lineItem) => lineItem.estimateId === job.estimateId) : [];
+  const categoriesFromEstimate = estimateLineItems
+    .map((lineItem) => lineItem.serviceCatalogItemId ? serviceCatalogById.get(lineItem.serviceCatalogItemId)?.category : undefined)
+    .filter((category): category is OperatingServiceCategory => Boolean(category));
+  if (categoriesFromEstimate.length > 0) return [...new Set(categoriesFromEstimate)];
+
+  const opportunity = job.opportunityId ? collections.opportunities.find((candidate) => candidate._id === job.opportunityId) : undefined;
+  if (opportunity?.serviceLines.length) return [...new Set(opportunity.serviceLines)];
+  return ["maintenance"];
+}
+
+type ServiceLineRollupInput = Array<{
+  jobId: Id<"jobs">;
+  actualRevenueCents: number;
+  invoicedCents: number;
+  collectedCents: number;
+  actualLaborCostCents: number;
+  actualMaterialCostCents: number;
+  actualEquipmentCostCents: number;
+  overheadCostCents: number;
+  grossProfitCents: number;
+}>;
+
+function buildServiceLineRollups(rows: ServiceLineRollupInput, collections: Awaited<ReturnType<typeof getOperatingCollections>>) {
+  const jobById = new Map(collections.jobs.map((job) => [job._id, job]));
+  const rollups = new Map<string, {
+    serviceCategory: string;
+    label: string;
+    revenueCents: number;
+    invoicedCents: number;
+    collectedCents: number;
+    laborCostCents: number;
+    materialCostCents: number;
+    equipmentCostCents: number;
+    overheadCostCents: number;
+    grossProfitCents: number;
+    jobCount: number;
+  }>();
+
+  for (const row of rows) {
+    const job = jobById.get(row.jobId);
+    if (!job) continue;
+    const categories = serviceCategoriesForJob(job, collections);
+    for (const category of categories) {
+      const current = rollups.get(category) ?? {
+        serviceCategory: category,
+        label: categoryLabels[category] ?? formatStatus(category),
+        revenueCents: 0,
+        invoicedCents: 0,
+        collectedCents: 0,
+        laborCostCents: 0,
+        materialCostCents: 0,
+        equipmentCostCents: 0,
+        overheadCostCents: 0,
+        grossProfitCents: 0,
+        jobCount: 0,
+      };
+      const divisor = categories.length;
+      current.revenueCents += allocateCents(row.actualRevenueCents, divisor);
+      current.invoicedCents += allocateCents(row.invoicedCents, divisor);
+      current.collectedCents += allocateCents(row.collectedCents, divisor);
+      current.laborCostCents += allocateCents(row.actualLaborCostCents, divisor);
+      current.materialCostCents += allocateCents(row.actualMaterialCostCents, divisor);
+      current.equipmentCostCents += allocateCents(row.actualEquipmentCostCents, divisor);
+      current.overheadCostCents += allocateCents(row.overheadCostCents, divisor);
+      current.grossProfitCents += allocateCents(row.grossProfitCents, divisor);
+      current.jobCount += 1;
+      rollups.set(category, current);
+    }
+  }
+
+  return [...rollups.values()]
+    .map((rollup) => ({ ...rollup, grossMarginPercent: pct(rollup.grossProfitCents, rollup.revenueCents) }))
+    .sort((left, right) => right.grossMarginPercent - left.grossMarginPercent || right.grossProfitCents - left.grossProfitCents);
+}
+
 async function recalculateJobCostSummaries(ctx: MutationCtx, organizationId: Id<"organizations">) {
   const collections = await getOperatingCollections(ctx, organizationId);
   const now = Date.now();
@@ -364,6 +513,28 @@ async function recalculateJobCostSummaries(ctx: MutationCtx, organizationId: Id<
     calculatedAt: now,
     createdAt: now,
   });
+
+  for (const serviceLine of buildServiceLineRollups(rows, collections)) {
+    await ctx.db.insert("profitabilitySnapshots", {
+      organizationId,
+      periodStart: periodStart.getTime(),
+      periodEnd: periodEnd.getTime(),
+      dimensionType: "service_category",
+      dimensionId: serviceLine.serviceCategory,
+      revenueCents: serviceLine.revenueCents,
+      invoicedCents: serviceLine.invoicedCents,
+      collectedCents: serviceLine.collectedCents,
+      laborCostCents: serviceLine.laborCostCents,
+      materialCostCents: serviceLine.materialCostCents,
+      equipmentCostCents: serviceLine.equipmentCostCents,
+      overheadCostCents: serviceLine.overheadCostCents,
+      grossProfitCents: serviceLine.grossProfitCents,
+      grossMarginPercent: serviceLine.grossMarginPercent,
+      metadata: { source: "jobCostSummaries", label: serviceLine.label, jobCount: serviceLine.jobCount },
+      calculatedAt: now,
+      createdAt: now,
+    });
+  }
 
   return rows.length;
 }
@@ -438,6 +609,19 @@ async function flagStaleLeads(ctx: MutationCtx, organizationId: Id<"organization
       status: "open",
       leadId: lead._id,
       summary: `Lead ${lead.title} has not moved recently.`,
+      createdAt: now,
+      updatedAt: now,
+    });
+    await ctx.db.insert("tasks", {
+      organizationId,
+      entityType: "lead",
+      entityId: lead._id,
+      title: `Follow up stale lead: ${lead.title}`,
+      description: "Automatic stale-lead check flagged this lead for sales review, reassignment, or closure.",
+      status: "open",
+      priority: "normal",
+      dueAt: now + 24 * 60 * 60 * 1000,
+      assignedUserId: lead.ownerUserId,
       createdAt: now,
       updatedAt: now,
     });
@@ -1307,13 +1491,36 @@ export const getDemoOperatingDepth = query({
         churnRiskPercent: cohort.churnRatePercent,
       };
     });
+    const latestServiceSnapshots = new Map<string, (typeof collections.profitSnapshots)[number]>();
+    for (const snapshot of [...collections.profitSnapshots].filter((candidate) => candidate.dimensionType === "service_category" && candidate.dimensionId).sort((a, b) => b.calculatedAt - a.calculatedAt)) {
+      if (snapshot.dimensionId && !latestServiceSnapshots.has(snapshot.dimensionId)) latestServiceSnapshots.set(snapshot.dimensionId, snapshot);
+    }
+    const serviceLineProfitability = latestServiceSnapshots.size > 0
+      ? [...latestServiceSnapshots.values()]
+          .map((snapshot) => ({
+            serviceCategory: snapshot.dimensionId ?? "maintenance",
+            label: snapshot.metadata?.label ?? categoryLabels[snapshot.dimensionId ?? ""] ?? formatStatus(snapshot.dimensionId ?? "maintenance"),
+            revenueCents: snapshot.revenueCents,
+            invoicedCents: snapshot.invoicedCents,
+            collectedCents: snapshot.collectedCents,
+            laborCostCents: snapshot.laborCostCents,
+            materialCostCents: snapshot.materialCostCents,
+            equipmentCostCents: snapshot.equipmentCostCents,
+            overheadCostCents: snapshot.overheadCostCents,
+            grossProfitCents: snapshot.grossProfitCents,
+            grossMarginPercent: snapshot.grossMarginPercent,
+            jobCount: snapshot.metadata?.jobCount ?? 0,
+            calculatedAt: snapshot.calculatedAt,
+          }))
+          .sort((left, right) => right.grossMarginPercent - left.grossMarginPercent || right.grossProfitCents - left.grossProfitCents)
+      : buildServiceLineRollups(collections.jobCostSummaries, collections).map((rollup) => ({ ...rollup, calculatedAt: Math.max(0, ...collections.jobCostSummaries.map((summary) => summary.calculatedAt)) }));
 
     return {
       seeded: collections.laborRates.length > 0 && collections.jobCostSummaries.length > 0,
       leadOps: {
         rows: leadRows,
         savedViews: collections.leadViews.map((view) => ({ id: view._id, name: view.name, scope: view.scope, filters: view.filters, columns: view.columns })),
-        statusSettings: collections.leadStatuses.map((status) => ({ id: status._id, status: status.status, label: status.label, color: status.color, terminal: status.terminal, active: status.active })),
+        statusSettings: [...collections.leadStatuses].sort((left, right) => left.sortOrder - right.sortOrder).map((status) => ({ id: status._id, status: status.status, label: status.label, color: status.color, sortOrder: status.sortOrder, terminal: status.terminal, active: status.active })),
         qualityIssues: collections.leadIssues.map((issue) => ({ id: issue._id, kind: issue.kind, severity: issue.severity, status: issue.status, summary: issue.summary, leadId: issue.leadId })),
         metrics: {
           openLeads: leadRows.filter((lead) => !terminalLeadStatuses.has(lead.status)).length,
@@ -1345,15 +1552,31 @@ export const getDemoOperatingDepth = query({
           { permission: "View profit dashboards", roles: ["owner", "admin", "manager"] },
         ],
         featureFlags: collections.featureFlags.map((flag) => ({ id: flag._id, key: flag.key, enabled: flag.enabled })),
-        auditEvents: collections.audits.map((audit) => ({ id: audit._id, action: audit.action, summary: audit.summary, entityType: audit.entityType, createdAt: audit.createdAt })),
+        auditEvents: collections.audits.map((audit) => {
+          const actor = audit.actorUserId ? userById.get(audit.actorUserId) : undefined;
+          return {
+            id: audit._id,
+            action: audit.action,
+            summary: audit.summary,
+            entityType: audit.entityType,
+            entityId: audit.entityId,
+            actorUserId: audit.actorUserId,
+            actorName: actor?.name ?? actor?.email ?? "System / automation",
+            module: auditModule(audit.action),
+            exportState: auditExportState(audit.action, audit.after),
+            requestId: audit.requestId,
+            changedFields: auditChangedFields(audit.before, audit.after),
+            createdAt: audit.createdAt,
+          };
+        }),
         tagTaxonomy: collections.tagDefinitions.map((tag) => ({ id: tag._id, key: tag.key, label: tag.label, category: tag.category, color: tag.color, active: tag.active, usageCount: tagUsage.get(tag._id) ?? 0 })),
         segmentCards,
         ownerAnalytics,
       },
       costIntelligence: {
-        laborRates: collections.laborRates.map((rate) => ({ id: rate._id, name: rate.name, roleName: rate.roleName, source: rate.source, hourlyCostCents: rate.hourlyCostCents, billableRateCents: rate.billableRateCents, active: rate.active })),
+        laborRates: [...collections.laborRates].sort((left, right) => right.updatedAt - left.updatedAt).map((rate) => ({ id: rate._id, name: rate.name, roleName: rate.roleName, source: rate.source, hourlyCostCents: rate.hourlyCostCents, billableRateCents: rate.billableRateCents, active: rate.active })),
         equipmentRates: collections.equipmentRates.map((rate) => ({ id: rate._id, name: rate.name, category: rate.category, hourlyCostCents: rate.hourlyCostCents, billableRateCents: rate.billableRateCents, active: rate.active })),
-        vendorCatalogs: collections.vendorCatalogs.map((item) => ({ id: item._id, vendorName: item.vendorName, itemName: item.itemName, category: item.category, unit: item.unit, unitCostCents: item.unitCostCents, source: item.source, active: item.active })),
+        vendorCatalogs: [...collections.vendorCatalogs].sort((left, right) => right.updatedAt - left.updatedAt).map((item) => ({ id: item._id, vendorName: item.vendorName, itemName: item.itemName, category: item.category, unit: item.unit, unitCostCents: item.unitCostCents, source: item.source, active: item.active })),
         costSnapshots: collections.costSnapshots.map((snapshot) => ({ id: snapshot._id, source: snapshot.source, kind: snapshot.kind, label: snapshot.label, value: snapshot.value, unit: snapshot.unit, region: snapshot.region, capturedAt: snapshot.capturedAt })),
         weatherSnapshots: collections.weatherSnapshots.map((snapshot) => ({
           id: snapshot._id,
@@ -1375,6 +1598,7 @@ export const getDemoOperatingDepth = query({
         ...totals,
         arCents,
         grossMarginPercent: pct(totals.grossProfitCents, totals.invoicedCents || totals.bookedRevenueCents),
+        serviceLineProfitability,
         invoices: customerInvoices.map((invoice) => ({ id: invoice._id, invoiceNumber: invoice.invoiceNumber, customerName: customerById.get(invoice.customerId)?.name ?? "Unknown", status: invoice.status, totalCents: invoice.totalCents, paidCents: invoice.paidCents, balanceCents: Math.max(0, invoice.totalCents - invoice.paidCents) })),
         payments: collections.customerPayments.map((payment) => ({ id: payment._id, customerName: customerById.get(payment.customerId)?.name ?? "Unknown", status: payment.status, method: payment.method, amountCents: payment.amountCents, receivedAt: payment.receivedAt })),
       },
@@ -1421,6 +1645,103 @@ export const bulkUpdateLeads = mutation({
   },
 });
 
+export const upsertLeadStatusSetting = mutation({
+  args: {
+    id: v.optional(v.id("leadStatusSettings")),
+    status: leadStatus,
+    label: v.string(),
+    color: v.string(),
+    sortOrder: v.number(),
+    terminal: v.boolean(),
+    active: v.boolean(),
+  },
+  handler: async (ctx, args) => {
+    const org = await requireDemoOrg(ctx);
+    const now = Date.now();
+    const label = args.label.trim();
+    const color = args.color.trim() || "#64748b";
+    if (!label) throw new Error("Workflow status label is required.");
+
+    const existing = args.id
+      ? await ctx.db.get(args.id)
+      : await ctx.db.query("leadStatusSettings").withIndex("by_org_status", (q) => q.eq("organizationId", org._id).eq("status", args.status)).first();
+    if (args.id && (!existing || existing.organizationId !== org._id)) throw new Error("Workflow status setting not found.");
+
+    const patch = {
+      status: args.status,
+      label,
+      color,
+      sortOrder: Math.max(0, Math.round(args.sortOrder)),
+      terminal: args.terminal,
+      active: args.active,
+      updatedAt: now,
+    };
+
+    if (existing) {
+      await ctx.db.patch(existing._id, patch);
+      await ctx.db.insert("auditEvents", {
+        organizationId: org._id,
+        action: "workflow_status.update",
+        entityType: "organization",
+        entityId: org._id,
+        summary: `Updated workflow status ${label}`,
+        before: { status: existing.status, label: existing.label, color: existing.color, sortOrder: existing.sortOrder, terminal: existing.terminal, active: existing.active },
+        after: patch,
+        createdAt: now,
+      });
+      return existing._id;
+    }
+
+    const statusSettingId = await ctx.db.insert("leadStatusSettings", { organizationId: org._id, ...patch, createdAt: now });
+    await ctx.db.insert("auditEvents", {
+      organizationId: org._id,
+      action: "workflow_status.create",
+      entityType: "organization",
+      entityId: org._id,
+      summary: `Created workflow status ${label}`,
+      after: { statusSettingId, ...patch },
+      createdAt: now,
+    });
+    return statusSettingId;
+  },
+});
+
+export const createLeadImportPreview = mutation({
+  args: {
+    fileName: v.optional(v.string()),
+    csvText: v.string(),
+  },
+  handler: async (ctx, args) => {
+    const org = await requireDemoOrg(ctx);
+    const owner = await ctx.db.query("memberships").withIndex("by_org", (q) => q.eq("organizationId", org._id)).first();
+    return await createLeadImportPreviewJob(ctx, {
+      organizationId: org._id,
+      actorUserId: owner?.userId,
+      fileName: args.fileName,
+      csvText: args.csvText,
+    });
+  },
+});
+
+export const commitLeadImportRows = mutation({
+  args: {
+    importJobId: v.id("importJobs"),
+    rowIds: v.optional(v.array(v.id("importRows"))),
+    includeReviewRows: v.optional(v.boolean()),
+  },
+  handler: async (ctx, args) => {
+    const org = await requireDemoOrg(ctx);
+    const owner = await ctx.db.query("memberships").withIndex("by_org", (q) => q.eq("organizationId", org._id)).first();
+    return await commitLeadImportJob(ctx, {
+      organizationId: org._id,
+      importJobId: args.importJobId,
+      actorUserId: owner?.userId,
+      rowIds: args.rowIds,
+      includeReviewRows: args.includeReviewRows,
+    });
+  },
+});
+
 export const updateMemberRole = mutation({
   args: { membershipId: v.id("memberships"), role },
   handler: async (ctx, args) => {
@@ -1428,6 +1749,113 @@ export const updateMemberRole = mutation({
     const membership = await ctx.db.get(args.membershipId);
     if (!membership || membership.organizationId !== org._id) throw new Error("Membership not found.");
     await ctx.db.patch(args.membershipId, { role: args.role, updatedAt: Date.now() });
+  },
+});
+
+export const inviteMember = mutation({
+  args: {
+    email: v.string(),
+    name: v.optional(v.string()),
+    role,
+    expiresInDays: v.optional(v.number()),
+  },
+  handler: async (ctx, args) => {
+    const org = await requireDemoOrg(ctx);
+    const email = normalizeEmail(args.email);
+    if (!email || !/^[^\s@]+@[^\s@]+\.[^\s@]+$/.test(email)) throw new Error("A valid teammate email is required.");
+    if (args.role === "owner") throw new Error("Invite teammates as admin, manager, sales, dispatcher, crew lead, or technician.");
+
+    const memberships = await ctx.db.query("memberships").withIndex("by_org", (q) => q.eq("organizationId", org._id)).collect();
+    const existingRows = await Promise.all(memberships.map(async (membership) => ({ membership, user: await ctx.db.get(membership.userId) })));
+    const existing = existingRows.find((row) => normalizeEmail(row.membership.invitedEmail ?? row.user?.email ?? "") === email)?.membership;
+    if (existing && ["active", "invited"].includes(existing.status)) throw new Error("That teammate is already active or invited.");
+
+    const now = Date.now();
+    const existingUser = await ctx.db.query("users").withIndex("by_email", (q) => q.eq("email", email)).first();
+    const userId =
+      existingUser?._id ??
+      await ctx.db.insert("users", {
+        clerkUserId: `demo-invite:${org._id}:${email}`,
+        name: args.name?.trim() || email,
+        email,
+        createdAt: now,
+        updatedAt: now,
+      });
+    const patch = {
+      userId,
+      role: args.role,
+      status: "invited" as const,
+      invitedEmail: email,
+      inviteToken: `demo-invite-${now}-${email.replace(/[^a-z0-9]/g, "-")}`,
+      inviteExpiresAt: now + Math.max(1, Math.min(30, Math.round(args.expiresInDays ?? 14))) * 24 * 60 * 60 * 1000,
+      inviteAcceptedAt: undefined,
+      inviteRevokedAt: undefined,
+      updatedAt: now,
+    };
+    const membershipId = existing
+      ? existing._id
+      : await ctx.db.insert("memberships", {
+          organizationId: org._id,
+          ...patch,
+          joinedAt: now,
+        });
+    if (existing) await ctx.db.patch(existing._id, patch);
+
+    await ctx.db.insert("auditEvents", {
+      organizationId: org._id,
+      action: "member.invite",
+      entityType: "organization",
+      entityId: org._id,
+      summary: `Invited ${email} as ${args.role}`,
+      after: { membershipId, email, role: args.role },
+      createdAt: now,
+    });
+
+    return { membershipId, userId, email, status: "invited" as const };
+  },
+});
+
+export const revokeMemberInvite = mutation({
+  args: { membershipId: v.id("memberships") },
+  handler: async (ctx, args) => {
+    const org = await requireDemoOrg(ctx);
+    const membership = await ctx.db.get(args.membershipId);
+    if (!membership || membership.organizationId !== org._id) throw new Error("Invite not found.");
+    if (membership.status !== "invited" && membership.status !== "expired") throw new Error("Only pending or expired invites can be revoked.");
+    const now = Date.now();
+    await ctx.db.patch(args.membershipId, { status: "revoked", inviteRevokedAt: now, updatedAt: now });
+    await ctx.db.insert("auditEvents", {
+      organizationId: org._id,
+      action: "member.invite.revoke",
+      entityType: "organization",
+      entityId: org._id,
+      summary: `Revoked invite ${membership.invitedEmail ?? membership.userId}`,
+      before: { status: membership.status },
+      after: { status: "revoked" },
+      createdAt: now,
+    });
+  },
+});
+
+export const expireMemberInvite = mutation({
+  args: { membershipId: v.id("memberships") },
+  handler: async (ctx, args) => {
+    const org = await requireDemoOrg(ctx);
+    const membership = await ctx.db.get(args.membershipId);
+    if (!membership || membership.organizationId !== org._id) throw new Error("Invite not found.");
+    if (membership.status !== "invited") throw new Error("Only pending invites can expire.");
+    const now = Date.now();
+    await ctx.db.patch(args.membershipId, { status: "expired", updatedAt: now });
+    await ctx.db.insert("auditEvents", {
+      organizationId: org._id,
+      action: "member.invite.expire",
+      entityType: "organization",
+      entityId: org._id,
+      summary: `Expired invite ${membership.invitedEmail ?? membership.userId}`,
+      before: { status: membership.status },
+      after: { status: "expired" },
+      createdAt: now,
+    });
   },
 });
 
@@ -1441,13 +1869,37 @@ export const upsertLaborRate = mutation({
   handler: async (ctx, args) => {
     const org = await requireDemoOrg(ctx);
     const now = Date.now();
+    const roleName = args.roleName.trim();
+    if (!roleName) throw new Error("Labor role is required.");
+    const hourlyCostCents = Math.max(0, Math.round(args.hourlyCostCents));
+    const billableRateCents = args.billableRateCents === undefined ? undefined : Math.max(0, Math.round(args.billableRateCents));
     if (args.id) {
       const existing = await ctx.db.get(args.id);
       if (!existing || existing.organizationId !== org._id) throw new Error("Labor rate not found.");
-      await ctx.db.patch(args.id, { roleName: args.roleName, name: `${args.roleName} override`, hourlyCostCents: args.hourlyCostCents, billableRateCents: args.billableRateCents, source: "admin_override", updatedAt: now });
+      await ctx.db.patch(args.id, { roleName, name: `${roleName} override`, hourlyCostCents, billableRateCents, source: "admin_override", updatedAt: now });
+      await ctx.db.insert("auditEvents", {
+        organizationId: org._id,
+        action: "labor_rate.update",
+        entityType: "labor_rate_card",
+        entityId: args.id,
+        summary: `Updated labor rate ${roleName}`,
+        before: { roleName: existing.roleName, hourlyCostCents: existing.hourlyCostCents, billableRateCents: existing.billableRateCents, source: existing.source, active: existing.active },
+        after: { roleName, hourlyCostCents, billableRateCents, source: "admin_override", active: existing.active },
+        createdAt: now,
+      });
       return args.id;
     }
-    return await ctx.db.insert("laborRateCards", { organizationId: org._id, roleName: args.roleName, name: `${args.roleName} override`, hourlyCostCents: args.hourlyCostCents, billableRateCents: args.billableRateCents, source: "admin_override", active: true, createdAt: now, updatedAt: now });
+    const rateId = await ctx.db.insert("laborRateCards", { organizationId: org._id, roleName, name: `${roleName} override`, hourlyCostCents, billableRateCents, source: "admin_override", active: true, createdAt: now, updatedAt: now });
+    await ctx.db.insert("auditEvents", {
+      organizationId: org._id,
+      action: "labor_rate.create",
+      entityType: "labor_rate_card",
+      entityId: rateId,
+      summary: `Created labor rate ${roleName}`,
+      after: { rateId, roleName, hourlyCostCents, billableRateCents, source: "admin_override", active: true },
+      createdAt: now,
+    });
+    return rateId;
   },
 });
 
@@ -1463,13 +1915,38 @@ export const upsertVendorCatalogItem = mutation({
   handler: async (ctx, args) => {
     const org = await requireDemoOrg(ctx);
     const now = Date.now();
+    const vendorName = args.vendorName.trim();
+    const itemName = args.itemName.trim();
+    const unit = args.unit.trim();
+    if (!vendorName || !itemName || !unit) throw new Error("Vendor, item, and unit are required.");
+    const unitCostCents = Math.max(0, Math.round(args.unitCostCents));
     if (args.id) {
       const existing = await ctx.db.get(args.id);
       if (!existing || existing.organizationId !== org._id) throw new Error("Vendor item not found.");
-      await ctx.db.patch(args.id, { vendorName: args.vendorName, itemName: args.itemName, category: args.category, unit: args.unit, unitCostCents: args.unitCostCents, source: "admin_override", updatedAt: now });
+      await ctx.db.patch(args.id, { vendorName, itemName, category: args.category, unit, unitCostCents, source: "admin_override", updatedAt: now });
+      await ctx.db.insert("auditEvents", {
+        organizationId: org._id,
+        action: "vendor_catalog.update",
+        entityType: "vendor_catalog",
+        entityId: args.id,
+        summary: `Updated vendor item ${itemName}`,
+        before: { vendorName: existing.vendorName, itemName: existing.itemName, category: existing.category, unit: existing.unit, unitCostCents: existing.unitCostCents, source: existing.source, active: existing.active },
+        after: { vendorName, itemName, category: args.category, unit, unitCostCents, source: "admin_override", active: existing.active },
+        createdAt: now,
+      });
       return args.id;
     }
-    return await ctx.db.insert("vendorCatalogs", { organizationId: org._id, vendorName: args.vendorName, itemName: args.itemName, category: args.category, unit: args.unit, unitCostCents: args.unitCostCents, source: "admin_override", active: true, createdAt: now, updatedAt: now });
+    const vendorCatalogId = await ctx.db.insert("vendorCatalogs", { organizationId: org._id, vendorName, itemName, category: args.category, unit, unitCostCents, source: "admin_override", active: true, createdAt: now, updatedAt: now });
+    await ctx.db.insert("auditEvents", {
+      organizationId: org._id,
+      action: "vendor_catalog.create",
+      entityType: "vendor_catalog",
+      entityId: vendorCatalogId,
+      summary: `Created vendor item ${itemName}`,
+      after: { vendorCatalogId, vendorName, itemName, category: args.category, unit, unitCostCents, source: "admin_override", active: true },
+      createdAt: now,
+    });
+    return vendorCatalogId;
   },
 });
 
@@ -1538,11 +2015,112 @@ export const recalculateDemoJobCosts = mutation({
   },
 });
 
+export const priceDemoFertilizationProgram = mutation({
+  args: {
+    propertyId: v.id("properties"),
+    propertyAreaId: v.optional(v.id("propertyAreas")),
+    materialId: v.id("materials"),
+    priceBookItemId: v.optional(v.id("priceBookItems")),
+    applicationCount: v.number(),
+    materialRateUnitsPer1000SqFt: v.number(),
+    laborHoursPerApplication: v.number(),
+    laborRateCents: v.number(),
+    equipmentCostCentsPerApplication: v.number(),
+    overheadPercent: v.number(),
+    targetMarginPercent: v.number(),
+  },
+  handler: async (ctx, args) => {
+    const org = await requireDemoOrg(ctx);
+    const [property, propertyArea, material, requestedPriceBookItem, owner] = await Promise.all([
+      ctx.db.get(args.propertyId),
+      args.propertyAreaId ? ctx.db.get(args.propertyAreaId) : undefined,
+      ctx.db.get(args.materialId),
+      args.priceBookItemId ? ctx.db.get(args.priceBookItemId) : undefined,
+      ctx.db.query("memberships").withIndex("by_org", (q) => q.eq("organizationId", org._id)).first(),
+    ]);
+    if (!property || property.organizationId !== org._id) throw new Error("Property not found.");
+    if (!material || material.organizationId !== org._id) throw new Error("Material not found.");
+    if (args.propertyAreaId && (!propertyArea || propertyArea.organizationId !== org._id || propertyArea.propertyId !== property._id)) throw new Error("Property area not found.");
+    if (args.priceBookItemId && (!requestedPriceBookItem || requestedPriceBookItem.organizationId !== org._id)) throw new Error("Price book item not found.");
+
+    const fallbackPriceBookItem = requestedPriceBookItem
+      ?? (await ctx.db.query("priceBookItems").withIndex("by_org", (q) => q.eq("organizationId", org._id)).collect())
+        .find((item) => item.active && item.name.toLowerCase().includes("six-step"));
+    const pricingRules = fallbackPriceBookItem
+      ? await ctx.db.query("pricingRules").withIndex("by_price_book_item", (q) => q.eq("priceBookItemId", fallbackPriceBookItem._id)).collect()
+      : [];
+    const turfAreaSqFt = Math.round(propertyArea?.unit === "sq_ft" && propertyArea.size ? propertyArea.size : property.lawnSizeSqFt ?? 0);
+    if (turfAreaSqFt <= 0) throw new Error("A lawn size or sq_ft property area is required for fertilization pricing.");
+
+    const adjustments = activeFertilizationPricingAdjustments(
+      pricingRules.map((rule) => ({
+        name: rule.name,
+        active: rule.active,
+        order: rule.order,
+        condition: normalizeRuleCondition(rule.condition),
+        adjustmentType: rule.adjustmentType,
+        adjustmentValue: rule.adjustmentValue,
+      })),
+      { turfAreaSqFt, applicationCount: args.applicationCount },
+    );
+    const output = calculateFertilizationProgramPricing({
+      turfAreaSqFt,
+      applicationCount: args.applicationCount,
+      materialUnitCostCents: material.costCents ?? 0,
+      materialRateUnitsPer1000SqFt: args.materialRateUnitsPer1000SqFt,
+      laborHoursPerApplication: args.laborHoursPerApplication,
+      laborRateCents: args.laborRateCents,
+      equipmentCostCentsPerApplication: args.equipmentCostCentsPerApplication,
+      overheadPercent: args.overheadPercent,
+      targetMarginPercent: args.targetMarginPercent,
+      priceBookRateCentsPerSqFt: inferPriceBookRateCentsPerSqFt(fallbackPriceBookItem),
+      minPriceCents: fallbackPriceBookItem?.minPriceCents ?? 0,
+      adjustments,
+    });
+    const now = Date.now();
+    const sessionId = await ctx.db.insert("pricingCalculatorSessions", {
+      organizationId: org._id,
+      propertyId: property._id,
+      inputs: {
+        kind: "fertilization_program",
+        ...args,
+        resolvedPropertyAreaId: propertyArea?._id,
+        materialName: material.name,
+        resolvedPriceBookItemId: fallbackPriceBookItem?._id,
+        priceBookItemName: fallbackPriceBookItem?.name,
+      },
+      outputs: output,
+      createdByUserId: owner?.userId,
+      createdAt: now,
+    });
+    await ctx.db.insert("auditEvents", {
+      organizationId: org._id,
+      actorUserId: owner?.userId,
+      action: "demo.pricing.fertilization.calculate",
+      entityType: "property",
+      entityId: property._id,
+      summary: `Calculated fertilization program for ${property.label}`,
+      after: { sessionId, recommendedPriceCents: output.recommendedPriceCents, turfAreaSqFt },
+      createdAt: now,
+    });
+    return { sessionId, output };
+  },
+});
+
 export const refreshCostIntelligence = mutation({
   args: {},
   handler: async (ctx) => {
     const org = await requireDemoOrg(ctx);
     return await refreshCostSnapshots(ctx, org._id);
+  },
+});
+
+export const runStaleLeadCheck = mutation({
+  args: {},
+  handler: async (ctx) => {
+    const org = await requireDemoOrg(ctx);
+    const inserted = await flagStaleLeads(ctx, org._id);
+    return { inserted };
   },
 });
 

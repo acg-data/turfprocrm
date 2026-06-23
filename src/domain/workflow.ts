@@ -23,6 +23,20 @@ export type VisitStatus = (typeof visitStatuses)[number];
 export const taskStatuses = ["open", "in_progress", "done", "canceled"] as const;
 export type TaskStatus = (typeof taskStatuses)[number];
 
+export const fieldIssueCategories = [
+  "damage",
+  "pest_activity",
+  "customer_concern",
+  "access_issue",
+  "upsell_opportunity",
+  "safety_hazard",
+  "other",
+] as const;
+export type FieldIssueCategory = (typeof fieldIssueCategories)[number];
+
+export const fieldIssueSeverities = ["low", "normal", "high", "urgent"] as const;
+export type FieldIssueSeverity = (typeof fieldIssueSeverities)[number];
+
 export const leadStatuses = ["new", "contacted", "converted", "disqualified"] as const;
 export type LeadStatus = (typeof leadStatuses)[number];
 
@@ -96,6 +110,20 @@ export function roleLabel(role: Role) {
   };
 
   return labels[role];
+}
+
+export function fieldIssueCategoryLabel(category: FieldIssueCategory) {
+  const labels: Record<FieldIssueCategory, string> = {
+    damage: "Damage",
+    pest_activity: "Pest activity",
+    customer_concern: "Customer concern",
+    access_issue: "Access issue",
+    upsell_opportunity: "Upsell opportunity",
+    safety_hazard: "Safety hazard",
+    other: "Other issue",
+  };
+
+  return labels[category];
 }
 
 export function statusTone(status: OpportunityStage | VisitStatus | JobStatus | TaskStatus | EstimateStatus | LeadStatus) {
