@@ -109,19 +109,21 @@
 }
 
 .title {
-  max-width: 13ch;
+  max-width: 16ch;
   font-family: var(--font-display);
-  font-size: var(--text-display);
-  font-weight: 720;
-  line-height: 0.93;
-  letter-spacing: -0.045em;
+  font-size: clamp(2.5rem, 5.5vw, 4.4rem);
+  font-weight: 800;
+  line-height: 1.06;
+  letter-spacing: -0.02em;
   color: var(--color-paper-ink);
   overflow-wrap: anywhere;
 }
 
 .title span,
-.sectionTitle span {
-  color: var(--color-accent-dark);
+.sectionTitle span,
+.pageTitle span {
+  display: block;
+  color: var(--color-accent);
 }
 
 .lede {
@@ -407,11 +409,12 @@
 }
 
 .sectionTitle {
-  max-width: 14ch;
+  max-width: 22ch;
   font-family: var(--font-display);
-  font-size: var(--text-3xl);
-  line-height: 0.98;
-  letter-spacing: -0.04em;
+  font-size: clamp(1.8rem, 3.6vw, 2.7rem);
+  font-weight: 800;
+  line-height: 1.12;
+  letter-spacing: -0.02em;
   overflow-wrap: anywhere;
 }
 
@@ -485,10 +488,10 @@
 .resourceCard h3,
 .testimonialCard h3 {
   font-family: var(--font-display);
-  font-size: var(--text-2xl);
-  line-height: 1.05;
-  letter-spacing: -0.025em;
-  font-weight: 720;
+  font-size: 1.4rem;
+  line-height: 1.2;
+  letter-spacing: -0.015em;
+  font-weight: 700;
 }
 
 .moduleCard p,
@@ -753,11 +756,12 @@
 }
 
 .pageTitle {
-  max-width: 15ch;
+  max-width: 20ch;
   font-family: var(--font-display);
-  font-size: clamp(2.6rem, 7vw, 6rem);
-  line-height: 0.94;
-  letter-spacing: -0.045em;
+  font-size: clamp(2.2rem, 4.8vw, 3.8rem);
+  font-weight: 800;
+  line-height: 1.08;
+  letter-spacing: -0.02em;
   overflow-wrap: anywhere;
 }
 

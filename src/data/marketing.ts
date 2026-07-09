@@ -75,10 +75,10 @@ export const marketingPages: MarketingPage[] = [
   {
     slug: "features",
     navLabel: "Features",
-    eyebrow: "Operating system",
-    title: "The green-industry CRM, scheduling, field, and costing stack in one workspace.",
-    lede: "A connected product surface for sales, dispatch, field work, admin, and owner-level profitability without bolting together generic CRM screens.",
-    primaryAction: "Open product tour",
+    eyebrow: "Features",
+    title: "Powerful Features. Built for Your Business.",
+    lede: "Turf Pro CRM gives you everything you need to run your lawn care, landscaping, or pest control business — smarter, faster, and more efficiently.",
+    primaryAction: "Start Free Trial",
     proof: ["Lead table", "CRM timeline", "Estimating", "Dispatch", "Field PWA", "Job costing"],
     sections: [
       {
@@ -438,11 +438,38 @@ export const marketingPages: MarketingPage[] = [
   },
 ];
 
-export const marketingNav = [
+export type MarketingNavItem = {
+  label: string;
+  href?: string;
+  children?: Array<{ label: string; href: string }>;
+};
+
+export const marketingNav: MarketingNavItem[] = [
   { label: "Features", href: "/features" },
-  { label: "Solutions", href: "/solutions" },
+  {
+    label: "Solutions",
+    children: [
+      { label: "Industries", href: "/solutions" },
+      { label: "Lead Ops", href: "/lead-ops" },
+      { label: "CRM", href: "/crm" },
+      { label: "Dispatch", href: "/dispatch" },
+      { label: "Field PWA", href: "/field" },
+      { label: "Job Costing", href: "/job-costing" },
+      { label: "Cost Intel", href: "/cost-intelligence" },
+      { label: "Admin", href: "/admin-controls" },
+    ],
+  },
   { label: "Pricing", href: "/pricing" },
-  { label: "Resources", href: "/resources" },
+  {
+    label: "Resources",
+    children: [
+      { label: "Resource library", href: "/resources" },
+      { label: "Integrations", href: "/integrations" },
+      { label: "Security", href: "/security" },
+      { label: "Request a demo", href: "/demo" },
+    ],
+  },
+  { label: "About", href: "/about" },
 ];
 
 export function getMarketingPage(slug: string) {

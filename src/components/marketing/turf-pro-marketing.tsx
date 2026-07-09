@@ -107,7 +107,9 @@ function HomeHero() {
       <div className={`${styles.wrap} ${styles.heroGrid}`}>
         <Reveal immediate className={styles.heroCopy}>
           <p className={styles.eyebrow}>Landscape / Pest SaaS</p>
-          <h1 className={styles.title}>The outdoor CRM that follows the work.</h1>
+          <h1 className={styles.title}>
+            The outdoor CRM <span>that follows the work.</span>
+          </h1>
           <p className={styles.lede}>
             Turf Pro CRM connects lead operations, customer records, estimates, dispatch, field completion, admin controls, and job costing for landscaping and pest-control operators.
           </p>
