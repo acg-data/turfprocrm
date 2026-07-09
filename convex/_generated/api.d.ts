@@ -21,6 +21,7 @@ import type * as email from "../email.js";
 import type * as estimates from "../estimates.js";
 import type * as field from "../field.js";
 import type * as jobs from "../jobs.js";
+import type * as marketingLeads from "../marketingLeads.js";
 import type * as lib_audit from "../lib/audit.js";
 import type * as lib_auth from "../lib/auth.js";
 import type * as lib_emails from "../lib/emails.js";
@@ -52,6 +53,7 @@ declare const fullApi: ApiFromModules<{
   estimates: typeof estimates;
   field: typeof field;
   jobs: typeof jobs;
+  marketingLeads: typeof marketingLeads;
   "lib/audit": typeof lib_audit;
   "lib/auth": typeof lib_auth;
   "lib/emails": typeof lib_emails;

@@ -1502,4 +1502,18 @@ export default defineSchema({
     .index("by_org", ["organizationId"])
     .index("by_token", ["token"])
     .index("by_org_email", ["organizationId", "normalizedEmail"]),
+
+  marketingLeads: defineTable({
+    name: v.string(),
+    email: v.string(),
+    company: v.string(),
+    phone: v.optional(v.string()),
+    crewSize: v.optional(v.string()),
+    message: v.optional(v.string()),
+    source: v.string(),
+    status: v.union(v.literal("new"), v.literal("contacted"), v.literal("closed")),
+    createdAt: v.number(),
+  })
+    .index("by_status", ["status"])
+    .index("by_created", ["createdAt"]),
 });

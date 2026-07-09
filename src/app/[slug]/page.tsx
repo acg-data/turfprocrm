@@ -1,6 +1,6 @@
 import type { Metadata } from "next";
 import { notFound } from "next/navigation";
-import { ClonedTurfProFeaturesPage } from "@/components/marketing/cloned-features-page";
+import { FeaturesPage } from "@/components/marketing/features-page";
 import { TurfProMarketingPage } from "@/components/marketing/turf-pro-marketing";
 import { getMarketingPage, marketingSlugs } from "@/data/marketing";
 
@@ -40,7 +40,7 @@ export default async function MarketingDetailPage({
   const { slug } = await params;
 
   if (slug === "features") {
-    return <ClonedTurfProFeaturesPage />;
+    return <FeaturesPage />;
   }
 
   const page = getMarketingPage(slug);

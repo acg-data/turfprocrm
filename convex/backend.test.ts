@@ -332,4 +332,32 @@ describe("Convex operating system functions", () => {
       }),
     ).resolves.toBeTruthy();
   });
+
+  it("captures a public marketing demo request without auth", async () => {
+    const t = convexTest(schema, modules);
+
+    const result = await t.mutation(api.marketingLeads.submitDemoRequest, {
+      name: "Jordan Reyes",
+      email: "jordan@reyeslawn.com",
+      company: "Reyes Lawn & Landscape",
+      crewSize: "1-5",
+    });
+    expect(result.leadId).toBeTruthy();
+
+    await expect(
+      t.mutation(api.marketingLeads.submitDemoRequest, {
+        name: "Bad Email",
+        email: "not-an-email",
+        company: "Acme",
+      }),
+    ).rejects.toThrow(/valid email/i);
+
+    await expect(
+      t.mutation(api.marketingLeads.submitDemoRequest, {
+        name: "",
+        email: "valid@example.com",
+        company: "",
+      }),
+    ).rejects.toThrow(/required/i);
+  });
 });

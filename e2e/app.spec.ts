@@ -8,13 +8,15 @@ async function openAppView(page: Page, name: string) {
 
 test("marketing front page routes to product pages and the live app", async ({ page }) => {
   await page.goto("/");
-  await expect(page.getByRole("heading", { name: /The All-in-One CRM Built for Outdoor Professionals/i })).toBeVisible();
-  await expect(page.locator("header").getByRole("link", { name: "Get Started" })).toHaveAttribute("href", "/signin");
+  await expect(page.getByRole("heading", { name: /The outdoor CRM that follows the work\./i })).toBeVisible();
+  const menuButton = page.getByRole("button", { name: "Open menu" });
+  if (await menuButton.isVisible()) await menuButton.click();
+  await expect(page.locator("header").getByRole("link", { name: "Start free" }).first()).toHaveAttribute("href", "/signin");
 
   await page.goto("/features");
-  await expect(page.getByRole("heading", { name: /Powerful Features/i })).toBeVisible();
-  await expect(page.getByText("Drag-and-drop scheduling")).toBeVisible();
-  await expect(page.getByText("One-click invoicing")).toBeVisible();
+  await expect(page.getByRole("heading", { name: /green-industry CRM, scheduling, field, and costing stack/i })).toBeVisible();
+  await expect(page.getByText("A lead table that works like an operating queue")).toBeVisible();
+  await expect(page.getByText("Know what a job costs while it's still useful to know")).toBeVisible();
 
   await page.goto("/signin");
   await expect(page.getByRole("heading", { name: "Sign in, then launch the workspace" })).toBeVisible();

@@ -1,5 +1,5 @@
-import { ClonedTurfProHomepage } from "@/components/marketing/cloned-homepage";
+import { TurfProLandingPage } from "@/components/marketing/turf-pro-marketing";
 
 export default function Home() {
-  return <ClonedTurfProHomepage />;
+  return <TurfProLandingPage />;
 }
