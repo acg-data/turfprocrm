@@ -2,7 +2,7 @@
 
 import { convexTest } from "convex-test";
 import { describe, expect, it } from "vitest";
-import { api } from "./_generated/api";
+import { api, internal } from "./_generated/api";
 import schema from "./schema";
 
 const modules = import.meta.glob("./**/*.ts");
@@ -222,5 +222,114 @@ describe("Convex operating system functions", () => {
     const outsider = t.withIdentity({ subject: "user_outsider_2", email: "outsider2@example.com", name: "Outsider Two" });
     await outsider.mutation(api.setup.syncCurrentUser);
     await expect(outsider.mutation(api.operating.refreshCostIntelligence, { organizationId })).rejects.toThrow();
+  });
+
+  it("runs the invite lifecycle with seat limits and email matching", async () => {
+    const t = convexTest(schema, modules);
+    const owner = t.withIdentity({ subject: "user_invite_owner", email: "invite-owner@example.com", name: "Invite Owner" });
+
+    // Free plan: 1 seat → invites blocked immediately.
+    const freeOrgId = await owner.mutation(api.setup.createOrganization, {
+      name: "Free Seats Co",
+      timezone: "America/New_York",
+      industryFocus: "both",
+    });
+    await expect(
+      owner.mutation(api.team.createInvite, { organizationId: freeOrgId, email: "helper@example.com", role: "technician" }),
+    ).rejects.toThrow(/allows 1 member/);
+
+    // Pro plan: unlimited seats.
+    const proOrgId = await owner.mutation(api.setup.createOrganization, {
+      name: "Pro Seats Co",
+      timezone: "America/New_York",
+      industryFocus: "both",
+      billingPlan: "pro",
+    });
+    await owner.mutation(api.team.createInvite, { organizationId: proOrgId, email: "tech@example.com", role: "technician" });
+
+    const invites = await owner.query(api.team.listInvites, { organizationId: proOrgId });
+    expect(invites).toHaveLength(1);
+
+    const token = await t.run(async (ctx) => {
+      const rows = await ctx.db.query("invites").collect();
+      return rows[0].token;
+    });
+
+    // Wrong email cannot accept.
+    const wrongUser = t.withIdentity({ subject: "user_wrong", email: "someone-else@example.com", name: "Wrong Person" });
+    await wrongUser.mutation(api.setup.syncCurrentUser);
+    await expect(wrongUser.mutation(api.team.acceptInvite, { token })).rejects.toThrow(/sent to/i);
+
+    // Matching email joins with the invited role.
+    const tech = t.withIdentity({ subject: "user_tech_invitee", email: "tech@example.com", name: "Tech Invitee" });
+    await tech.mutation(api.setup.syncCurrentUser);
+    const accepted = await tech.mutation(api.team.acceptInvite, { token });
+    expect(accepted.organizationId).toBe(proOrgId);
+
+    const workspaceView = await tech.query(api.workspace.getWorkspace, { organizationId: proOrgId });
+    expect(workspaceView.viewer.role).toBe("technician");
+
+    // The invite is single-use.
+    await expect(tech.mutation(api.team.acceptInvite, { token })).rejects.toThrow();
+  });
+
+  it("blocks writes but not reads when the subscription lapses", async () => {
+    const t = convexTest(schema, modules);
+    const owner = t.withIdentity({ subject: "user_lapsed_owner", email: "lapsed@example.com", name: "Lapsed Owner" });
+    const organizationId = await owner.mutation(api.setup.createOrganization, {
+      name: "Lapsed Co",
+      timezone: "America/New_York",
+      industryFocus: "both",
+    });
+
+    // Simulate a Stripe cancellation landing via the webhook path.
+    await t.mutation(internal.billingStore.upsertFromStripe, {
+      organizationId,
+      plan: "pro",
+      status: "canceled",
+      stripeCustomerId: "cus_test_123",
+      stripeSubscriptionId: "sub_test_123",
+    });
+
+    const overview = await owner.query(api.billingStore.getBillingOverview, { organizationId });
+    expect(overview.status).toBe("canceled");
+
+    // Reads stay open; writes are blocked.
+    await expect(owner.query(api.workspace.getWorkspace, { organizationId })).resolves.toBeTruthy();
+    await expect(
+      owner.mutation(api.workspace.createLead, {
+        organizationId,
+        customerName: "Blocked Customer",
+        title: "Should not create",
+        street: "1 Blocked St",
+        city: "Foxborough",
+        state: "MA",
+        postalCode: "02035",
+        valueCents: 10_000,
+        serviceLine: "lawn_care",
+      }),
+    ).rejects.toThrow(/subscription is inactive/i);
+
+    // Reactivation restores writes.
+    await t.mutation(internal.billingStore.upsertFromStripe, {
+      organizationId,
+      plan: "pro",
+      status: "active",
+      stripeCustomerId: "cus_test_123",
+      stripeSubscriptionId: "sub_test_123",
+    });
+    await expect(
+      owner.mutation(api.workspace.createLead, {
+        organizationId,
+        customerName: "Unblocked Customer",
+        title: "Creates fine",
+        street: "2 Active St",
+        city: "Foxborough",
+        state: "MA",
+        postalCode: "02035",
+        valueCents: 10_000,
+        serviceLine: "lawn_care",
+      }),
+    ).resolves.toBeTruthy();
   });
 });

@@ -63,5 +63,37 @@ export async function requireMembership(
     throw new ConvexError({ code: "FORBIDDEN", message: "This role cannot perform that action." });
   }
 
+  // Permission-gated calls are writes: block them (reads stay open) when billing has lapsed.
+  if (permission) {
+    await assertSubscriptionWritable(ctx, organizationId);
+  }
+
   return { user, membership };
+}
+
+const WRITE_OK_STATUSES = new Set(["active", "trialing", "past_due", "manual"]);
+const TRIAL_GRACE_MS = 3 * 24 * 60 * 60 * 1000;
+
+async function assertSubscriptionWritable(ctx: Ctx, organizationId: Id<"organizations">) {
+  const subscription = await ctx.db
+    .query("subscriptions")
+    .withIndex("by_org", (q) => q.eq("organizationId", organizationId))
+    .first();
+  if (!subscription) return; // legacy orgs without a subscription row stay writable
+  if (!WRITE_OK_STATUSES.has(subscription.status)) {
+    throw new ConvexError({
+      code: "SUBSCRIPTION_INACTIVE",
+      message: "Your subscription is inactive. Update billing in Admin → Billing to make changes.",
+    });
+  }
+  if (
+    subscription.status === "trialing" &&
+    subscription.trialEndsAt &&
+    Date.now() > subscription.trialEndsAt + TRIAL_GRACE_MS
+  ) {
+    throw new ConvexError({
+      code: "TRIAL_EXPIRED",
+      message: "Your trial has ended. Choose a plan in Admin → Billing to keep making changes.",
+    });
+  }
 }

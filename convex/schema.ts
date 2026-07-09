@@ -1484,4 +1484,22 @@ export default defineSchema({
     .index("by_org", ["organizationId"])
     .index("by_user", ["userId"])
     .index("by_user_read", ["userId", "readAt"]),
+
+  invites: defineTable({
+    organizationId: v.id("organizations"),
+    email: v.string(),
+    normalizedEmail: v.string(),
+    role,
+    token: v.string(),
+    status: v.union(v.literal("pending"), v.literal("accepted"), v.literal("revoked"), v.literal("expired")),
+    invitedByUserId: v.id("users"),
+    expiresAt: v.number(),
+    acceptedByUserId: v.optional(v.id("users")),
+    acceptedAt: v.optional(v.number()),
+    createdAt: v.number(),
+    updatedAt: v.number(),
+  })
+    .index("by_org", ["organizationId"])
+    .index("by_token", ["token"])
+    .index("by_org_email", ["organizationId", "normalizedEmail"]),
 });

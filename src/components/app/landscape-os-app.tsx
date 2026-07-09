@@ -37,6 +37,7 @@ import {
   UsersRound,
   X,
 } from "lucide-react";
+import { UserButton } from "@clerk/nextjs";
 import { useConvexAuth, useMutation, useQuery } from "convex/react";
 import Link from "next/link";
 import { FormEvent, ReactNode, useEffect, useMemo, useRef, useState } from "react";
@@ -1385,6 +1386,13 @@ function AuthenticatedWorkspaceGate() {
   }, [syncCurrentUser]);
 
   const myOrganizations = useQuery(api.setup.listMyOrganizations, userSynced ? {} : "skip");
+  const [activeOrgId, setActiveOrgId] = useState<string | null>(() => {
+    try {
+      return typeof window === "undefined" ? null : localStorage.getItem("turfpro.activeOrg");
+    } catch {
+      return null;
+    }
+  });
 
   if (!userSynced || myOrganizations === undefined) {
     return <AppGate title="Loading workspaces" detail="Syncing your profile and organizations…" />;
@@ -1403,10 +1411,20 @@ function AuthenticatedWorkspaceGate() {
     );
   }
 
+  const selected = myOrganizations.find((row) => row.organization._id === activeOrgId) ?? myOrganizations[0];
+
   return (
     <OrgScopedApp
-      organizationId={myOrganizations[0].organization._id}
-      organizationName={myOrganizations[0].organization.name}
+      key={selected.organization._id}
+      organizationId={selected.organization._id}
+      organizationName={selected.organization.name}
+      organizations={myOrganizations.map((row) => ({ id: row.organization._id as string, name: row.organization.name }))}
+      onSwitchOrganization={(id) => {
+        try {
+          localStorage.setItem("turfpro.activeOrg", id);
+        } catch {}
+        setActiveOrgId(id);
+      }}
     />
   );
 }
@@ -1414,9 +1432,13 @@ function AuthenticatedWorkspaceGate() {
 function OrgScopedApp({
   organizationId,
   organizationName,
+  organizations,
+  onSwitchOrganization,
 }: {
   organizationId: Id<"organizations">;
   organizationName: string;
+  organizations: Array<{ id: string; name: string }>;
+  onSwitchOrganization: (id: string) => void;
 }) {
   const liveWorkspace = useQuery(api.workspace.getWorkspace, { organizationId }) as WorkspaceSnapshot | undefined;
   const backendBlueprint = useQuery(api.specs.getBackendBlueprint, {}) as BackendBlueprint | undefined;
@@ -1582,6 +1604,22 @@ function OrgScopedApp({
 
   return (
     <>
+      {organizations.length > 1 ? (
+        <div className="flex items-center gap-2 border-b border-stone-200 bg-white px-4 py-2 text-sm">
+          <span className="font-semibold text-stone-500">Workspace</span>
+          <select
+            value={organizationId}
+            onChange={(event) => onSwitchOrganization(event.target.value)}
+            className="rounded-md border border-stone-200 px-2 py-1 text-sm font-semibold text-stone-800"
+          >
+            {organizations.map((org) => (
+              <option key={org.id} value={org.id}>
+                {org.name}
+              </option>
+            ))}
+          </select>
+        </div>
+      ) : null}
       {showSampleBanner ? (
         <div className="flex flex-wrap items-center justify-center gap-3 border-b border-amber-200 bg-amber-50 px-4 py-2.5 text-sm text-amber-900">
           <span>
@@ -2258,6 +2296,7 @@ function LandscapeOsWorkspace({
                     Sign In
                   </Link>
                 )}
+                {viewerMember && process.env.NEXT_PUBLIC_CLERK_PUBLISHABLE_KEY ? <UserButton /> : null}
               </div>
             </div>
             <div className="relative mt-3 max-w-3xl">

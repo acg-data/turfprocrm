@@ -7,5 +7,6 @@ crons.interval("refresh cost intelligence snapshots", { hours: 12 }, internal.op
 crons.interval("refresh job-site weather snapshots", { hours: 6 }, internal.operating.scheduledRefreshWeatherSnapshots, {});
 crons.interval("check stale leads", { hours: 24 }, internal.operating.scheduledStaleLeadChecks, {});
 crons.interval("recalculate job cost summaries", { hours: 1 }, internal.operating.scheduledRecalculateJobCosts, {});
+crons.interval("trial ending reminders", { hours: 24 }, internal.billingStore.scheduledTrialReminders, {});
 
 export default crons;

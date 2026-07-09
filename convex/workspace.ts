@@ -3,6 +3,7 @@ import { mutation, query } from "./_generated/server";
 import type { Id } from "./_generated/dataModel";
 import type { MutationCtx, QueryCtx } from "./_generated/server";
 import { requireMembership, type Permission } from "./lib/auth";
+import { planLimits } from "./setup";
 
 const serviceCategory = v.union(
   v.literal("lawn_care"),
@@ -1023,6 +1024,23 @@ export const createLead = mutation({
   },
   handler: async (ctx, args) => {
     const { org, user } = await requireWorkspace(ctx, args.organizationId, "managePipeline");
+
+    const subscription = await ctx.db
+      .query("subscriptions")
+      .withIndex("by_org", (q) => q.eq("organizationId", org._id))
+      .first();
+    const plan = subscription?.plan ?? org.billingPlan ?? "free";
+    const { contactLimit } = planLimits(plan);
+    if (contactLimit !== null) {
+      const contacts = await ctx.db.query("contacts").withIndex("by_org", (q) => q.eq("organizationId", org._id)).collect();
+      if (contacts.length >= contactLimit) {
+        throw new ConvexError({
+          code: "PLAN_LIMIT_REACHED",
+          message: `Your ${plan} plan allows ${contactLimit} contacts. Upgrade in Admin → Billing to add more.`,
+        });
+      }
+    }
+
     const now = Date.now();
     const source = args.source?.trim() || "Manual entry";
     const signals = spamSignals({ customerName: args.customerName, phone: args.phone, email: args.email, message: `${args.title} ${args.message ?? ""}` });

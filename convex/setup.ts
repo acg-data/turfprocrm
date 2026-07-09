@@ -46,7 +46,7 @@ async function upsertCurrentUser(ctx: MutationCtx) {
 
 const billingPlan = v.union(v.literal("free"), v.literal("starter"), v.literal("pro"), v.literal("growth"), v.literal("enterprise"));
 
-function planLimits(plan?: string) {
+export function planLimits(plan?: string) {
   if (plan === "free") return { contactLimit: 10, memberLimit: 1 };
   if (plan === "starter") return { contactLimit: 250, memberLimit: 3 };
   return { contactLimit: null, memberLimit: null };

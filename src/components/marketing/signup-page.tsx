@@ -1,7 +1,7 @@
 "use client";
 
 import { Show, SignIn, SignUp, UserButton } from "@clerk/nextjs";
-import { useMutation, useQuery, type ReactMutation } from "convex/react";
+import { useAction, useMutation, useQuery, type ReactMutation } from "convex/react";
 import type { FunctionReturnType } from "convex/server";
 import { ArrowRight, Check, CreditCard, LockKeyhole, ShieldCheck, Sprout, UsersRound } from "lucide-react";
 import Link from "next/link";
@@ -48,11 +48,12 @@ const clerkAppearance = {
 
 type WorkspaceRows = FunctionReturnType<typeof api.setup.listMyOrganizations>;
 type CreateOrganizationFn = ReactMutation<typeof api.setup.createOrganization>;
+type CreateCheckoutFn = (args: { organizationId: WorkspaceRows[number]["organization"]["_id"]; plan: "starter" | "pro" }) => Promise<{ url: string | null }>;
 
 export function AuthEntryPage() {
   // Convex hooks can only run under a ConvexProvider, which AppProviders only mounts when the URL is configured.
   if (!process.env.NEXT_PUBLIC_CONVEX_URL) {
-    return <AuthEntryPageBody workspaces={undefined} createOrganization={null} />;
+    return <AuthEntryPageBody workspaces={undefined} createOrganization={null} createCheckoutSession={null} />;
   }
   return <AuthEntryPageWithConvex />;
 }
@@ -60,15 +61,18 @@ export function AuthEntryPage() {
 function AuthEntryPageWithConvex() {
   const workspaces = useQuery(api.setup.listMyOrganizations);
   const createOrganization = useMutation(api.setup.createOrganization);
-  return <AuthEntryPageBody workspaces={workspaces} createOrganization={createOrganization} />;
+  const createCheckoutSession = useAction(api.billing.createCheckoutSession);
+  return <AuthEntryPageBody workspaces={workspaces} createOrganization={createOrganization} createCheckoutSession={createCheckoutSession} />;
 }
 
 function AuthEntryPageBody({
   workspaces,
   createOrganization,
+  createCheckoutSession,
 }: {
   workspaces: WorkspaceRows | undefined;
   createOrganization: CreateOrganizationFn | null;
+  createCheckoutSession: CreateCheckoutFn | null;
 }) {
   const authConfigured = Boolean(process.env.NEXT_PUBLIC_CLERK_PUBLISHABLE_KEY);
   const convexConfigured = Boolean(process.env.NEXT_PUBLIC_CONVEX_URL);
@@ -99,6 +103,19 @@ function AuthEntryPageBody({
       });
       setCreatedWorkspaceId(organizationId);
       setCompanyName("");
+
+      // Paid plans continue straight into Stripe Checkout; the webhook activates the subscription.
+      if (selectedPlan === "pro" && createCheckoutSession) {
+        try {
+          const { url } = await createCheckoutSession({ organizationId, plan: "pro" });
+          if (url) {
+            window.location.href = url;
+            return;
+          }
+        } catch {
+          setError("Workspace created on a trial — Stripe checkout isn't configured yet, so billing can be finished later from Admin → Billing.");
+        }
+      }
     } catch (caught) {
       setError(caught instanceof Error ? caught.message : "Could not create workspace.");
     } finally {
