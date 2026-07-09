@@ -1,24 +1,31 @@
 # TurfPro CRM on Replit
 
-Fully-Replit stack — no external SaaS services required.
+Replit hosts the **Next.js frontend**; the backend is **Convex** (database + functions), auth is **Clerk**, billing is **Stripe**.
 
 ## Architecture
 
-- **Database:** Replit PostgreSQL via `DATABASE_URL` (auto-provisioned by the postgresql module). Drizzle ORM; schema in `src/server/db/schema.ts`; SQL migrations in `drizzle/` run automatically on first DB connection (`src/server/db/client.ts`). Without `DATABASE_URL` the app falls back to an embedded PGlite database at `.data/pglite` — this is what local dev and tests use.
-- **Auth:** Replit Auth. The Replit proxy sets `x-replit-user-id` / `x-replit-user-name` headers after the user completes the popup login (`loginWithReplit()` in `src/lib/live-api.ts`). Outside Replit in non-production, a `dev:local` identity is used automatically (`src/server/auth.ts`).
-- **API:** All data flows through `POST /api/rpc/<module.fn>` (`src/app/api/rpc/[fn]/route.ts`), dispatching to plain server modules in `src/server/modules/` (workspace, operating, setup, specs). Every read/write is org-scoped and role-checked in `src/server/guards.ts`.
-- **Legacy:** The `convex/` directory is the previous backend, kept dormant for reference. Do not wire new features to it.
+- **Backend:** Convex — schema (`convex/schema.ts`, 78 tables), authenticated org-scoped modules (`convex/workspace.ts`, `operating.ts`, `setup.ts`, `crm.ts`, …), RBAC in `convex/lib/auth.ts`, audit trail in `convex/lib/audit.ts`, crons in `convex/crons.ts`, HTTP webhooks in `convex/http.ts`.
+- **Auth:** Clerk (email/password + Google OAuth for the public). Frontend providers in `src/components/app/providers.tsx`; Convex trusts the Clerk JWT via `CLERK_JWT_ISSUER_DOMAIN`.
+- **Billing:** Stripe subscriptions (Starter $49 / Pro $99), webhook-driven state in the `subscriptions` table.
+- **Local demo:** with no env vars (or `NEXT_PUBLIC_LOCAL_DEMO=1`) the app renders an in-memory demo workspace — this is what e2e tests use.
+
+## Required secrets (Replit Secrets pane)
+
+- `NEXT_PUBLIC_CONVEX_URL` — Convex deployment URL
+- `NEXT_PUBLIC_CLERK_PUBLISHABLE_KEY`, `CLERK_SECRET_KEY` — Clerk
+- Convex-side env (set in the Convex dashboard, not Replit): `CLERK_JWT_ISSUER_DOMAIN`, `CLERK_WEBHOOK_SECRET`, `STRIPE_SECRET_KEY`, `STRIPE_WEBHOOK_SECRET`, `RESEND_API_KEY`
 
 ## Commands
 
-- `npm run dev` — dev server
-- `npm run build && npm run start` — production
-- `npx vitest run` — unit + backend tests (backend tests run against in-memory PGlite)
-- `npx drizzle-kit generate` — regenerate SQL after editing `src/server/db/schema.ts` (never edit `drizzle/*.sql` by hand)
+- `npm run dev` — frontend dev server (`npx convex dev` separately for backend development)
+- `npm run build && npm run start` — production frontend
+- `npx vitest run` — unit + convex-test suites
+- `npx playwright test` — e2e (uses the local demo mode)
 
 ## Conventions
 
-- New backend functions: add to a module in `src/server/modules/`, register in `src/server/registry.ts`, call from the client via `api.*` names in `src/lib/live-api.ts`.
-- Permissions: `src/domain/permissions.ts` (mirrored server-side); check with `requireWorkspace(ctx, organizationId, "<permission>")`.
+- New backend functions live in `convex/` modules and must use `requireMembership`/`requireWorkspace` from `convex/lib/auth.ts` — never ship an unauthenticated function.
+- Permissions matrix: `convex/lib/auth.ts`, mirrored in `src/domain/permissions.ts` — keep in sync.
 - Money is integer cents; timestamps are epoch ms numbers.
-- The CRM capability roadmap lives in `docs/crm-parity-plan.md`.
+- Capability roadmap: `docs/crm-parity-plan.md`; launch checklist: `docs/prime-time-top-100.md`.
+- Historical note: a fully-Replit stack port (Drizzle + PGlite + RPC routes) exists at commit `cf0c367` if ever needed again.

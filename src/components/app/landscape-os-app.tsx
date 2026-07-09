@@ -37,7 +37,7 @@ import {
   UsersRound,
   X,
 } from "lucide-react";
-import { api, loginWithReplit, useAuth, useMutation, useQuery } from "@/lib/live-api";
+import { useConvexAuth, useMutation, useQuery } from "convex/react";
 import Link from "next/link";
 import { FormEvent, ReactNode, useEffect, useMemo, useRef, useState } from "react";
 import { demoWorkspace } from "@/data/demo-workspace";
@@ -56,6 +56,8 @@ import {
   type ServiceCategory,
 } from "@/domain/workflow";
 import { cn, currency, googleMapsUrl, shortDate, timeRange } from "@/lib/utils";
+import { api } from "../../../convex/_generated/api";
+import type { Id } from "../../../convex/_generated/dataModel";
 
 type View = "dashboard" | "prime_time" | "lead_ops" | "crm" | "pipeline" | "dispatch" | "jobs" | "field" | "costing" | "profit" | "cost_intel" | "admin" | "onboarding" | "specs";
 
@@ -1313,15 +1315,16 @@ function inputClass() {
 }
 
 export function LandscapeOsApp() {
-  // Escape hatch for e2e tests and offline demos; the live Replit stack is the default.
-  if (process.env.NEXT_PUBLIC_LOCAL_DEMO === "1") {
+  // Live mode needs Convex + Clerk; NEXT_PUBLIC_LOCAL_DEMO forces the in-memory demo (e2e, offline review).
+  const liveConfigured = Boolean(process.env.NEXT_PUBLIC_CONVEX_URL && process.env.NEXT_PUBLIC_CLERK_PUBLISHABLE_KEY);
+  if (process.env.NEXT_PUBLIC_LOCAL_DEMO === "1" || !liveConfigured) {
     return (
       <LandscapeOsWorkspace
         initialWorkspace={demoWorkspace}
         backendState={{
           mode: "local",
           label: "Local demo",
-          detail: "NEXT_PUBLIC_LOCAL_DEMO is set, so this session is using in-memory demo data.",
+          detail: "Convex and Clerk are not both configured (or NEXT_PUBLIC_LOCAL_DEMO is set), so this session is using in-memory demo data.",
           blueprint: fallbackBackendBlueprint,
         }}
       />
@@ -1331,7 +1334,7 @@ export function LandscapeOsApp() {
 }
 
 function LandscapeOsLiveApp() {
-  const { isLoading, isAuthenticated } = useAuth();
+  const { isLoading, isAuthenticated } = useConvexAuth();
 
   if (isLoading) {
     return <AppGate title="Connecting" detail="Checking your session…" />;
@@ -1343,18 +1346,11 @@ function LandscapeOsLiveApp() {
         title="Sign in to open your workspace"
         detail="The operating app is tenant-scoped: every read and write is checked against your organization membership and role."
       >
-        <button
-          type="button"
-          onClick={() => loginWithReplit(() => location.reload())}
-          className="inline-flex min-h-10 items-center justify-center rounded-md bg-[#224036] px-4 text-sm font-semibold text-white shadow-sm transition hover:bg-[#1a332b]"
-        >
-          Sign in with Replit
-        </button>
         <Link
           href="/signin"
-          className="inline-flex min-h-10 items-center justify-center rounded-md border border-stone-200 bg-white px-4 text-sm font-semibold text-stone-800 shadow-sm transition hover:bg-stone-50"
+          className="inline-flex min-h-10 items-center justify-center rounded-md bg-[#224036] px-4 text-sm font-semibold text-white shadow-sm transition hover:bg-[#1a332b]"
         >
-          Full sign-in page
+          Go to sign in
         </Link>
       </AppGate>
     );
@@ -1388,9 +1384,7 @@ function AuthenticatedWorkspaceGate() {
       .catch((error) => logConvexWriteFailure("syncCurrentUser", error));
   }, [syncCurrentUser]);
 
-  const myOrganizations = useQuery(api.setup.listMyOrganizations, userSynced ? {} : "skip") as
-    | Array<{ organization: { id: string; name: string } }>
-    | undefined;
+  const myOrganizations = useQuery(api.setup.listMyOrganizations, userSynced ? {} : "skip");
 
   if (!userSynced || myOrganizations === undefined) {
     return <AppGate title="Loading workspaces" detail="Syncing your profile and organizations…" />;
@@ -1411,7 +1405,7 @@ function AuthenticatedWorkspaceGate() {
 
   return (
     <OrgScopedApp
-      organizationId={myOrganizations[0].organization.id}
+      organizationId={myOrganizations[0].organization._id}
       organizationName={myOrganizations[0].organization.name}
     />
   );
@@ -1421,7 +1415,7 @@ function OrgScopedApp({
   organizationId,
   organizationName,
 }: {
-  organizationId: string;
+  organizationId: Id<"organizations">;
   organizationName: string;
 }) {
   const liveWorkspace = useQuery(api.workspace.getWorkspace, { organizationId }) as WorkspaceSnapshot | undefined;
@@ -1477,19 +1471,19 @@ function OrgScopedApp({
         }).catch((error) => logConvexWriteFailure("createLead", error));
       },
       advanceOpportunity: (opportunityId, stage) => {
-        void advanceOpportunityMutation({ organizationId, opportunityId: opportunityId, stage }).catch((error) => logConvexWriteFailure("advanceOpportunity", error));
+        void advanceOpportunityMutation({ organizationId, opportunityId: opportunityId as Id<"opportunities">, stage }).catch((error) => logConvexWriteFailure("advanceOpportunity", error));
       },
       assignVisit: (visitId, crewId) => {
-        void assignVisitMutation({ organizationId, visitId: visitId, crewId: crewId }).catch((error) => logConvexWriteFailure("assignVisit", error));
+        void assignVisitMutation({ organizationId, visitId: visitId as Id<"jobVisits">, crewId: crewId as Id<"crews"> }).catch((error) => logConvexWriteFailure("assignVisit", error));
       },
       completeChecklistItem: (visitId, itemId) => {
-        void completeChecklistMutation({ organizationId, visitId: visitId, itemId }).catch((error) => logConvexWriteFailure("completeChecklistItem", error));
+        void completeChecklistMutation({ organizationId, visitId: visitId as Id<"jobVisits">, itemId }).catch((error) => logConvexWriteFailure("completeChecklistItem", error));
       },
       submitVisit: (visitId, issueFlag) => {
-        void submitVisitMutation({ organizationId, visitId: visitId, issueFlag }).catch((error) => logConvexWriteFailure("submitVisit", error));
+        void submitVisitMutation({ organizationId, visitId: visitId as Id<"jobVisits">, issueFlag }).catch((error) => logConvexWriteFailure("submitVisit", error));
       },
       addTask: (jobId, title) => {
-        void addTaskMutation({ organizationId, jobId: jobId, title }).catch((error) => logConvexWriteFailure("addTask", error));
+        void addTaskMutation({ organizationId, jobId: jobId as Id<"jobs">, title }).catch((error) => logConvexWriteFailure("addTask", error));
       },
       addActivity: (input) => {
         void addActivityMutation({
@@ -1506,7 +1500,7 @@ function OrgScopedApp({
         void createCrewMutation({ organizationId, name }).catch((error) => logConvexWriteFailure("createCrew", error));
       },
       toggleService: (itemId) => {
-        void toggleServiceMutation({ organizationId, itemId: itemId }).catch((error) => logConvexWriteFailure("toggleService", error));
+        void toggleServiceMutation({ organizationId, itemId: itemId as Id<"serviceCatalogItems"> }).catch((error) => logConvexWriteFailure("toggleService", error));
       },
     }),
     [
@@ -1533,29 +1527,29 @@ function OrgScopedApp({
       updateLead: (leadId, fields) => {
         void updateLeadMutation({
           organizationId,
-          leadId: leadId,
+          leadId: leadId as Id<"leads">,
           status: fields.status as Parameters<typeof updateLeadMutation>[0]["status"],
           grade: fields.grade as Parameters<typeof updateLeadMutation>[0]["grade"],
           hidden: fields.hidden,
         }).catch((error) => logConvexWriteFailure("updateLead", error));
       },
       bulkUpdateLeads: (leadIds, status) => {
-        void bulkUpdateLeadsMutation({ organizationId, leadIds: leadIds as string[], status: status as Parameters<typeof bulkUpdateLeadsMutation>[0]["status"] }).catch((error) => logConvexWriteFailure("bulkUpdateLeads", error));
+        void bulkUpdateLeadsMutation({ organizationId, leadIds: leadIds as Array<Id<"leads">>, status: status as Parameters<typeof bulkUpdateLeadsMutation>[0]["status"] }).catch((error) => logConvexWriteFailure("bulkUpdateLeads", error));
       },
       updateMemberRole: (membershipId, nextRole) => {
-        void updateMemberRoleMutation({ organizationId, membershipId: membershipId, role: nextRole }).catch((error) => logConvexWriteFailure("updateMemberRole", error));
+        void updateMemberRoleMutation({ organizationId, membershipId: membershipId as Id<"memberships">, role: nextRole }).catch((error) => logConvexWriteFailure("updateMemberRole", error));
       },
       upsertLaborRate: (input) => {
-        void upsertLaborRateMutation({ organizationId, id: input.id, roleName: input.roleName, hourlyCostCents: input.hourlyCostCents, billableRateCents: input.billableRateCents }).catch((error) => logConvexWriteFailure("upsertLaborRate", error));
+        void upsertLaborRateMutation({ organizationId, id: input.id as Id<"laborRateCards"> | undefined, roleName: input.roleName, hourlyCostCents: input.hourlyCostCents, billableRateCents: input.billableRateCents }).catch((error) => logConvexWriteFailure("upsertLaborRate", error));
       },
       upsertVendorCatalogItem: (input) => {
-        void upsertVendorCatalogItemMutation({ organizationId, id: input.id, vendorName: input.vendorName, itemName: input.itemName, category: input.category, unit: input.unit, unitCostCents: input.unitCostCents }).catch((error) => logConvexWriteFailure("upsertVendorCatalogItem", error));
+        void upsertVendorCatalogItemMutation({ organizationId, id: input.id as Id<"vendorCatalogs"> | undefined, vendorName: input.vendorName, itemName: input.itemName, category: input.category, unit: input.unit, unitCostCents: input.unitCostCents }).catch((error) => logConvexWriteFailure("upsertVendorCatalogItem", error));
       },
       addTimesheetEntry: (jobId, roleName, hours, hourlyCostCents) => {
-        void addTimesheetEntryMutation({ organizationId, jobId: jobId, roleName, hours, hourlyCostCents }).catch((error) => logConvexWriteFailure("addTimesheetEntry", error));
+        void addTimesheetEntryMutation({ organizationId, jobId: jobId as Id<"jobs">, roleName, hours, hourlyCostCents }).catch((error) => logConvexWriteFailure("addTimesheetEntry", error));
       },
       recordCustomerPayment: (invoiceId, amountCents, method) => {
-        void recordCustomerPaymentMutation({ organizationId, invoiceId: invoiceId, amountCents, method }).catch((error) => logConvexWriteFailure("recordCustomerPayment", error));
+        void recordCustomerPaymentMutation({ organizationId, invoiceId: invoiceId as Id<"customerInvoices">, amountCents, method }).catch((error) => logConvexWriteFailure("recordCustomerPayment", error));
       },
       recalculateJobCosts: () => {
         void recalculateJobCostsMutation({ organizationId }).catch((error) => logConvexWriteFailure("recalculateJobCosts", error));
@@ -4882,7 +4876,7 @@ function ClientOnboardingView({
               This is the customer sign-up path for companies using the software. The production backend now seeds the same objects this preview shows.
             </p>
           </div>
-          <Badge tone={authConfigured ? "success" : "warning"}>{authConfigured ? "Replit Auth live" : "Demo preview"}</Badge>
+          <Badge tone={authConfigured ? "success" : "warning"}>{authConfigured ? "Auth live" : "Demo preview"}</Badge>
         </div>
       </Panel>
 

@@ -18,7 +18,7 @@ test("marketing front page routes to product pages and the live app", async ({ p
 
   await page.goto("/signin");
   await expect(page.getByRole("heading", { name: "Sign in, then launch the workspace" })).toBeVisible();
-  await expect(page.getByText("Single sign-in + Replit onboarding")).toBeVisible();
+  await expect(page.getByText("Single sign-in + Convex onboarding")).toBeVisible();
   await expect(page.getByText("10 contacts included").first()).toBeVisible();
   await expect(page.getByText("All-In Pro").first()).toBeVisible();
 
