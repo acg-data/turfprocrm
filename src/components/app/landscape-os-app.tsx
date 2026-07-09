@@ -62,6 +62,8 @@ import type { Id } from "../../../convex/_generated/dataModel";
 
 type View = "dashboard" | "prime_time" | "lead_ops" | "crm" | "pipeline" | "dispatch" | "jobs" | "field" | "costing" | "profit" | "cost_intel" | "admin" | "onboarding" | "specs";
 
+const VIEW_KEYS: View[] = ["dashboard", "prime_time", "lead_ops", "crm", "pipeline", "dispatch", "jobs", "field", "costing", "profit", "cost_intel", "admin", "onboarding", "specs"];
+
 const navItems: Array<{ id: View; label: string; icon: ReactNode }> = [
   { id: "dashboard", label: "Dashboard", icon: <LayoutDashboard size={18} /> },
   { id: "prime_time", label: "Prime Time", icon: <ListChecks size={18} /> },
@@ -1669,6 +1671,18 @@ function LandscapeOsWorkspace({
 }) {
   const [workspace, setWorkspace] = useState<WorkspaceSnapshot>(initialWorkspace);
   const [view, setView] = useState<View>("dashboard");
+
+  // Deep links: /app?view=lead_ops opens that view; the URL tracks navigation.
+  useEffect(() => {
+    const param = new URLSearchParams(window.location.search).get("view");
+    if (param && VIEW_KEYS.includes(param as View)) setView(param as View);
+  }, []);
+  useEffect(() => {
+    const url = new URL(window.location.href);
+    if (view === "dashboard") url.searchParams.delete("view");
+    else url.searchParams.set("view", view);
+    window.history.replaceState(null, "", url.toString());
+  }, [view]);
   const [mobileNavOpen, setMobileNavOpen] = useState(false);
   const [globalSearch, setGlobalSearch] = useState("");
   const [customerSearch, setCustomerSearch] = useState("");

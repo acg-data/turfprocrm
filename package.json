@@ -25,6 +25,7 @@
   "dependencies": {
     "@clerk/nextjs": "^7.5.5",
     "@opennextjs/cloudflare": "^1.19.11",
+    "@sentry/nextjs": "^10.64.0",
     "class-variance-authority": "^0.7.1",
     "clsx": "^2.1.1",
     "convex": "^1.41.0",

@@ -48,6 +48,16 @@ const baseDemoWorkspace: WorkspaceSnapshot = {
       tags: ["commercial", "weekly"],
       ownerId: "u-justin",
     },
+    {
+      id: "cust-hartwell",
+      name: "Hartwell Residence",
+      type: "residential",
+      status: "prospect",
+      phone: "(508) 555-0173",
+      email: "d.hartwell@example.com",
+      tags: ["lawn_care", "walk-in"],
+      ownerId: "u-amy",
+    },
   ],
   properties: [
     {
@@ -80,6 +90,16 @@ const baseDemoWorkspace: WorkspaceSnapshot = {
       postalCode: "02067",
       notes: "Service loading dock before office lawn.",
     },
+    {
+      id: "prop-hartwell",
+      customerId: "cust-hartwell",
+      label: "Primary property",
+      street: "42 Meadow Lane",
+      city: "Foxborough",
+      state: "MA",
+      postalCode: "02035",
+      notes: "Walk-in request logged at the front desk.",
+    },
   ],
   leads: [
     {
@@ -103,6 +123,17 @@ const baseDemoWorkspace: WorkspaceSnapshot = {
       urgency: "normal",
       ownerId: "u-amy",
       createdAt: at(13, 30, -4),
+    },
+    {
+      id: "lead-hartwell",
+      title: "Walk-in lawn care request",
+      customerId: "cust-hartwell",
+      propertyId: "prop-hartwell",
+      source: "Manual entry",
+      status: "new",
+      urgency: "normal",
+      ownerId: "u-amy",
+      createdAt: at(10, 5, -1),
     },
   ],
   opportunities: [
