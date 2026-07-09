@@ -1,15 +1,19 @@
 "use client";
 
-import { Show, SignIn, SignUp, UserButton } from "@clerk/nextjs";
-import { useMutation, useQuery } from "convex/react";
 import { ArrowRight, Check, CreditCard, LockKeyhole, ShieldCheck, Sprout, UsersRound } from "lucide-react";
 import Link from "next/link";
-import { FormEvent, useMemo, useState } from "react";
-import { api } from "../../../convex/_generated/api";
+import { FormEvent, useEffect, useMemo, useRef, useState } from "react";
+import { api, loginWithReplit, useAuth, useMutation, useQuery } from "@/lib/live-api";
 
 type SignupPlan = "free" | "pro";
 type IndustryFocus = "landscaping" | "pest_control" | "both";
-type AuthMode = "signin" | "create";
+
+type WorkspaceRow = {
+  organization: { id: string; name: string; slug: string; billingPlan?: string | null };
+  membership: { role: string };
+  subscription?: { plan?: string | null } | null;
+  usage: { contacts: number; contactLimit?: number | null; seatLimit?: number | null };
+};
 
 const plans: Array<{
   id: SignupPlan;
@@ -34,30 +38,29 @@ const plans: Array<{
   },
 ];
 
-const clerkAppearance = {
-  elements: {
-    rootBox: "w-full",
-    cardBox: "w-full shadow-none border border-stone-200 rounded-lg",
-    card: "shadow-none",
-    headerTitle: "text-stone-950",
-    formButtonPrimary: "bg-[#224036] hover:bg-[#1a332b]",
-    footerActionLink: "text-[#224036]",
-  },
-};
-
 export function AuthEntryPage() {
-  const authConfigured = Boolean(process.env.NEXT_PUBLIC_CLERK_PUBLISHABLE_KEY);
-  const convexConfigured = Boolean(process.env.NEXT_PUBLIC_CONVEX_URL);
-  const [authMode, setAuthMode] = useState<AuthMode>("signin");
+  const auth = useAuth();
+  const syncCurrentUser = useMutation(api.setup.syncCurrentUser);
+  const createOrganization = useMutation(api.setup.createOrganization);
+  const [userSynced, setUserSynced] = useState(false);
+  const syncStartedRef = useRef(false);
   const [companyName, setCompanyName] = useState("");
   const [industryFocus, setIndustryFocus] = useState<IndustryFocus>("both");
   const [selectedPlan, setSelectedPlan] = useState<SignupPlan>("free");
   const [createdWorkspaceId, setCreatedWorkspaceId] = useState<string | null>(null);
   const [error, setError] = useState<string | null>(null);
   const [isCreating, setIsCreating] = useState(false);
-  const workspaces = useQuery(api.setup.listMyOrganizations);
-  const createOrganization = useMutation(api.setup.createOrganization);
   const timezone = useMemo(() => Intl.DateTimeFormat().resolvedOptions().timeZone || "America/New_York", []);
+
+  useEffect(() => {
+    if (!auth.isAuthenticated || syncStartedRef.current) return;
+    syncStartedRef.current = true;
+    void syncCurrentUser({})
+      .then(() => setUserSynced(true))
+      .catch(() => setUserSynced(false));
+  }, [auth.isAuthenticated, syncCurrentUser]);
+
+  const workspaces = useQuery(api.setup.listMyOrganizations, userSynced ? {} : "skip") as WorkspaceRow[] | undefined;
 
   async function submitWorkspace(event: FormEvent) {
     event.preventDefault();
@@ -71,7 +74,7 @@ export function AuthEntryPage() {
         industryFocus,
         billingPlan: selectedPlan,
       });
-      setCreatedWorkspaceId(organizationId);
+      setCreatedWorkspaceId(String(organizationId));
       setCompanyName("");
     } catch (caught) {
       setError(caught instanceof Error ? caught.message : "Could not create workspace.");
@@ -91,14 +94,19 @@ export function AuthEntryPage() {
             Turf Pro CRM
           </Link>
           <div className="flex items-center gap-2">
-            <Link href="/signin" className="rounded-md border border-stone-200 bg-white px-3 py-2 text-sm font-semibold text-stone-700">
-              Sign in
-            </Link>
-            {authConfigured ? (
-              <Show when="signed-in">
-                <UserButton />
-              </Show>
-            ) : null}
+            {auth.isAuthenticated ? (
+              <span className="rounded-md border border-stone-200 bg-stone-50 px-3 py-2 text-sm font-semibold text-stone-700">
+                {auth.name ?? "Signed in"}
+              </span>
+            ) : (
+              <button
+                type="button"
+                onClick={() => loginWithReplit(() => location.reload())}
+                className="rounded-md border border-stone-200 bg-white px-3 py-2 text-sm font-semibold text-stone-700"
+              >
+                Sign in with Replit
+              </button>
+            )}
           </div>
         </div>
       </header>
@@ -108,11 +116,11 @@ export function AuthEntryPage() {
           <div>
             <div className="inline-flex items-center gap-2 rounded-full border border-emerald-200 bg-emerald-50 px-3 py-1 text-sm font-semibold text-emerald-800">
               <ShieldCheck size={15} />
-              Single sign-in + Convex onboarding
+              Single sign-in + Replit onboarding
             </div>
             <h1 className="mt-5 max-w-xl text-4xl font-bold tracking-normal md:text-5xl">Sign in, then launch the workspace</h1>
             <p className="mt-4 max-w-xl text-base leading-7 text-stone-600">
-              One route handles sign in, account creation, plan selection, and workspace provisioning. Clerk handles identity and SSO; Convex creates the tenant, subscription, defaults, and audit trail after auth.
+              One route handles sign in, account creation, plan selection, and workspace provisioning. Replit handles identity; the built-in Postgres database stores the tenant, subscription, defaults, and audit trail after auth.
             </p>
           </div>
 
@@ -134,14 +142,6 @@ export function AuthEntryPage() {
               </div>
             ))}
           </div>
-
-          {!authConfigured || !convexConfigured ? (
-            <div className="rounded-lg border border-amber-200 bg-amber-50 p-4 text-sm leading-6 text-amber-900">
-              {!authConfigured ? "Add NEXT_PUBLIC_CLERK_PUBLISHABLE_KEY and CLERK_SECRET_KEY to enable live sign-in. " : null}
-              {!convexConfigured ? "Add NEXT_PUBLIC_CONVEX_URL to enable workspace provisioning. " : null}
-              The demo app remains available while credentials are being configured.
-            </div>
-          ) : null}
         </div>
 
         <div className="grid gap-4">
@@ -173,53 +173,35 @@ export function AuthEntryPage() {
           </div>
 
           <div className="rounded-lg border border-stone-200 bg-white p-5 shadow-sm">
-            {authConfigured ? (
-              <Show when="signed-out">
-                <div className="grid gap-4">
-                  <div>
-                    <h2 className="flex items-center gap-2 text-xl font-bold">
-                      <LockKeyhole size={20} className="text-[#224036]" />
-                      Step 1: sign in or create account
-                    </h2>
-                    <p className="mt-2 text-sm leading-6 text-stone-500">Use the same route for returning clients, new free trials, Google/Microsoft login, and future SSO.</p>
-                  </div>
-                  <div className="grid grid-cols-2 gap-2 rounded-lg bg-stone-100 p-1">
-                    <button type="button" onClick={() => setAuthMode("signin")} className={`min-h-10 rounded-md text-sm font-semibold transition ${authMode === "signin" ? "bg-white text-stone-950 shadow-sm" : "text-stone-600"}`}>
-                      Sign in
-                    </button>
-                    <button type="button" onClick={() => setAuthMode("create")} className={`min-h-10 rounded-md text-sm font-semibold transition ${authMode === "create" ? "bg-white text-stone-950 shadow-sm" : "text-stone-600"}`}>
-                      Create account
-                    </button>
-                  </div>
-                  <div className="overflow-hidden rounded-lg">
-                    {authMode === "signin" ? (
-                      <SignIn routing="hash" signUpUrl="/signin" fallbackRedirectUrl="/signin" forceRedirectUrl="/signin" appearance={clerkAppearance} withSignUp />
-                    ) : (
-                      <SignUp routing="hash" signInUrl="/signin" fallbackRedirectUrl="/signin" forceRedirectUrl="/signin" appearance={clerkAppearance} />
-                    )}
-                  </div>
-                </div>
-              </Show>
-            ) : (
+            {!auth.isAuthenticated ? (
               <div className="grid gap-4">
                 <div>
-                  <h2 className="text-xl font-bold">Step 1: sign in</h2>
-                  <p className="mt-2 text-sm leading-6 text-stone-500">Add Clerk keys to enable the live sign-in page. Until then, use the demo app for product review.</p>
+                  <h2 className="flex items-center gap-2 text-xl font-bold">
+                    <LockKeyhole size={20} className="text-[#224036]" />
+                    Step 1: sign in or create account
+                  </h2>
+                  <p className="mt-2 text-sm leading-6 text-stone-500">
+                    Sign in with your Replit account — the same route serves returning clients and new free trials.
+                  </p>
                 </div>
-                <Link href="/app" className="inline-flex min-h-10 w-fit items-center justify-center gap-2 rounded-md bg-[#224036] px-4 text-sm font-semibold text-white">
-                  Open demo app
+                <button
+                  type="button"
+                  onClick={() => loginWithReplit(() => location.reload())}
+                  disabled={auth.isLoading}
+                  className="inline-flex min-h-10 w-fit items-center justify-center gap-2 rounded-md bg-[#224036] px-4 text-sm font-semibold text-white disabled:opacity-50"
+                >
+                  {auth.isLoading ? "Checking session..." : "Sign in with Replit"}
                   <ArrowRight size={16} />
-                </Link>
+                </button>
               </div>
-            )}
-
-            {authConfigured ? (
-              <Show when="signed-in">
+            ) : (
               <form onSubmit={submitWorkspace} className="grid gap-4">
                 <div className="flex items-start justify-between gap-3">
                   <div>
                     <h2 className="text-xl font-bold">Step 2: create the workspace</h2>
-                    <p className="mt-2 text-sm leading-6 text-stone-500">This writes the organization, owner membership, subscription, operating defaults, tag taxonomy, onboarding checklist, and audit event to Convex.</p>
+                    <p className="mt-2 text-sm leading-6 text-stone-500">
+                      This writes the organization, owner membership, subscription, operating defaults, and audit event to the built-in database.
+                    </p>
                   </div>
                   <div className="grid h-10 w-10 place-items-center rounded-md bg-[#e8efe8] text-[#224036]">
                     <UsersRound size={18} />
@@ -239,17 +221,15 @@ export function AuthEntryPage() {
                 </label>
                 {error ? <div className="rounded-md border border-rose-200 bg-rose-50 p-3 text-sm text-rose-700">{error}</div> : null}
                 {createdWorkspaceId ? <div className="rounded-md border border-emerald-200 bg-emerald-50 p-3 text-sm text-emerald-800">Workspace created. Open the app to continue onboarding.</div> : null}
-                <button type="submit" disabled={isCreating || !convexConfigured} className="inline-flex min-h-10 items-center justify-center gap-2 rounded-md bg-[#224036] px-4 text-sm font-semibold text-white disabled:cursor-not-allowed disabled:opacity-50">
+                <button type="submit" disabled={isCreating} className="inline-flex min-h-10 items-center justify-center gap-2 rounded-md bg-[#224036] px-4 text-sm font-semibold text-white disabled:cursor-not-allowed disabled:opacity-50">
                   <CreditCard size={16} />
                   {isCreating ? "Creating workspace..." : selectedPlan === "free" ? "Create free workspace" : "Create $99/mo workspace"}
                 </button>
               </form>
-              </Show>
-            ) : null}
+            )}
           </div>
 
-          {authConfigured ? (
-            <Show when="signed-in">
+          {auth.isAuthenticated ? (
             <div className="rounded-lg border border-stone-200 bg-white p-5 shadow-sm">
               <div className="flex items-center justify-between gap-3">
                 <h2 className="text-base font-bold">Step 3: continue onboarding</h2>
@@ -258,7 +238,7 @@ export function AuthEntryPage() {
               <div className="mt-4 grid gap-2">
                 {workspaces && workspaces.length > 0 ? (
                   workspaces.map((row) => (
-                    <div key={row.organization._id} className="rounded-md border border-stone-200 p-3">
+                    <div key={row.organization.id} className="rounded-md border border-stone-200 p-3">
                       <div className="flex flex-wrap items-start justify-between gap-3">
                         <div>
                           <div className="font-semibold">{row.organization.name}</div>
@@ -276,7 +256,6 @@ export function AuthEntryPage() {
                 )}
               </div>
             </div>
-            </Show>
           ) : null}
         </div>
       </section>

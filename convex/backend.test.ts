@@ -159,17 +159,32 @@ describe("Convex operating system functions", () => {
     await expect(outsider.query(api.dashboard.getOverview, { organizationId })).rejects.toThrow();
   });
 
-  it("bootstraps operating depth and recalculates lead, cost, and payment records", async () => {
+  it("seeds sample data behind auth and recalculates lead, cost, and payment records", async () => {
     const t = convexTest(schema, modules);
+    const owner = t.withIdentity({ subject: "user_sample_owner", email: "sample-owner@example.com", name: "Sample Owner" });
 
-    await t.mutation(api.demo.bootstrapWorkspace, {});
-    const before = await t.query(api.operating.getDemoOperatingDepth, {});
+    const organizationId = await owner.mutation(api.setup.createOrganization, {
+      name: "Sample Seed Co",
+      timezone: "America/New_York",
+      industryFocus: "both",
+    });
+
+    // Unauthenticated access to the workspace API must be rejected.
+    await expect(t.query(api.workspace.getWorkspace, { organizationId })).rejects.toThrow();
+
+    await owner.mutation(api.workspace.seedSampleData, { organizationId });
+    const workspace = await owner.query(api.workspace.getWorkspace, { organizationId });
+    expect(workspace.seeded).toBe(true);
+    expect(workspace.customers.length).toBeGreaterThan(0);
+    expect(workspace.viewer.role).toBe("owner");
+
+    const before = await owner.query(api.operating.getOperatingDepth, { organizationId });
     expect(before?.seeded).toBe(false);
 
-    const bootstrap = await t.mutation(api.operating.bootstrapOperatingDepth, {});
+    const bootstrap = await owner.mutation(api.operating.seedOperatingDepth, { organizationId });
     expect(bootstrap.recalculated).toBeGreaterThan(0);
 
-    const seeded = await t.query(api.operating.getDemoOperatingDepth, {});
+    const seeded = await owner.query(api.operating.getOperatingDepth, { organizationId });
     expect(seeded?.seeded).toBe(true);
     expect(seeded?.leadOps.rows.length).toBeGreaterThan(0);
     expect(seeded?.jobCosting.summaries.length).toBeGreaterThan(0);
@@ -183,24 +198,29 @@ describe("Convex operating system functions", () => {
     expect(seeded?.admin.ownerAnalytics.costBreakdown.length).toBeGreaterThan(0);
 
     const leadId = seeded!.leadOps.rows[0].id;
-    await t.mutation(api.operating.updateLead, { leadId, status: "do_estimate", grade: "a" });
-    const updated = await t.query(api.operating.getDemoOperatingDepth, {});
+    await owner.mutation(api.operating.updateLead, { organizationId, leadId, status: "do_estimate", grade: "a" });
+    const updated = await owner.query(api.operating.getOperatingDepth, { organizationId });
     expect(updated?.leadOps.rows.find((lead) => lead.id === leadId)?.status).toBe("do_estimate");
 
     const jobId = seeded!.jobCosting.summaries[0].jobId;
-    await t.mutation(api.operating.addTimesheetEntry, { jobId, roleName: "Technician", hours: 1.25, hourlyCostCents: 3000 });
-    const afterTime = await t.query(api.operating.getDemoOperatingDepth, {});
+    await owner.mutation(api.operating.addTimesheetEntry, { organizationId, jobId, roleName: "Technician", hours: 1.25, hourlyCostCents: 3000 });
+    const afterTime = await owner.query(api.operating.getOperatingDepth, { organizationId });
     expect(afterTime?.jobCosting.timesheets.some((entry) => entry.roleName === "Technician" && entry.hours === 1.25)).toBe(true);
 
     const invoice = afterTime!.revenue.invoices.find((candidate) => candidate.balanceCents > 0)!;
     const collectedBefore = afterTime!.revenue.collectedCents;
-    await t.mutation(api.operating.recordCustomerPayment, { invoiceId: invoice.id, amountCents: 1000, method: "ach" });
-    const afterPayment = await t.query(api.operating.getDemoOperatingDepth, {});
+    await owner.mutation(api.operating.recordCustomerPayment, { organizationId, invoiceId: invoice.id, amountCents: 1000, method: "ach" });
+    const afterPayment = await owner.query(api.operating.getOperatingDepth, { organizationId });
     expect(afterPayment!.revenue.collectedCents).toBeGreaterThan(collectedBefore);
 
     const snapshotCount = afterPayment!.costIntelligence.costSnapshots.length;
-    await t.mutation(api.operating.refreshCostIntelligence, {});
-    const afterRefresh = await t.query(api.operating.getDemoOperatingDepth, {});
+    await owner.mutation(api.operating.refreshCostIntelligence, { organizationId });
+    const afterRefresh = await owner.query(api.operating.getOperatingDepth, { organizationId });
     expect(afterRefresh!.costIntelligence.costSnapshots.length).toBeGreaterThan(snapshotCount);
+
+    // A non-member cannot touch the workspace even with valid auth.
+    const outsider = t.withIdentity({ subject: "user_outsider_2", email: "outsider2@example.com", name: "Outsider Two" });
+    await outsider.mutation(api.setup.syncCurrentUser);
+    await expect(outsider.mutation(api.operating.refreshCostIntelligence, { organizationId })).rejects.toThrow();
   });
 });

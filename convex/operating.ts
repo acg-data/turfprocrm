@@ -1,9 +1,8 @@
-import { v } from "convex/values";
+import { ConvexError, v } from "convex/values";
 import { internalMutation, mutation, query } from "./_generated/server";
 import type { Doc, Id } from "./_generated/dataModel";
 import type { MutationCtx, QueryCtx } from "./_generated/server";
-
-const DEMO_SLUG = "greenline-demo";
+import { requireMembership, type Permission } from "./lib/auth";
 
 const leadStatus = v.union(
   v.literal("new"),
@@ -27,10 +26,11 @@ const serviceCategory = v.union(v.literal("lawn_care"), v.literal("landscaping")
 
 type Ctx = QueryCtx | MutationCtx;
 
-async function requireDemoOrg(ctx: Ctx) {
-  const org = await ctx.db.query("organizations").withIndex("by_slug", (q) => q.eq("slug", DEMO_SLUG)).unique();
-  if (!org) throw new Error("Demo workspace has not been bootstrapped yet.");
-  return org;
+async function requireWorkspace(ctx: Ctx, organizationId: Id<"organizations">, permission?: Permission) {
+  const { user, membership } = await requireMembership(ctx, organizationId, permission);
+  const org = await ctx.db.get(organizationId);
+  if (!org) throw new ConvexError({ code: "NOT_FOUND", message: "Organization not found." });
+  return { org, user, membership };
 }
 
 async function listOperatingOrganizations(ctx: Ctx) {
@@ -446,10 +446,17 @@ async function flagStaleLeads(ctx: MutationCtx, organizationId: Id<"organization
   return inserted;
 }
 
-export const bootstrapOperatingDepth = mutation({
-  args: {},
-  handler: async (ctx) => {
-    const org = await requireDemoOrg(ctx);
+export const seedOperatingDepth = mutation({
+  args: { organizationId: v.id("organizations") },
+  handler: async (ctx, args) => {
+    const { org } = await requireWorkspace(ctx, args.organizationId, "manageOrganization");
+    const settings = (org.settings ?? {}) as Record<string, unknown>;
+    if (!settings.sampleDataSeededAt) {
+      throw new ConvexError({
+        code: "SAMPLE_DATA_REQUIRED",
+        message: "Operating-depth seeding layers onto the sample dataset. Load sample data first.",
+      });
+    }
     const now = Date.now();
     const collections = await getOperatingCollections(ctx, org._id);
     const jobsByTitle = new Map(collections.jobs.map((job) => [job.title, job]));
@@ -891,11 +898,10 @@ export const bootstrapOperatingDepth = mutation({
   },
 });
 
-export const getDemoOperatingDepth = query({
-  args: {},
-  handler: async (ctx) => {
-    const org = await ctx.db.query("organizations").withIndex("by_slug", (q) => q.eq("slug", DEMO_SLUG)).unique();
-    if (!org) return null;
+export const getOperatingDepth = query({
+  args: { organizationId: v.id("organizations") },
+  handler: async (ctx, args) => {
+    const { org } = await requireWorkspace(ctx, args.organizationId);
     const collections = await getOperatingCollections(ctx, org._id);
     const userById = new Map(collections.users.map((user) => [user._id, user]));
     const customerById = new Map(collections.customers.map((customer) => [customer._id, customer]));
@@ -1384,13 +1390,14 @@ export const getDemoOperatingDepth = query({
 
 export const updateLead = mutation({
   args: {
+    organizationId: v.id("organizations"),
     leadId: v.id("leads"),
     status: v.optional(leadStatus),
     grade: v.optional(leadGrade),
     hidden: v.optional(v.boolean()),
   },
   handler: async (ctx, args) => {
-    const org = await requireDemoOrg(ctx);
+    const { org } = await requireWorkspace(ctx, args.organizationId, "managePipeline");
     const lead = await ctx.db.get(args.leadId);
     if (!lead || lead.organizationId !== org._id) throw new Error("Lead not found.");
     const now = Date.now();
@@ -1405,9 +1412,9 @@ export const updateLead = mutation({
 });
 
 export const bulkUpdateLeads = mutation({
-  args: { leadIds: v.array(v.id("leads")), status: leadStatus },
+  args: { organizationId: v.id("organizations"), leadIds: v.array(v.id("leads")), status: leadStatus },
   handler: async (ctx, args) => {
-    const org = await requireDemoOrg(ctx);
+    const { org } = await requireWorkspace(ctx, args.organizationId, "managePipeline");
     const now = Date.now();
     let updated = 0;
     for (const leadId of args.leadIds) {
@@ -1422,24 +1429,32 @@ export const bulkUpdateLeads = mutation({
 });
 
 export const updateMemberRole = mutation({
-  args: { membershipId: v.id("memberships"), role },
+  args: { organizationId: v.id("organizations"), membershipId: v.id("memberships"), role },
   handler: async (ctx, args) => {
-    const org = await requireDemoOrg(ctx);
-    const membership = await ctx.db.get(args.membershipId);
-    if (!membership || membership.organizationId !== org._id) throw new Error("Membership not found.");
+    const { org } = await requireWorkspace(ctx, args.organizationId, "manageMembers");
+    const target = await ctx.db.get(args.membershipId);
+    if (!target || target.organizationId !== org._id) throw new Error("Membership not found.");
+    if (target.role === "owner" && args.role !== "owner") {
+      const memberships = await ctx.db.query("memberships").withIndex("by_org", (q) => q.eq("organizationId", org._id)).collect();
+      const activeOwners = memberships.filter((m) => m.role === "owner" && m.status === "active");
+      if (activeOwners.length <= 1) {
+        throw new ConvexError({ code: "LAST_OWNER", message: "Cannot demote the only owner of the workspace." });
+      }
+    }
     await ctx.db.patch(args.membershipId, { role: args.role, updatedAt: Date.now() });
   },
 });
 
 export const upsertLaborRate = mutation({
   args: {
+    organizationId: v.id("organizations"),
     id: v.optional(v.id("laborRateCards")),
     roleName: v.string(),
     hourlyCostCents: v.number(),
     billableRateCents: v.optional(v.number()),
   },
   handler: async (ctx, args) => {
-    const org = await requireDemoOrg(ctx);
+    const { org } = await requireWorkspace(ctx, args.organizationId, "manageFinance");
     const now = Date.now();
     if (args.id) {
       const existing = await ctx.db.get(args.id);
@@ -1453,6 +1468,7 @@ export const upsertLaborRate = mutation({
 
 export const upsertVendorCatalogItem = mutation({
   args: {
+    organizationId: v.id("organizations"),
     id: v.optional(v.id("vendorCatalogs")),
     vendorName: v.string(),
     itemName: v.string(),
@@ -1461,7 +1477,7 @@ export const upsertVendorCatalogItem = mutation({
     unitCostCents: v.number(),
   },
   handler: async (ctx, args) => {
-    const org = await requireDemoOrg(ctx);
+    const { org } = await requireWorkspace(ctx, args.organizationId, "manageFinance");
     const now = Date.now();
     if (args.id) {
       const existing = await ctx.db.get(args.id);
@@ -1475,13 +1491,14 @@ export const upsertVendorCatalogItem = mutation({
 
 export const addTimesheetEntry = mutation({
   args: {
+    organizationId: v.id("organizations"),
     jobId: v.id("jobs"),
     roleName: v.string(),
     hours: v.number(),
     hourlyCostCents: v.number(),
   },
   handler: async (ctx, args) => {
-    const org = await requireDemoOrg(ctx);
+    const { org } = await requireWorkspace(ctx, args.organizationId, "completeFieldWork");
     const job = await ctx.db.get(args.jobId);
     if (!job || job.organizationId !== org._id) throw new Error("Job not found.");
     const now = Date.now();
@@ -1504,9 +1521,9 @@ export const addTimesheetEntry = mutation({
 });
 
 export const recordCustomerPayment = mutation({
-  args: { invoiceId: v.id("customerInvoices"), amountCents: v.number(), method: v.union(v.literal("cash"), v.literal("check"), v.literal("card"), v.literal("ach"), v.literal("other")) },
+  args: { organizationId: v.id("organizations"), invoiceId: v.id("customerInvoices"), amountCents: v.number(), method: v.union(v.literal("cash"), v.literal("check"), v.literal("card"), v.literal("ach"), v.literal("other")) },
   handler: async (ctx, args) => {
-    const org = await requireDemoOrg(ctx);
+    const { org } = await requireWorkspace(ctx, args.organizationId, "manageFinance");
     const invoice = await ctx.db.get(args.invoiceId);
     if (!invoice || invoice.organizationId !== org._id) throw new Error("Invoice not found.");
     const now = Date.now();
@@ -1529,19 +1546,19 @@ export const recordCustomerPayment = mutation({
   },
 });
 
-export const recalculateDemoJobCosts = mutation({
-  args: {},
-  handler: async (ctx) => {
-    const org = await requireDemoOrg(ctx);
+export const recalculateJobCosts = mutation({
+  args: { organizationId: v.id("organizations") },
+  handler: async (ctx, args) => {
+    const { org } = await requireWorkspace(ctx, args.organizationId, "manageFinance");
     const recalculated = await recalculateJobCostSummaries(ctx, org._id);
     return { recalculated };
   },
 });
 
 export const refreshCostIntelligence = mutation({
-  args: {},
-  handler: async (ctx) => {
-    const org = await requireDemoOrg(ctx);
+  args: { organizationId: v.id("organizations") },
+  handler: async (ctx, args) => {
+    const { org } = await requireWorkspace(ctx, args.organizationId, "manageFinance");
     return await refreshCostSnapshots(ctx, org._id);
   },
 });

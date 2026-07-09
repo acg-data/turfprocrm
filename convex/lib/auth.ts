@@ -13,6 +13,7 @@ export const permissionRoles = {
   createEstimate: ["owner", "admin", "manager", "sales"],
   convertEstimate: ["owner", "admin", "manager"],
   dispatchVisits: ["owner", "admin", "manager", "dispatcher"],
+  manageFinance: ["owner", "admin", "manager"],
   completeFieldWork: ["owner", "admin", "manager", "crew_lead", "technician"],
   addInternalNotes: ["owner", "admin", "manager", "sales", "dispatcher", "crew_lead", "technician"],
 } as const;

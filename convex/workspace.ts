@@ -1,9 +1,8 @@
-import { v } from "convex/values";
+import { ConvexError, v } from "convex/values";
 import { mutation, query } from "./_generated/server";
 import type { Id } from "./_generated/dataModel";
 import type { MutationCtx, QueryCtx } from "./_generated/server";
-
-const DEMO_SLUG = "greenline-demo";
+import { requireMembership, type Permission } from "./lib/auth";
 
 const serviceCategory = v.union(
   v.literal("lawn_care"),
@@ -68,16 +67,21 @@ function at(hour: number, minute = 0, offset = 0) {
   return dayStart() + offset * 24 * 60 * 60 * 1000 + hour * 60 * 60 * 1000 + minute * 60 * 1000;
 }
 
-async function getDemoOrg(ctx: QueryCtx | MutationCtx) {
-  return await ctx.db.query("organizations").withIndex("by_slug", (q) => q.eq("slug", DEMO_SLUG)).unique();
+async function requireWorkspace(
+  ctx: QueryCtx | MutationCtx,
+  organizationId: Id<"organizations">,
+  permission?: Permission,
+) {
+  const { user, membership } = await requireMembership(ctx, organizationId, permission);
+  const org = await ctx.db.get(organizationId);
+  if (!org) {
+    throw new ConvexError({ code: "NOT_FOUND", message: "Organization not found." });
+  }
+  return { org, user, membership };
 }
 
-async function requireDemoOrg(ctx: MutationCtx) {
-  const org = await ctx.db.query("organizations").withIndex("by_slug", (q) => q.eq("slug", DEMO_SLUG)).unique();
-  if (!org) {
-    throw new Error("Demo workspace has not been bootstrapped yet.");
-  }
-  return org;
+function workspaceSettings(org: { settings?: unknown }) {
+  return (org.settings ?? {}) as Record<string, unknown>;
 }
 
 async function refreshDemoDates(ctx: MutationCtx, organizationId: Id<"organizations">) {
@@ -395,49 +399,56 @@ async function ensureDemoScaleData(ctx: MutationCtx, organizationId: Id<"organiz
   return { insertedAccounts: insertedRecords, syntheticUsers: 100 };
 }
 
-export const bootstrapWorkspace = mutation({
-  args: {},
-  handler: async (ctx) => {
-    const existing = await getDemoOrg(ctx);
-    if (existing) {
-      await refreshDemoDates(ctx, existing._id);
-      const scale = await ensureDemoScaleData(ctx, existing._id);
-      return { organizationId: existing._id, created: false, refreshed: true, scale };
+export const seedSampleData = mutation({
+  args: { organizationId: v.id("organizations") },
+  handler: async (ctx, args) => {
+    const { org, user } = await requireWorkspace(ctx, args.organizationId, "manageOrganization");
+    const settings = workspaceSettings(org);
+
+    if (settings.sampleDataSeededAt) {
+      await refreshDemoDates(ctx, org._id);
+      const scale = await ensureDemoScaleData(ctx, org._id);
+      return { organizationId: org._id, created: false, refreshed: true, scale };
+    }
+
+    const existingCustomer = await ctx.db
+      .query("customers")
+      .withIndex("by_org_updated", (q) => q.eq("organizationId", org._id))
+      .first();
+    if (existingCustomer) {
+      throw new ConvexError({
+        code: "SAMPLE_DATA_BLOCKED",
+        message: "This workspace already has customer data. Sample data can only be loaded into an empty workspace.",
+      });
     }
 
     const now = Date.now();
-    const organizationId = await ctx.db.insert("organizations", {
-      name: "Greenline Turf & Pest",
-      slug: DEMO_SLUG,
-      industryFocus: "both",
-      timezone: "America/New_York",
-      defaultCurrency: "USD",
-      billingPlan: "pro",
-      subscriptionStatus: "trialing",
-      trialEndsAt: now + 14 * 24 * 60 * 60 * 1000,
-      serviceTerritory: ["Foxborough", "Mansfield", "Sharon", "Wrentham", "Plainville"],
+    const organizationId = org._id;
+
+    await ctx.db.patch(organizationId, {
+      serviceTerritory:
+        org.serviceTerritory && org.serviceTerritory.length > 0
+          ? org.serviceTerritory
+          : ["Foxborough", "Mansfield", "Sharon", "Wrentham", "Plainville"],
       settings: {
+        ...settings,
+        sampleDataSeededAt: now,
         companyAssignments: ["GreenAce", "Turf Pro"],
         defaultCapacityEstimatesPerWeek: 32,
-        mapProvider: "google_maps_links",
-        reportingMirror: "auditEvents_export_boundary",
       },
-      createdByClerkUserId: "demo-owner",
-      createdAt: now,
       updatedAt: now,
     });
 
-    const justinId = await ctx.db.insert("users", { clerkUserId: "demo-owner", name: "Justin Abrams", email: "justin@example.com", createdAt: now, updatedAt: now });
-    const amyId = await ctx.db.insert("users", { clerkUserId: "demo-sales", name: "Amy Reed", email: "amy@example.com", createdAt: now, updatedAt: now });
-    const marcoId = await ctx.db.insert("users", { clerkUserId: "demo-dispatch", name: "Marco Silva", email: "marco@example.com", createdAt: now, updatedAt: now });
-    const ninaId = await ctx.db.insert("users", { clerkUserId: "demo-field", name: "Nina Hart", email: "nina@example.com", createdAt: now, updatedAt: now });
+    const justinId = user._id;
+    const amyId = await ctx.db.insert("users", { clerkUserId: `sample-sales-${organizationId}`, name: "Amy Reed", email: "amy@example.com", createdAt: now, updatedAt: now });
+    const marcoId = await ctx.db.insert("users", { clerkUserId: `sample-dispatch-${organizationId}`, name: "Marco Silva", email: "marco@example.com", createdAt: now, updatedAt: now });
+    const ninaId = await ctx.db.insert("users", { clerkUserId: `sample-field-${organizationId}`, name: "Nina Hart", email: "nina@example.com", createdAt: now, updatedAt: now });
 
     for (const [userId, role] of [
-      [justinId, "owner"],
       [amyId, "sales"],
       [marcoId, "dispatcher"],
       [ninaId, "crew_lead"],
-    ] as Array<[Id<"users">, "owner" | "sales" | "dispatcher" | "crew_lead"]>) {
+    ] as Array<[Id<"users">, "sales" | "dispatcher" | "crew_lead"]>) {
       await ctx.db.insert("memberships", { organizationId, userId, role, status: "active", joinedAt: now, updatedAt: now });
     }
 
@@ -778,10 +789,10 @@ export const bootstrapWorkspace = mutation({
     await ctx.db.insert("auditEvents", {
       organizationId,
       actorUserId: justinId,
-      action: "demo.bootstrap",
+      action: "workspace.seed_sample_data",
       entityType: "organization",
       entityId: organizationId,
-      summary: "Bootstrapped Greenline Turf & Pest demo workspace",
+      summary: "Loaded the sample workspace dataset",
       after: { estimateId: walshEstimateId },
       createdAt: now,
     });
@@ -793,10 +804,9 @@ export const bootstrapWorkspace = mutation({
 });
 
 export const getWorkspace = query({
-  args: {},
-  handler: async (ctx) => {
-    const org = await getDemoOrg(ctx);
-    if (!org) return null;
+  args: { organizationId: v.id("organizations") },
+  handler: async (ctx, args) => {
+    const { org, user, membership } = await requireWorkspace(ctx, args.organizationId);
 
     const [
       memberships,
@@ -836,6 +846,8 @@ export const getWorkspace = query({
     );
 
     return {
+      viewer: { userId: user._id, role: membership.role },
+      seeded: Boolean(workspaceSettings(org).sampleDataSeededAt),
       organization: {
         id: org._id,
         name: org.name,
@@ -989,6 +1001,7 @@ export const getWorkspace = query({
 
 export const createLead = mutation({
   args: {
+    organizationId: v.id("organizations"),
     customerName: v.string(),
     title: v.string(),
     phone: v.optional(v.string()),
@@ -1009,9 +1022,8 @@ export const createLead = mutation({
     estimateNotes: v.optional(v.string()),
   },
   handler: async (ctx, args) => {
-    const org = await requireDemoOrg(ctx);
+    const { org, user } = await requireWorkspace(ctx, args.organizationId, "managePipeline");
     const now = Date.now();
-    const owner = await ctx.db.query("memberships").withIndex("by_org", (q) => q.eq("organizationId", org._id)).first();
     const source = args.source?.trim() || "Manual entry";
     const signals = spamSignals({ customerName: args.customerName, phone: args.phone, email: args.email, message: `${args.title} ${args.message ?? ""}` });
     const qualityIssues = leadQualityIssues({ email: args.email, phone: args.phone, street: args.street, city: args.city, postalCode: args.postalCode, lawnSizeSqFt: args.lawnSizeSqFt, serviceTerritory: org.serviceTerritory });
@@ -1023,7 +1035,7 @@ export const createLead = mutation({
       type: args.accountType ?? "residential",
       status: "prospect",
       source,
-      ownerUserId: owner?.userId,
+      ownerUserId: user._id,
       tags: [args.serviceLine, source],
       lifetimeValueCents: 0,
       createdAt: now,
@@ -1071,7 +1083,7 @@ export const createLead = mutation({
       lawnSizeSqFt: args.lawnSizeSqFt,
       status: signals.score >= 70 ? "spam" : "contacted",
       urgency: args.urgency ?? "normal",
-      ownerUserId: owner?.userId,
+      ownerUserId: user._id,
       spamScore: signals.score,
       spamReasons: signals.reasons,
       qualityScore,
@@ -1090,7 +1102,7 @@ export const createLead = mutation({
       valueCents: args.valueCents,
       closeProbability: 35,
       expectedCloseDate: now + 14 * 24 * 60 * 60 * 1000,
-      ownerUserId: owner?.userId,
+      ownerUserId: user._id,
       serviceLines: [args.serviceLine],
       createdAt: now,
       updatedAt: now,
@@ -1124,15 +1136,15 @@ export const createLead = mutation({
         updatedAt: now,
       });
     }
-    await ctx.db.insert("auditEvents", { organizationId: org._id, actorUserId: owner?.userId, action: "demo.lead.create", entityType: "lead", entityId: leadId, summary: `Created lead ${args.title}`, after: { customerId, propertyId, opportunityId }, createdAt: now });
+    await ctx.db.insert("auditEvents", { organizationId: org._id, actorUserId: user._id, action: "lead.create", entityType: "lead", entityId: leadId, summary: `Created lead ${args.title}`, after: { customerId, propertyId, opportunityId }, createdAt: now });
     return { customerId, leadId, opportunityId };
   },
 });
 
 export const advanceOpportunity = mutation({
-  args: { opportunityId: v.id("opportunities"), stage: opportunityStage },
+  args: { organizationId: v.id("organizations"), opportunityId: v.id("opportunities"), stage: opportunityStage },
   handler: async (ctx, args) => {
-    const org = await requireDemoOrg(ctx);
+    const { org } = await requireWorkspace(ctx, args.organizationId, "managePipeline");
     const opportunity = await ctx.db.get(args.opportunityId);
     if (!opportunity || opportunity.organizationId !== org._id) throw new Error("Opportunity not found.");
     const now = Date.now();
@@ -1146,9 +1158,9 @@ export const advanceOpportunity = mutation({
 });
 
 export const assignVisit = mutation({
-  args: { visitId: v.id("jobVisits"), crewId: v.id("crews") },
+  args: { organizationId: v.id("organizations"), visitId: v.id("jobVisits"), crewId: v.id("crews") },
   handler: async (ctx, args) => {
-    const org = await requireDemoOrg(ctx);
+    const { org } = await requireWorkspace(ctx, args.organizationId, "dispatchVisits");
     const visit = await ctx.db.get(args.visitId);
     const crew = await ctx.db.get(args.crewId);
     if (!visit || !crew || visit.organizationId !== org._id || crew.organizationId !== org._id) throw new Error("Visit or crew not found.");
@@ -1157,9 +1169,9 @@ export const assignVisit = mutation({
 });
 
 export const completeChecklistItem = mutation({
-  args: { visitId: v.id("jobVisits"), itemId: v.string() },
+  args: { organizationId: v.id("organizations"), visitId: v.id("jobVisits"), itemId: v.string() },
   handler: async (ctx, args) => {
-    const org = await requireDemoOrg(ctx);
+    const { org } = await requireWorkspace(ctx, args.organizationId, "completeFieldWork");
     const visit = await ctx.db.get(args.visitId);
     if (!visit || visit.organizationId !== org._id) throw new Error("Visit not found.");
     const now = Date.now();
@@ -1174,9 +1186,9 @@ export const completeChecklistItem = mutation({
 });
 
 export const submitVisit = mutation({
-  args: { visitId: v.id("jobVisits"), issueFlag: v.optional(v.string()) },
+  args: { organizationId: v.id("organizations"), visitId: v.id("jobVisits"), issueFlag: v.optional(v.string()) },
   handler: async (ctx, args) => {
-    const org = await requireDemoOrg(ctx);
+    const { org } = await requireWorkspace(ctx, args.organizationId, "completeFieldWork");
     const visit = await ctx.db.get(args.visitId);
     if (!visit || visit.organizationId !== org._id) throw new Error("Visit not found.");
     const now = Date.now();
@@ -1199,9 +1211,9 @@ export const submitVisit = mutation({
 });
 
 export const addTask = mutation({
-  args: { jobId: v.id("jobs"), title: v.string() },
+  args: { organizationId: v.id("organizations"), jobId: v.id("jobs"), title: v.string() },
   handler: async (ctx, args) => {
-    const org = await requireDemoOrg(ctx);
+    const { org } = await requireWorkspace(ctx, args.organizationId, "addInternalNotes");
     const job = await ctx.db.get(args.jobId);
     if (!job || job.organizationId !== org._id) throw new Error("Job not found.");
     const now = Date.now();
@@ -1221,6 +1233,7 @@ export const addTask = mutation({
 
 export const addActivity = mutation({
   args: {
+    organizationId: v.id("organizations"),
     entityType: activityEntityType,
     entityId: v.string(),
     kind: activityComposerKind,
@@ -1229,7 +1242,7 @@ export const addActivity = mutation({
     dueInDays: v.optional(v.number()),
   },
   handler: async (ctx, args) => {
-    const org = await requireDemoOrg(ctx);
+    const { org, user } = await requireWorkspace(ctx, args.organizationId, "addInternalNotes");
     const summary = args.summary.trim();
     if (!summary) throw new Error("Activity summary is required.");
 
@@ -1246,6 +1259,7 @@ export const addActivity = mutation({
       entityId: args.entityId,
       kind: args.kind,
       summary,
+      actorUserId: user._id,
       occurredAt: now,
     });
 
@@ -1269,9 +1283,9 @@ export const addActivity = mutation({
 });
 
 export const createCrew = mutation({
-  args: { name: v.string() },
+  args: { organizationId: v.id("organizations"), name: v.string() },
   handler: async (ctx, args) => {
-    const org = await requireDemoOrg(ctx);
+    const { org } = await requireWorkspace(ctx, args.organizationId, "manageCatalog");
     const colors = ["#2f6b4f", "#7c6a2b", "#42526b", "#8a4f36", "#315a72"];
     const crews = await ctx.db.query("crews").withIndex("by_org", (q) => q.eq("organizationId", org._id)).collect();
     return await ctx.db.insert("crews", {
@@ -1287,9 +1301,9 @@ export const createCrew = mutation({
 });
 
 export const toggleServiceCatalogItem = mutation({
-  args: { itemId: v.id("serviceCatalogItems") },
+  args: { organizationId: v.id("organizations"), itemId: v.id("serviceCatalogItems") },
   handler: async (ctx, args) => {
-    const org = await requireDemoOrg(ctx);
+    const { org } = await requireWorkspace(ctx, args.organizationId, "manageCatalog");
     const item = await ctx.db.get(args.itemId);
     if (!item || item.organizationId !== org._id) throw new Error("Catalog item not found.");
     await ctx.db.patch(args.itemId, { active: !item.active, updatedAt: Date.now() });

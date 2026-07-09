@@ -13,7 +13,6 @@ import type * as admin from "../admin.js";
 import type * as crm from "../crm.js";
 import type * as crons from "../crons.js";
 import type * as dashboard from "../dashboard.js";
-import type * as demo from "../demo.js";
 import type * as dispatch from "../dispatch.js";
 import type * as estimates from "../estimates.js";
 import type * as field from "../field.js";
@@ -25,6 +24,7 @@ import type * as operating from "../operating.js";
 import type * as pipeline from "../pipeline.js";
 import type * as setup from "../setup.js";
 import type * as specs from "../specs.js";
+import type * as workspace from "../workspace.js";
 
 import type {
   ApiFromModules,
@@ -38,7 +38,6 @@ declare const fullApi: ApiFromModules<{
   crm: typeof crm;
   crons: typeof crons;
   dashboard: typeof dashboard;
-  demo: typeof demo;
   dispatch: typeof dispatch;
   estimates: typeof estimates;
   field: typeof field;
@@ -50,6 +49,7 @@ declare const fullApi: ApiFromModules<{
   pipeline: typeof pipeline;
   setup: typeof setup;
   specs: typeof specs;
+  workspace: typeof workspace;
 }>;
 
 /**

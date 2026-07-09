@@ -37,8 +37,7 @@ import {
   UsersRound,
   X,
 } from "lucide-react";
-import { Show, UserButton } from "@clerk/nextjs";
-import { useMutation, useQuery } from "convex/react";
+import { api, loginWithReplit, useAuth, useMutation, useQuery } from "@/lib/live-api";
 import Link from "next/link";
 import { FormEvent, ReactNode, useEffect, useMemo, useRef, useState } from "react";
 import { demoWorkspace } from "@/data/demo-workspace";
@@ -57,8 +56,6 @@ import {
   type ServiceCategory,
 } from "@/domain/workflow";
 import { cn, currency, googleMapsUrl, shortDate, timeRange } from "@/lib/utils";
-import { api } from "../../../convex/_generated/api";
-import type { Id } from "../../../convex/_generated/dataModel";
 
 type View = "dashboard" | "prime_time" | "lead_ops" | "crm" | "pipeline" | "dispatch" | "jobs" | "field" | "costing" | "profit" | "cost_intel" | "admin" | "onboarding" | "specs";
 
@@ -1316,38 +1313,131 @@ function inputClass() {
 }
 
 export function LandscapeOsApp() {
-  if (process.env.NEXT_PUBLIC_CONVEX_URL) {
-    return <LandscapeOsLiveApp />;
+  // Escape hatch for e2e tests and offline demos; the live Replit stack is the default.
+  if (process.env.NEXT_PUBLIC_LOCAL_DEMO === "1") {
+    return (
+      <LandscapeOsWorkspace
+        initialWorkspace={demoWorkspace}
+        backendState={{
+          mode: "local",
+          label: "Local demo",
+          detail: "NEXT_PUBLIC_LOCAL_DEMO is set, so this session is using in-memory demo data.",
+          blueprint: fallbackBackendBlueprint,
+        }}
+      />
+    );
+  }
+  return <LandscapeOsLiveApp />;
+}
+
+function LandscapeOsLiveApp() {
+  const { isLoading, isAuthenticated } = useAuth();
+
+  if (isLoading) {
+    return <AppGate title="Connecting" detail="Checking your session…" />;
+  }
+
+  if (!isAuthenticated) {
+    return (
+      <AppGate
+        title="Sign in to open your workspace"
+        detail="The operating app is tenant-scoped: every read and write is checked against your organization membership and role."
+      >
+        <button
+          type="button"
+          onClick={() => loginWithReplit(() => location.reload())}
+          className="inline-flex min-h-10 items-center justify-center rounded-md bg-[#224036] px-4 text-sm font-semibold text-white shadow-sm transition hover:bg-[#1a332b]"
+        >
+          Sign in with Replit
+        </button>
+        <Link
+          href="/signin"
+          className="inline-flex min-h-10 items-center justify-center rounded-md border border-stone-200 bg-white px-4 text-sm font-semibold text-stone-800 shadow-sm transition hover:bg-stone-50"
+        >
+          Full sign-in page
+        </Link>
+      </AppGate>
+    );
+  }
+
+  return <AuthenticatedWorkspaceGate />;
+}
+
+function AppGate({ title, detail, children }: { title: string; detail: string; children?: ReactNode }) {
+  return (
+    <div className="flex min-h-screen items-center justify-center bg-stone-100 px-4">
+      <section className="w-full max-w-md rounded-lg border border-stone-200 bg-white p-6 text-center shadow-sm">
+        <h1 className="text-lg font-semibold text-stone-900">{title}</h1>
+        <p className="mt-2 text-sm text-stone-600">{detail}</p>
+        {children ? <div className="mt-4 flex justify-center">{children}</div> : null}
+      </section>
+    </div>
+  );
+}
+
+function AuthenticatedWorkspaceGate() {
+  const syncCurrentUser = useMutation(api.setup.syncCurrentUser);
+  const [userSynced, setUserSynced] = useState(false);
+  const syncStartedRef = useRef(false);
+
+  useEffect(() => {
+    if (syncStartedRef.current) return;
+    syncStartedRef.current = true;
+    void syncCurrentUser({})
+      .then(() => setUserSynced(true))
+      .catch((error) => logConvexWriteFailure("syncCurrentUser", error));
+  }, [syncCurrentUser]);
+
+  const myOrganizations = useQuery(api.setup.listMyOrganizations, userSynced ? {} : "skip") as
+    | Array<{ organization: { id: string; name: string } }>
+    | undefined;
+
+  if (!userSynced || myOrganizations === undefined) {
+    return <AppGate title="Loading workspaces" detail="Syncing your profile and organizations…" />;
+  }
+
+  if (myOrganizations.length === 0) {
+    return (
+      <AppGate title="No workspace yet" detail="Create your workspace to start running leads, dispatch, and job costing.">
+        <Link
+          href="/signin"
+          className="inline-flex min-h-10 items-center justify-center rounded-md bg-[#224036] px-4 text-sm font-semibold text-white shadow-sm transition hover:bg-[#1a332b]"
+        >
+          Create a workspace
+        </Link>
+      </AppGate>
+    );
   }
 
   return (
-    <LandscapeOsWorkspace
-      initialWorkspace={demoWorkspace}
-      backendState={{
-        mode: "local",
-        label: "Local demo",
-        detail: "Convex URL is not configured, so this session is using in-memory demo data.",
-        blueprint: fallbackBackendBlueprint,
-      }}
+    <OrgScopedApp
+      organizationId={myOrganizations[0].organization.id}
+      organizationName={myOrganizations[0].organization.name}
     />
   );
 }
 
-function LandscapeOsLiveApp() {
-  const liveWorkspace = useQuery(api.demo.getWorkspace, {}) as WorkspaceSnapshot | null | undefined;
+function OrgScopedApp({
+  organizationId,
+  organizationName,
+}: {
+  organizationId: string;
+  organizationName: string;
+}) {
+  const liveWorkspace = useQuery(api.workspace.getWorkspace, { organizationId }) as WorkspaceSnapshot | undefined;
   const backendBlueprint = useQuery(api.specs.getBackendBlueprint, {}) as BackendBlueprint | undefined;
-  const operatingDepth = useQuery(api.operating.getDemoOperatingDepth, {}) as OperatingDepth | null | undefined;
-  const bootstrapWorkspace = useMutation(api.demo.bootstrapWorkspace);
-  const bootstrapOperatingDepth = useMutation(api.operating.bootstrapOperatingDepth);
-  const createLeadMutation = useMutation(api.demo.createLead);
-  const advanceOpportunityMutation = useMutation(api.demo.advanceOpportunity);
-  const assignVisitMutation = useMutation(api.demo.assignVisit);
-  const completeChecklistMutation = useMutation(api.demo.completeChecklistItem);
-  const submitVisitMutation = useMutation(api.demo.submitVisit);
-  const addTaskMutation = useMutation(api.demo.addTask);
-  const addActivityMutation = useMutation(api.demo.addActivity);
-  const createCrewMutation = useMutation(api.demo.createCrew);
-  const toggleServiceMutation = useMutation(api.demo.toggleServiceCatalogItem);
+  const operatingDepth = useQuery(api.operating.getOperatingDepth, { organizationId }) as OperatingDepth | null | undefined;
+  const seedSampleDataMutation = useMutation(api.workspace.seedSampleData);
+  const seedOperatingDepthMutation = useMutation(api.operating.seedOperatingDepth);
+  const createLeadMutation = useMutation(api.workspace.createLead);
+  const advanceOpportunityMutation = useMutation(api.workspace.advanceOpportunity);
+  const assignVisitMutation = useMutation(api.workspace.assignVisit);
+  const completeChecklistMutation = useMutation(api.workspace.completeChecklistItem);
+  const submitVisitMutation = useMutation(api.workspace.submitVisit);
+  const addTaskMutation = useMutation(api.workspace.addTask);
+  const addActivityMutation = useMutation(api.workspace.addActivity);
+  const createCrewMutation = useMutation(api.workspace.createCrew);
+  const toggleServiceMutation = useMutation(api.workspace.toggleServiceCatalogItem);
   const updateLeadMutation = useMutation(api.operating.updateLead);
   const bulkUpdateLeadsMutation = useMutation(api.operating.bulkUpdateLeads);
   const updateMemberRoleMutation = useMutation(api.operating.updateMemberRole);
@@ -1355,32 +1445,24 @@ function LandscapeOsLiveApp() {
   const upsertVendorCatalogItemMutation = useMutation(api.operating.upsertVendorCatalogItem);
   const addTimesheetEntryMutation = useMutation(api.operating.addTimesheetEntry);
   const recordCustomerPaymentMutation = useMutation(api.operating.recordCustomerPayment);
-  const recalculateJobCostsMutation = useMutation(api.operating.recalculateDemoJobCosts);
+  const recalculateJobCostsMutation = useMutation(api.operating.recalculateJobCosts);
   const refreshCostIntelligenceMutation = useMutation(api.operating.refreshCostIntelligence);
-  const bootstrapStartedRef = useRef(false);
-  const operatingBootstrapStartedRef = useRef(false);
+  const operatingSeedStartedRef = useRef(false);
 
+  // Sample workspaces auto-provision the operating-depth layer; real workspaces build it through use.
   useEffect(() => {
-    if (liveWorkspace !== null || bootstrapStartedRef.current) return;
-    bootstrapStartedRef.current = true;
-    void bootstrapWorkspace({}).finally(() => {
-      bootstrapStartedRef.current = false;
+    if (!liveWorkspace?.seeded || operatingDepth === undefined || operatingDepth?.seeded || operatingSeedStartedRef.current) return;
+    operatingSeedStartedRef.current = true;
+    void seedOperatingDepthMutation({ organizationId }).finally(() => {
+      operatingSeedStartedRef.current = false;
     });
-  }, [bootstrapWorkspace, liveWorkspace]);
-
-  useEffect(() => {
-    if (!liveWorkspace || operatingDepth === undefined || operatingBootstrapStartedRef.current) return;
-    if (operatingDepth?.seeded) return;
-    operatingBootstrapStartedRef.current = true;
-    void bootstrapOperatingDepth({}).finally(() => {
-      operatingBootstrapStartedRef.current = false;
-    });
-  }, [bootstrapOperatingDepth, liveWorkspace, operatingDepth]);
+  }, [liveWorkspace?.seeded, operatingDepth, organizationId, seedOperatingDepthMutation]);
 
   const liveActions = useMemo<LiveActions>(
     () => ({
       createLead: (input) => {
         void createLeadMutation({
+          organizationId,
           customerName: input.customerName,
           title: input.title,
           phone: input.phone,
@@ -1395,22 +1477,23 @@ function LandscapeOsLiveApp() {
         }).catch((error) => logConvexWriteFailure("createLead", error));
       },
       advanceOpportunity: (opportunityId, stage) => {
-        void advanceOpportunityMutation({ opportunityId: opportunityId as Id<"opportunities">, stage }).catch((error) => logConvexWriteFailure("advanceOpportunity", error));
+        void advanceOpportunityMutation({ organizationId, opportunityId: opportunityId, stage }).catch((error) => logConvexWriteFailure("advanceOpportunity", error));
       },
       assignVisit: (visitId, crewId) => {
-        void assignVisitMutation({ visitId: visitId as Id<"jobVisits">, crewId: crewId as Id<"crews"> }).catch((error) => logConvexWriteFailure("assignVisit", error));
+        void assignVisitMutation({ organizationId, visitId: visitId, crewId: crewId }).catch((error) => logConvexWriteFailure("assignVisit", error));
       },
       completeChecklistItem: (visitId, itemId) => {
-        void completeChecklistMutation({ visitId: visitId as Id<"jobVisits">, itemId }).catch((error) => logConvexWriteFailure("completeChecklistItem", error));
+        void completeChecklistMutation({ organizationId, visitId: visitId, itemId }).catch((error) => logConvexWriteFailure("completeChecklistItem", error));
       },
       submitVisit: (visitId, issueFlag) => {
-        void submitVisitMutation({ visitId: visitId as Id<"jobVisits">, issueFlag }).catch((error) => logConvexWriteFailure("submitVisit", error));
+        void submitVisitMutation({ organizationId, visitId: visitId, issueFlag }).catch((error) => logConvexWriteFailure("submitVisit", error));
       },
       addTask: (jobId, title) => {
-        void addTaskMutation({ jobId: jobId as Id<"jobs">, title }).catch((error) => logConvexWriteFailure("addTask", error));
+        void addTaskMutation({ organizationId, jobId: jobId, title }).catch((error) => logConvexWriteFailure("addTask", error));
       },
       addActivity: (input) => {
         void addActivityMutation({
+          organizationId,
           entityType: input.entityType,
           entityId: input.entityId,
           kind: input.kind,
@@ -1420,10 +1503,10 @@ function LandscapeOsLiveApp() {
         }).catch((error) => logConvexWriteFailure("addActivity", error));
       },
       createCrew: (name) => {
-        void createCrewMutation({ name }).catch((error) => logConvexWriteFailure("createCrew", error));
+        void createCrewMutation({ organizationId, name }).catch((error) => logConvexWriteFailure("createCrew", error));
       },
       toggleService: (itemId) => {
-        void toggleServiceMutation({ itemId: itemId as Id<"serviceCatalogItems"> }).catch((error) => logConvexWriteFailure("toggleService", error));
+        void toggleServiceMutation({ organizationId, itemId: itemId }).catch((error) => logConvexWriteFailure("toggleService", error));
       },
     }),
     [
@@ -1434,6 +1517,7 @@ function LandscapeOsLiveApp() {
       completeChecklistMutation,
       createCrewMutation,
       createLeadMutation,
+      organizationId,
       submitVisitMutation,
       toggleServiceMutation,
     ],
@@ -1442,48 +1526,53 @@ function LandscapeOsLiveApp() {
   const operatingActions = useMemo<OperatingActions>(
     () => ({
       bootstrap: () => {
-        void bootstrapOperatingDepth({}).catch((error) => logConvexWriteFailure("bootstrapOperatingDepth", error));
+        void seedSampleDataMutation({ organizationId })
+          .then(() => seedOperatingDepthMutation({ organizationId }))
+          .catch((error) => logConvexWriteFailure("seedSampleData", error));
       },
       updateLead: (leadId, fields) => {
         void updateLeadMutation({
-          leadId: leadId as Id<"leads">,
+          organizationId,
+          leadId: leadId,
           status: fields.status as Parameters<typeof updateLeadMutation>[0]["status"],
           grade: fields.grade as Parameters<typeof updateLeadMutation>[0]["grade"],
           hidden: fields.hidden,
         }).catch((error) => logConvexWriteFailure("updateLead", error));
       },
       bulkUpdateLeads: (leadIds, status) => {
-        void bulkUpdateLeadsMutation({ leadIds: leadIds as Array<Id<"leads">>, status: status as Parameters<typeof bulkUpdateLeadsMutation>[0]["status"] }).catch((error) => logConvexWriteFailure("bulkUpdateLeads", error));
+        void bulkUpdateLeadsMutation({ organizationId, leadIds: leadIds as string[], status: status as Parameters<typeof bulkUpdateLeadsMutation>[0]["status"] }).catch((error) => logConvexWriteFailure("bulkUpdateLeads", error));
       },
       updateMemberRole: (membershipId, nextRole) => {
-        void updateMemberRoleMutation({ membershipId: membershipId as Id<"memberships">, role: nextRole }).catch((error) => logConvexWriteFailure("updateMemberRole", error));
+        void updateMemberRoleMutation({ organizationId, membershipId: membershipId, role: nextRole }).catch((error) => logConvexWriteFailure("updateMemberRole", error));
       },
       upsertLaborRate: (input) => {
-        void upsertLaborRateMutation({ id: input.id as Id<"laborRateCards"> | undefined, roleName: input.roleName, hourlyCostCents: input.hourlyCostCents, billableRateCents: input.billableRateCents }).catch((error) => logConvexWriteFailure("upsertLaborRate", error));
+        void upsertLaborRateMutation({ organizationId, id: input.id, roleName: input.roleName, hourlyCostCents: input.hourlyCostCents, billableRateCents: input.billableRateCents }).catch((error) => logConvexWriteFailure("upsertLaborRate", error));
       },
       upsertVendorCatalogItem: (input) => {
-        void upsertVendorCatalogItemMutation({ id: input.id as Id<"vendorCatalogs"> | undefined, vendorName: input.vendorName, itemName: input.itemName, category: input.category, unit: input.unit, unitCostCents: input.unitCostCents }).catch((error) => logConvexWriteFailure("upsertVendorCatalogItem", error));
+        void upsertVendorCatalogItemMutation({ organizationId, id: input.id, vendorName: input.vendorName, itemName: input.itemName, category: input.category, unit: input.unit, unitCostCents: input.unitCostCents }).catch((error) => logConvexWriteFailure("upsertVendorCatalogItem", error));
       },
       addTimesheetEntry: (jobId, roleName, hours, hourlyCostCents) => {
-        void addTimesheetEntryMutation({ jobId: jobId as Id<"jobs">, roleName, hours, hourlyCostCents }).catch((error) => logConvexWriteFailure("addTimesheetEntry", error));
+        void addTimesheetEntryMutation({ organizationId, jobId: jobId, roleName, hours, hourlyCostCents }).catch((error) => logConvexWriteFailure("addTimesheetEntry", error));
       },
       recordCustomerPayment: (invoiceId, amountCents, method) => {
-        void recordCustomerPaymentMutation({ invoiceId: invoiceId as Id<"customerInvoices">, amountCents, method }).catch((error) => logConvexWriteFailure("recordCustomerPayment", error));
+        void recordCustomerPaymentMutation({ organizationId, invoiceId: invoiceId, amountCents, method }).catch((error) => logConvexWriteFailure("recordCustomerPayment", error));
       },
       recalculateJobCosts: () => {
-        void recalculateJobCostsMutation({}).catch((error) => logConvexWriteFailure("recalculateJobCosts", error));
+        void recalculateJobCostsMutation({ organizationId }).catch((error) => logConvexWriteFailure("recalculateJobCosts", error));
       },
       refreshCostIntelligence: () => {
-        void refreshCostIntelligenceMutation({}).catch((error) => logConvexWriteFailure("refreshCostIntelligence", error));
+        void refreshCostIntelligenceMutation({ organizationId }).catch((error) => logConvexWriteFailure("refreshCostIntelligence", error));
       },
     }),
     [
       addTimesheetEntryMutation,
-      bootstrapOperatingDepth,
       bulkUpdateLeadsMutation,
+      organizationId,
       recalculateJobCostsMutation,
       recordCustomerPaymentMutation,
       refreshCostIntelligenceMutation,
+      seedOperatingDepthMutation,
+      seedSampleDataMutation,
       updateLeadMutation,
       updateMemberRoleMutation,
       upsertLaborRateMutation,
@@ -1491,21 +1580,45 @@ function LandscapeOsLiveApp() {
     ],
   );
 
+  if (liveWorkspace === undefined) {
+    return <AppGate title="Loading workspace" detail={`Fetching live data for ${organizationName}…`} />;
+  }
+
+  const showSampleBanner = !liveWorkspace.seeded && liveWorkspace.customers.length === 0;
+
   return (
-    <LandscapeOsWorkspace
-      initialWorkspace={liveWorkspace ?? demoWorkspace}
-      backendState={{
-        mode: liveWorkspace ? "convex-live" : "convex-loading",
-        label: liveWorkspace ? "Convex live" : "Connecting Convex",
-        detail: liveWorkspace
-          ? "Data is loaded from dutiful-salmon-300 and interactive actions write through demo Convex mutations."
-          : "Seeding the Greenline demo workspace in Convex, then the interface will hydrate from the backend.",
-        blueprint: backendBlueprint ?? fallbackBackendBlueprint,
-      }}
-      liveActions={liveActions}
-      operatingDepth={operatingDepth ?? undefined}
-      operatingActions={operatingActions}
-    />
+    <>
+      {showSampleBanner ? (
+        <div className="flex flex-wrap items-center justify-center gap-3 border-b border-amber-200 bg-amber-50 px-4 py-2.5 text-sm text-amber-900">
+          <span>
+            <strong>{organizationName}</strong> is empty. Load the sample dataset to explore every module, or start adding real leads.
+          </span>
+          <button
+            type="button"
+            onClick={() => {
+              void seedSampleDataMutation({ organizationId })
+                .then(() => seedOperatingDepthMutation({ organizationId }))
+                .catch((error) => logConvexWriteFailure("seedSampleData", error));
+            }}
+            className="rounded-md bg-amber-900 px-3 py-1.5 text-xs font-semibold text-white transition hover:bg-amber-800"
+          >
+            Load sample dataset
+          </button>
+        </div>
+      ) : null}
+      <LandscapeOsWorkspace
+        initialWorkspace={liveWorkspace}
+        backendState={{
+          mode: "convex-live",
+          label: "Convex live",
+          detail: `Authenticated workspace for ${organizationName}. Every read and write is org-scoped and role-checked.`,
+          blueprint: backendBlueprint ?? fallbackBackendBlueprint,
+        }}
+        liveActions={liveActions}
+        operatingDepth={operatingDepth ?? undefined}
+        operatingActions={operatingActions}
+      />
+    </>
   );
 }
 
@@ -1687,7 +1800,8 @@ function LandscapeOsWorkspace({
     setMobileNavOpen(false);
   }
 
-  const authConfigured = Boolean(process.env.NEXT_PUBLIC_CLERK_PUBLISHABLE_KEY);
+  const authConfigured = Boolean(workspace.viewer);
+  const viewerMember = workspace.viewer ? membersById.get(workspace.viewer.userId) : undefined;
 
   function createLead(event: FormEvent) {
     event.preventDefault();
@@ -2136,22 +2250,20 @@ function LandscapeOsWorkspace({
                 <IconButton title="Notifications">
                   <Bell size={18} />
                 </IconButton>
-                {authConfigured ? (
-                  <>
-                    <Show when="signed-out">
-                      <Link
-                        href="/signin"
-                        className="inline-flex min-h-10 items-center justify-center gap-2 rounded-md border border-stone-200 bg-white px-3 text-sm font-semibold text-stone-800 shadow-sm transition hover:bg-stone-50"
-                      >
-                        <UserRound size={16} />
-                        Sign In
-                      </Link>
-                    </Show>
-                    <Show when="signed-in">
-                      <UserButton />
-                    </Show>
-                  </>
-                ) : null}
+                {viewerMember ? (
+                  <span className="inline-flex min-h-10 items-center justify-center gap-2 rounded-md border border-stone-200 bg-stone-50 px-3 text-sm font-semibold text-stone-800">
+                    <UserRound size={16} />
+                    {viewerMember.name}
+                  </span>
+                ) : (
+                  <Link
+                    href="/signin"
+                    className="inline-flex min-h-10 items-center justify-center gap-2 rounded-md border border-stone-200 bg-white px-3 text-sm font-semibold text-stone-800 shadow-sm transition hover:bg-stone-50"
+                  >
+                    <UserRound size={16} />
+                    Sign In
+                  </Link>
+                )}
               </div>
             </div>
             <div className="relative mt-3 max-w-3xl">
@@ -4770,7 +4882,7 @@ function ClientOnboardingView({
               This is the customer sign-up path for companies using the software. The production backend now seeds the same objects this preview shows.
             </p>
           </div>
-          <Badge tone={authConfigured ? "success" : "warning"}>{authConfigured ? "Clerk ready" : "Demo preview"}</Badge>
+          <Badge tone={authConfigured ? "success" : "warning"}>{authConfigured ? "Replit Auth live" : "Demo preview"}</Badge>
         </div>
       </Panel>
 

@@ -167,6 +167,8 @@ export type Material = {
 };
 
 export type WorkspaceSnapshot = {
+  viewer?: { userId: string; role: string };
+  seeded?: boolean;
   organization: {
     id: string;
     name: string;
