@@ -32,6 +32,7 @@ import {
   ShieldCheck,
   SlidersHorizontal,
   Sprout,
+  Sparkles,
   TrendingUp,
   UserRound,
   UsersRound,
@@ -1449,6 +1450,7 @@ function OrgScopedApp({
   const liveWorkspace = useQuery(api.workspace.getWorkspace, { organizationId }) as WorkspaceSnapshot | undefined;
   const backendBlueprint = useQuery(api.specs.getBackendBlueprint, {}) as BackendBlueprint | undefined;
   const operatingDepth = useQuery(api.operating.getOperatingDepth, { organizationId }) as OperatingDepth | null | undefined;
+  const activationCenter = useQuery(api.onboarding.getActivationCenter, { organizationId });
   const seedSampleDataMutation = useMutation(api.workspace.seedSampleData);
   const seedOperatingDepthMutation = useMutation(api.operating.seedOperatingDepth);
   const createLeadMutation = useMutation(api.workspace.createLead);
@@ -1624,6 +1626,18 @@ function OrgScopedApp({
               </option>
             ))}
           </select>
+        </div>
+      ) : null}
+      {activationCenter?.trial.status === "trialing" ? (
+        <div className="flex flex-wrap items-center justify-center gap-3 border-b border-emerald-200 bg-emerald-50 px-4 py-2.5 text-sm text-emerald-950">
+          <span className="inline-flex items-center gap-2">
+            <Sparkles size={16} className="text-emerald-700" />
+            <strong>{activationCenter.trial.daysLeft ?? 0} days left</strong> in All-In Pro · {activationCenter.activationScore}% activated
+          </span>
+          <span className="hidden text-emerald-800 md:inline">Finish setup to reach your first estimate → schedule → invoice → payment.</span>
+          <Link href={`/onboarding?organizationId=${organizationId}`} className="rounded-md bg-emerald-900 px-3 py-1.5 text-xs font-semibold text-white">
+            Continue setup
+          </Link>
         </div>
       ) : null}
       {showSampleBanner ? (
@@ -4668,6 +4682,30 @@ function AdminView({
             <Metric label="Flags" value={operatingDepth.admin.featureFlags.length} />
             <Metric label="Crews" value={workspace.crews.length} />
             <Metric label="Catalog" value={workspace.serviceCatalog.length} />
+          </div>
+        </div>
+      </Panel>
+
+      <Panel>
+        <div className="flex flex-wrap items-center justify-between gap-4">
+          <div className="flex items-start gap-3">
+            <div className="grid h-10 w-10 shrink-0 place-items-center rounded-md bg-emerald-50 text-emerald-800">
+              <UserRound size={19} />
+            </div>
+            <div>
+              <h2 className="text-base font-bold">Customer Portal</h2>
+              <p className="mt-1 max-w-2xl text-sm leading-6 text-stone-500">Invite customers to approve estimates, see visits and service reports, pay invoices, download documents, and message your team.</p>
+            </div>
+          </div>
+          <div className="flex flex-wrap gap-2">
+            <Link href={{ pathname: "/portal/manage", query: { organizationId: workspace.organization.id } }} className="inline-flex min-h-10 items-center justify-center gap-2 rounded-md bg-[#224036] px-4 text-sm font-semibold text-white">
+              Manage portal access
+              <ExternalLink size={15} />
+            </Link>
+            <Link href="/portal" target="_blank" className="inline-flex min-h-10 items-center justify-center gap-2 rounded-md border border-stone-200 bg-white px-4 text-sm font-semibold text-stone-700">
+              Preview customer view
+              <ExternalLink size={15} />
+            </Link>
           </div>
         </div>
       </Panel>

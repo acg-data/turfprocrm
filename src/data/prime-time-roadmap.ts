@@ -44,7 +44,7 @@ export const primeTimeGroups = [
       { title: "Record detail drawers", priority: "P1", status: "in_progress", owner: "product", detail: "Lead detail exists; expand the pattern to customer, job, invoice, and visit side panels." },
       { title: "Saved workspace views", priority: "P1", status: "in_progress", owner: "engineering", detail: "Lead saved views are modeled; extend saved views to dispatch, jobs, profit, and reporting." },
       { title: "Inline activity composer", priority: "P1", status: "in_progress", owner: "product", detail: "Customer and job records now log notes, calls, emails, and optional follow-up tasks; expand the same composer to estimates, invoices, visits, and portal events." },
-      { title: "Customer portal boundary", priority: "P2", status: "next", owner: "product", detail: "Design the account, estimate approval, invoice, payment, and service-history portal before building public access." },
+      { title: "Customer portal boundary", priority: "P2", status: "done", owner: "product", detail: "Secure customer identities, invitations, estimate decisions, visits, reports, invoices, Stripe payments, documents, messages, requests, properties, and preferences are live at /portal." },
       { title: "Role-specific home screens", priority: "P2", status: "next", owner: "product", detail: "Owners, sales, dispatch, technicians, and admins should land on different default views." },
     ],
   },

@@ -133,7 +133,7 @@ export function MarketingNav() {
           <Link href={route("/signin")} className={styles.buttonSoft}>
             Log In
           </Link>
-          <Link href={route("/signin")} className={styles.button}>
+          <Link href={route("/signin?plan=pro")} className={styles.button}>
             Get Started
           </Link>
         </div>
@@ -177,7 +177,7 @@ export function MarketingNav() {
                 <Link href={route("/signin")} className={styles.buttonSoft} style={{ flex: 1 }} onClick={() => setOpen(false)}>
                   Log In
                 </Link>
-                <Link href={route("/signin")} className={styles.button} style={{ flex: 1 }} onClick={() => setOpen(false)}>
+                <Link href={route("/signin?plan=pro")} className={styles.button} style={{ flex: 1 }} onClick={() => setOpen(false)}>
                   Get Started
                 </Link>
               </div>

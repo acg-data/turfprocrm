@@ -333,6 +333,70 @@ describe("Convex operating system functions", () => {
     ).resolves.toBeTruthy();
   });
 
+  it("runs a tenant-safe customer portal from invitation through estimate approval and payment posting", async () => {
+    const t = convexTest(schema, modules);
+    const owner = t.withIdentity({ subject: "portal_owner", email: "owner@portal.example", name: "Portal Owner" });
+    const organizationId = await owner.mutation(api.setup.createOrganization, {
+      name: "Portal Test Turf",
+      timezone: "America/New_York",
+      industryFocus: "both",
+      billingPlan: "pro",
+    });
+    const first = await owner.mutation(api.crm.createLead, {
+      organizationId,
+      customerName: "Megan Customer",
+      contactName: "Megan Customer",
+      email: "megan@customer.example",
+      phone: "(508) 555-0110",
+      property: { street: "42 Oak Terrace", city: "Mansfield", state: "MA", postalCode: "02048" },
+      title: "Seasonal mosquito service",
+      source: "Website",
+      valueCents: 78000,
+      serviceLines: ["pest_control"],
+    });
+    const estimateId = await owner.mutation(api.estimates.createEstimate, {
+      organizationId,
+      opportunityId: first.opportunityId,
+      status: "sent",
+      lineItems: [{ name: "Mosquito barrier", quantity: 6, unit: "visit", unitPriceCents: 13000 }],
+    });
+    await owner.mutation(api.portal.createInvite, {
+      organizationId,
+      customerId: first.customerId,
+      email: "megan@customer.example",
+      name: "Megan Customer",
+    });
+    const token = await t.run(async (ctx) => (await ctx.db.query("portalInvites").collect())[0].token);
+    const customer = t.withIdentity({ subject: "portal_customer", email: "megan@customer.example", name: "Megan Customer" });
+    await customer.mutation(api.setup.syncCurrentUser);
+    await customer.mutation(api.portal.acceptInvite, { token });
+    const portal = await customer.query(api.portal.getMyPortal, {});
+    expect(portal?.customer?._id).toBe(first.customerId);
+    expect(portal?.estimates).toHaveLength(1);
+    expect(portal?.estimates[0].lineItems).toHaveLength(1);
+
+    await customer.mutation(api.portal.decideEstimate, { estimateId, decision: "accept", message: "Approved — please schedule us." });
+    await customer.mutation(api.portal.sendMessage, { body: "The side gate will be open." });
+    await customer.mutation(api.portal.submitServiceRequest, { kind: "callback", subject: "Call before arrival", detail: "Please call about thirty minutes before the crew arrives." });
+    const accepted = await t.run(async (ctx) => await ctx.db.get(estimateId));
+    expect(accepted?.status).toBe("accepted");
+    expect((await customer.query(api.portal.getMyPortal, {}))?.messages.length).toBeGreaterThan(1);
+
+    const invoiceId = await t.run(async (ctx) => {
+      const now = Date.now();
+      return await ctx.db.insert("customerInvoices", { organizationId, customerId: first.customerId, invoiceNumber: "INV-PORTAL", status: "sent", subtotalCents: 24300, taxCents: 0, totalCents: 24300, paidCents: 0, dueAt: now + 86400000, createdAt: now, updatedAt: now });
+    });
+    const firstPost = await t.mutation(internal.portal.recordInvoicePayment, { organizationId, customerId: first.customerId, invoiceId, amountCents: 24300, reference: "cs_test_portal" });
+    const duplicatePost = await t.mutation(internal.portal.recordInvoicePayment, { organizationId, customerId: first.customerId, invoiceId, amountCents: 24300, reference: "cs_test_portal" });
+    expect(firstPost.applied).toBe(true);
+    expect(duplicatePost.applied).toBe(false);
+    const paidInvoice = await t.run(async (ctx) => await ctx.db.get(invoiceId));
+    expect(paidInvoice?.status).toBe("paid");
+
+    const outsider = t.withIdentity({ subject: "portal_outsider", email: "outsider@example.com", name: "Outsider" });
+    expect(await outsider.query(api.portal.getMyPortal, {})).toBeNull();
+  });
+
   it("captures a public marketing demo request without auth", async () => {
     const t = convexTest(schema, modules);
 

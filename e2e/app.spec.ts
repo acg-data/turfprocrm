@@ -11,7 +11,7 @@ test("marketing front page routes to product pages and the live app", async ({ p
   await expect(page.getByRole("heading", { name: /All-in-One CRM Built for/i })).toBeVisible();
   const menuButton = page.getByRole("button", { name: "Open menu" });
   if (await menuButton.isVisible()) await menuButton.click();
-  await expect(page.locator("header").getByRole("link", { name: "Get Started" }).first()).toHaveAttribute("href", "/signin");
+  await expect(page.locator("header").getByRole("link", { name: "Get Started" }).first()).toHaveAttribute("href", "/signin?plan=pro");
 
   await page.goto("/features");
   await expect(page.getByRole("heading", { name: /Powerful Features/i })).toBeVisible();
@@ -31,6 +31,59 @@ test("marketing front page routes to product pages and the live app", async ({ p
   await expect(page.getByRole("heading", { name: "Privacy Policy" })).toBeVisible();
   await page.goto("/terms");
   await expect(page.getByRole("heading", { name: "Terms of Service" })).toBeVisible();
+});
+
+async function openPortalSection(page: Page, name: string) {
+  const menu = page.getByRole("button", { name: "Open navigation" });
+  if (await menu.isVisible()) await menu.click();
+  await page.getByRole("navigation", { name: "Customer portal" }).getByRole("button", { name, exact: true }).click();
+}
+
+test("customer portal completes the estimate, payment, and messaging journeys", async ({ page }) => {
+  await page.goto("/portal");
+  await expect(page.getByRole("heading", { name: /Good (morning|afternoon|evening), Megan/ })).toBeVisible();
+  await expect(page.getByText("Upcoming service")).toBeVisible();
+
+  await openPortalSection(page, "Estimates");
+  await expect(page.getByRole("heading", { name: "Estimates", exact: true })).toBeVisible();
+  await page.getByRole("button", { name: "Approve estimate" }).click();
+  await expect(page.getByRole("dialog", { name: "Approve this estimate?" })).toBeVisible();
+  await page.getByRole("dialog").getByRole("button", { name: "Approve estimate" }).click();
+  await expect(page.getByText("Estimate approved. The service team has been notified.")).toBeVisible();
+
+  await openPortalSection(page, "Invoices & payments");
+  await expect(page.getByRole("heading", { name: "Invoices & payments" })).toBeVisible();
+  await page.getByRole("button", { name: /Pay \$243\.00/ }).click();
+  await expect(page.getByText("Demo payment completed. A receipt has been added to your account.")).toBeVisible();
+  await expect(page.getByText("$0.00").first()).toBeVisible();
+
+  await openPortalSection(page, "Messages");
+  await page.getByLabel("Message").fill("Can you also check the clover near the fence?");
+  await page.getByRole("button", { name: "Send", exact: true }).click();
+  await expect(page.getByText("Can you also check the clover near the fence?")).toBeVisible();
+  await expect(page.getByText("Message sent to the service team.")).toBeVisible();
+});
+
+test("trial activation center walks an owner through every setup stage", async ({ page }) => {
+  await page.goto("/onboarding");
+  await expect(page.getByRole("heading", { name: /Let’s build Greenline Turf & Pest/ })).toBeVisible();
+  await page.getByRole("button", { name: /Grow profitable revenue/ }).click();
+  await page.getByRole("button", { name: "Build my workspace" }).click();
+  await expect(page.getByRole("heading", { name: /Set the operating defaults/ })).toBeVisible();
+  await page.getByLabel("Service territory").fill("Foxborough, Mansfield, Sharon, Norfolk");
+  await page.getByRole("button", { name: "Save & continue" }).click();
+  await expect(page.getByRole("heading", { name: /Start with the work you sell today/ })).toBeVisible();
+  await page.getByRole("button", { name: "Save & continue" }).click();
+  await expect(page.getByRole("heading", { name: /Invite the people who move work forward/ })).toBeVisible();
+  await page.getByLabel("Team member 1 name").fill("Nina Hart");
+  await page.getByLabel("Team member 1 email").fill("nina@example.com");
+  await page.getByRole("button", { name: "Save & continue" }).click();
+  await expect(page.getByRole("heading", { name: /Move in cleanly/ })).toBeVisible();
+  await page.locator('input[type="file"]').setInputFiles({ name: "customers.csv", mimeType: "text/csv", buffer: Buffer.from("Customer Name,Phone\nMegan Walsh,5085550188") });
+  await expect(page.getByText("Mapping preview ready")).toBeVisible();
+  await page.getByRole("button", { name: "Save & continue" }).click();
+  await expect(page.getByRole("heading", { name: "Your workspace is ready to run real work." })).toBeVisible();
+  await expect(page.getByText("All-In Pro · $99/month")).toBeVisible();
 });
 
 test("loads the operating shell and creates a lead", async ({ page }) => {

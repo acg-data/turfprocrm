@@ -50,8 +50,8 @@ export const createCheckoutSession = action({
       },
       metadata: { organizationId: args.organizationId, plan: args.plan },
       allow_promotion_codes: true,
-      success_url: `${baseUrl()}/app?billing=success`,
-      cancel_url: `${baseUrl()}/app?billing=canceled`,
+      success_url: `${baseUrl()}/onboarding?organizationId=${args.organizationId}&billing=success`,
+      cancel_url: `${baseUrl()}/onboarding?organizationId=${args.organizationId}&billing=canceled`,
     });
     return { url: session.url };
   },
@@ -105,6 +105,21 @@ export const fulfillStripeWebhook = internalAction({
     switch (event.type) {
       case "checkout.session.completed": {
         const session = event.data.object;
+        if (session.metadata?.purpose === "customer_invoice") {
+          const organizationId = session.metadata.organizationId as Id<"organizations"> | undefined;
+          const customerId = session.metadata.customerId as Id<"customers"> | undefined;
+          const invoiceId = session.metadata.invoiceId as Id<"customerInvoices"> | undefined;
+          if (organizationId && customerId && invoiceId && session.payment_status === "paid" && session.amount_total) {
+            await ctx.runMutation(internal.portal.recordInvoicePayment, {
+              organizationId,
+              customerId,
+              invoiceId,
+              amountCents: session.amount_total,
+              reference: session.id,
+            });
+          }
+          break;
+        }
         const organizationId = session.metadata?.organizationId as Id<"organizations"> | undefined;
         const plan = session.metadata?.plan as "starter" | "pro" | undefined;
         if (!organizationId || !session.subscription) break;

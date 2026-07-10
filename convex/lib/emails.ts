@@ -61,3 +61,16 @@ export function trialEndingEmail(input: { organizationName: string; daysLeft: nu
     ),
   };
 }
+
+export function portalInviteEmail(input: { organizationName: string; customerName: string; acceptUrl: string }) {
+  return {
+    subject: `${input.organizationName} invited you to your customer portal`,
+    html: shell(
+      `Your ${input.organizationName} portal is ready`,
+      `<p style="line-height:1.6">Hi ${input.customerName},</p>
+       <p style="line-height:1.6">Use your secure customer portal to review estimates, see upcoming visits, read service reports, download documents, message the team, and pay invoices.</p>
+       ${button(input.acceptUrl, "Activate customer portal")}
+       <p style="line-height:1.6;color:#78716c;font-size:13px;margin-top:16px">This invitation expires in 7 days and can only be accepted by the email address it was sent to.</p>`,
+    ),
+  };
+}

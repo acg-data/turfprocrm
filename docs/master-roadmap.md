@@ -426,32 +426,32 @@ Status legend: **[DONE]** shipped and live · **[PARTIAL]** modeled or half-buil
 
 ## 12. Customer Portal & Self-Service
 
-- [NEW] Magic-link portal access — tokenized per-customer portal, no password required
-- [NEW] Optional portal accounts — password/passkey upgrade for frequent users
-- [NEW] Upcoming visits view — schedule with arrival windows and crew info
-- [NEW] Visit history — completed work with before/after photos and notes
-- [NEW] Quote review + e-sign — view, pick good/better/best options, sign in portal
-- [NEW] Invoice viewing + payment — pay by card/ACH with saved methods
+- [PARTIAL] Secure portal invitations — tokenized, single-use, email-matched invitations with Clerk-backed customer accounts; passwordless-only magic links remain
+- [PARTIAL] Optional portal accounts — password/social login is live; passkeys remain
+- [DONE] Upcoming visits view — schedule with arrival windows, property notes, preparation, and crew info
+- [DONE] Visit history — completed work with before/after photos, notes, weather, checklist, and materials
+- [PARTIAL] Quote review + e-sign — line-item review, approve/decline/request-change are live; signature capture and good/better/best options remain
+- [PARTIAL] Invoice viewing + payment — Stripe Checkout card payment and idempotent posting are live; ACH and saved methods remain
 - [NEW] Auto-pay self-enrollment — customer opts into card-on-file billing
-- [NEW] Statement + payment history — balance, receipts, downloadable statements
-- [NEW] Service requests — issue submission creating lead/task with photos
-- [NEW] Reschedule/skip requests — customer-initiated changes routed to dispatch
-- [NEW] Program status view — rounds completed/remaining, next application date
-- [NEW] Chemical application notices — state-required pre/post application notifications
+- [PARTIAL] Statement + payment history — balance, invoice, payment, and receipt history are live; consolidated statement PDF remains
+- [PARTIAL] Service requests — typed customer requests and office review queue are live; photo attachments remain
+- [PARTIAL] Reschedule/skip requests — typed requests are modeled and routed to the office; direct dispatch-board resolution remains
+- [PARTIAL] Program status view — upcoming/completed rounds and service history are live; dedicated season progress remains
+- [PARTIAL] Chemical application notices — applied product, quantity, EPA registration, weather, and aftercare show in reports; jurisdiction templates remain
 - [NEW] Prepay offers — discounted season prepay checkout in portal
-- [NEW] Communication preferences — channel, frequency, language self-management
+- [DONE] Communication preferences — email, SMS, service, estimate, invoice, and marketing preferences are customer-managed
 - [NEW] Referral sharing — personal referral link with reward tracking
-- [NEW] Document library — contracts, COIs, warranties, compliance sheets
-- [NEW] Portal branding — org logo, colors, custom domain
-- [NEW] Portal notifications — email/SMS alerts for new quotes, invoices, photos
-- [NEW] Multi-property switcher — commercial/property-manager view across sites
+- [DONE] Document library — customer-visible contracts, reports, receipts, guides, and secure file URLs
+- [PARTIAL] Portal branding — company identity and Turf Pro presentation are live; logo, color, and custom-domain controls remain
+- [PARTIAL] Portal notifications — invitation email and in-portal system messages are live; full estimate/visit/invoice SMS and email matrix remains
+- [DONE] Multi-property switcher — customer-safe property cards, schedule association, and notes across multiple sites
 - [NEW] HOA board view — community-level reporting for board contacts
 - [NEW] Snow verification view — timestamps, materials, photos per event for liability records
 - [NEW] Tip-the-crew option — gratuity at payment routed to crew
 - [NEW] Post-payment review prompt — review ask after successful payment
 - [NEW] Spanish-language portal — full portal translation toggle
 - [NEW] New-service request catalog — browse and request additional services with instant pricing
-- [NEW] Portal activity events — opens/approvals logged to CRM timeline
+- [PARTIAL] Portal activity events — estimate approvals and customer actions are logged; open/view analytics remain
 
 ## 13. Reporting, Analytics & Forecasting
 

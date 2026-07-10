@@ -234,6 +234,91 @@ export default defineSchema({
     .index("by_customer", ["customerId"])
     .index("by_org_customer", ["organizationId", "customerId"]),
 
+  portalUsers: defineTable({
+    organizationId: v.id("organizations"),
+    customerId: v.id("customers"),
+    contactId: v.optional(v.id("contacts")),
+    clerkUserId: v.optional(v.string()),
+    email: v.string(),
+    name: v.string(),
+    status: v.union(v.literal("invited"), v.literal("active"), v.literal("locked"), v.literal("revoked")),
+    lastSignedInAt: v.optional(v.number()),
+    invitedAt: v.number(),
+    activatedAt: v.optional(v.number()),
+    createdAt: v.number(),
+    updatedAt: v.number(),
+  })
+    .index("by_clerk_user", ["clerkUserId"])
+    .index("by_email", ["email"])
+    .index("by_customer", ["customerId"])
+    .index("by_org", ["organizationId"]),
+
+  portalInvites: defineTable({
+    organizationId: v.id("organizations"),
+    customerId: v.id("customers"),
+    contactId: v.optional(v.id("contacts")),
+    email: v.string(),
+    name: v.string(),
+    token: v.string(),
+    status: v.union(v.literal("pending"), v.literal("accepted"), v.literal("expired"), v.literal("revoked")),
+    expiresAt: v.number(),
+    acceptedAt: v.optional(v.number()),
+    createdByUserId: v.id("users"),
+    createdAt: v.number(),
+    updatedAt: v.number(),
+  })
+    .index("by_token", ["token"])
+    .index("by_customer", ["customerId"])
+    .index("by_org", ["organizationId"]),
+
+  portalMessages: defineTable({
+    organizationId: v.id("organizations"),
+    customerId: v.id("customers"),
+    portalUserId: v.optional(v.id("portalUsers")),
+    direction: v.union(v.literal("customer"), v.literal("team"), v.literal("system")),
+    body: v.string(),
+    attachmentFileIds: v.optional(v.array(v.id("files"))),
+    readByCustomerAt: v.optional(v.number()),
+    readByTeamAt: v.optional(v.number()),
+    createdAt: v.number(),
+  })
+    .index("by_customer", ["customerId"])
+    .index("by_org", ["organizationId"])
+    .index("by_customer_time", ["customerId", "createdAt"]),
+
+  portalServiceRequests: defineTable({
+    organizationId: v.id("organizations"),
+    customerId: v.id("customers"),
+    propertyId: v.optional(v.id("properties")),
+    portalUserId: v.id("portalUsers"),
+    kind: v.union(v.literal("new_service"), v.literal("reschedule"), v.literal("service_issue"), v.literal("callback"), v.literal("other")),
+    subject: v.string(),
+    detail: v.string(),
+    preferredDate: v.optional(v.number()),
+    status: v.union(v.literal("submitted"), v.literal("reviewing"), v.literal("scheduled"), v.literal("resolved"), v.literal("closed")),
+    createdAt: v.number(),
+    updatedAt: v.number(),
+  })
+    .index("by_customer", ["customerId"])
+    .index("by_org", ["organizationId"])
+    .index("by_org_status", ["organizationId", "status"]),
+
+  portalPreferences: defineTable({
+    organizationId: v.id("organizations"),
+    customerId: v.id("customers"),
+    portalUserId: v.id("portalUsers"),
+    emailNotifications: v.boolean(),
+    smsNotifications: v.boolean(),
+    serviceReminders: v.boolean(),
+    invoiceReminders: v.boolean(),
+    estimateReminders: v.boolean(),
+    marketingMessages: v.boolean(),
+    createdAt: v.number(),
+    updatedAt: v.number(),
+  })
+    .index("by_portal_user", ["portalUserId"])
+    .index("by_customer", ["customerId"]),
+
   properties: defineTable({
     organizationId: v.id("organizations"),
     customerId: v.id("customers"),

@@ -142,6 +142,10 @@ function AuthEntryPageBody({
           setError("Workspace created on a trial — Stripe checkout isn't configured yet, so billing can be finished later from this account page.");
         }
       }
+      if (selectedPlan === "free") {
+        window.location.assign(`/onboarding?organizationId=${organizationId}`);
+        return;
+      }
     } catch (caught) {
       setError(caught instanceof Error ? caught.message : "Could not create workspace.");
     } finally {
@@ -308,7 +312,7 @@ function AuthEntryPageBody({
                   </select>
                 </label>
                 {error ? <div className="rounded-md border border-rose-200 bg-rose-50 p-3 text-sm text-rose-700">{error}</div> : null}
-                {createdWorkspaceId ? <div className="rounded-md border border-emerald-200 bg-emerald-50 p-3 text-sm text-emerald-800">Workspace created. Open the app to continue onboarding.</div> : null}
+                {createdWorkspaceId ? <div className="flex flex-wrap items-center justify-between gap-3 rounded-md border border-emerald-200 bg-emerald-50 p-3 text-sm text-emerald-800"><span>Workspace created. Your guided setup is ready.</span><Link href={`/onboarding?organizationId=${createdWorkspaceId}`} className="font-bold underline">Continue setup</Link></div> : null}
                 <button type="submit" disabled={isCreating || !convexConfigured} className="inline-flex min-h-10 items-center justify-center gap-2 rounded-md bg-[#224036] px-4 text-sm font-semibold text-white disabled:cursor-not-allowed disabled:opacity-50">
                   <CreditCard size={16} />
                   {isCreating ? "Creating workspace..." : selectedPlan === "free" ? "Create free workspace" : "Create $99/mo workspace"}
@@ -323,7 +327,7 @@ function AuthEntryPageBody({
             <div className="rounded-lg border border-stone-200 bg-white p-5 shadow-sm">
               <div className="flex items-center justify-between gap-3">
                 <h2 className="text-base font-bold">Step 3: continue onboarding</h2>
-                <Link href="/app" className="text-sm font-semibold text-[#224036]">Open app</Link>
+                <Link href={createdWorkspaceId ? `/onboarding?organizationId=${createdWorkspaceId}` : "/onboarding"} className="text-sm font-semibold text-[#224036]">Open setup</Link>
               </div>
               <div className="mt-4 grid gap-2">
                 {workspaces && workspaces.length > 0 ? (

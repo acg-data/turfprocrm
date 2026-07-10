@@ -72,7 +72,6 @@ export async function requireMembership(
 }
 
 const WRITE_OK_STATUSES = new Set(["active", "trialing", "past_due", "manual"]);
-const TRIAL_GRACE_MS = 3 * 24 * 60 * 60 * 1000;
 
 async function assertSubscriptionWritable(ctx: Ctx, organizationId: Id<"organizations">) {
   const subscription = await ctx.db
@@ -89,11 +88,11 @@ async function assertSubscriptionWritable(ctx: Ctx, organizationId: Id<"organiza
   if (
     subscription.status === "trialing" &&
     subscription.trialEndsAt &&
-    Date.now() > subscription.trialEndsAt + TRIAL_GRACE_MS
+    Date.now() > subscription.trialEndsAt
   ) {
     throw new ConvexError({
       code: "TRIAL_EXPIRED",
-      message: "Your trial has ended. Open Account & billing to choose a plan and keep making changes.",
+      message: "Your trial has ended. Your workspace is in read-only grace. Choose a plan to resume changes immediately.",
     });
   }
 }

@@ -405,8 +405,8 @@ export const marketingPages: MarketingPage[] = [
       },
       {
         title: "Where we're headed",
-        body: "The operating core comes first — communications, automation, and a customer portal are next.",
-        bullets: ["Two-way email and SMS", "Automation recipes for lead follow-up", "A branded customer portal for quotes and invoices"],
+        body: "The operating core and secure customer portal are live. Deeper two-way communications and automation recipes are the next expansion layer.",
+        bullets: ["Customer estimate approval and invoice payment portal", "Service schedule, reports, documents, messages, and property preferences", "Two-way email/SMS and advanced automation continue to expand"],
       },
     ],
   },
