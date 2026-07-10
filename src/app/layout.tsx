@@ -1,6 +1,7 @@
 import type { Metadata, Viewport } from "next";
 import { Geist, Geist_Mono, Poppins } from "next/font/google";
 import { AppProviders } from "@/components/app/providers";
+import { siteUrl } from "@/lib/seo";
 import "./globals.css";
 
 const geistSans = Geist({
@@ -20,6 +21,7 @@ const poppins = Poppins({
 });
 
 export const metadata: Metadata = {
+  metadataBase: siteUrl(),
   title: "Turf Pro CRM",
   description: "Lead operations, CRM, dispatch, field work, job costing, and profit tracking for landscaping and pest control teams.",
   applicationName: "Turf Pro CRM",
@@ -32,6 +34,13 @@ export const metadata: Metadata = {
   formatDetection: {
     telephone: false,
   },
+  openGraph: {
+    type: "website",
+    siteName: "Turf Pro CRM",
+    title: "Turf Pro CRM",
+    description: "The all-in-one operating CRM for lawn care, landscaping, and pest control teams.",
+  },
+  twitter: { card: "summary_large_image" },
 };
 
 export const viewport: Viewport = {

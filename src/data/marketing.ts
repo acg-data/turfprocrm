@@ -310,10 +310,10 @@ export const marketingPages: MarketingPage[] = [
     slug: "pricing",
     navLabel: "Pricing",
     eyebrow: "Simple pricing",
-    title: "Two plans. No surprises. A 14-day trial on both.",
-    lede: "Start free with 10 contacts, then move to Starter or Pro when you're ready to run real operations. No setup fees, cancel any time from the billing portal.",
+    title: "Start free. Upgrade when the system earns its place.",
+    lede: "Use the CRM free with up to 10 contacts, then unlock the complete operating system with All-In Pro for $99 per month. No setup fees and no sales call required.",
     primaryAction: "Start free",
-    proof: ["Free: 10 contacts", "Starter: $49/mo", "Pro: $99/mo", "14-day trial", "Cancel anytime", "Self-serve portal"],
+    proof: ["Free: 10 contacts", "All-In Pro: $99/mo", "14-day paid trial", "No setup fees", "Cancel anytime", "Self-serve portal"],
     sections: [
       {
         title: "Free account",
@@ -321,14 +321,14 @@ export const marketingPages: MarketingPage[] = [
         bullets: ["10 contacts, 1 seat included", "Single sign-in account setup", "Lead, CRM, dispatch, field, costing, and profit demo access"],
       },
       {
-        title: "Starter — $49/mo",
-        body: "For a small crew that needs the full operating core without enterprise pricing.",
-        bullets: ["250 contacts, 3 seats", "Lead Ops, CRM, estimating, dispatch, and field PWA", "Job costing and cost intelligence"],
+        title: "All-In Pro — $99/mo",
+        body: "One plan for teams ready to run real operations without feature gates or per-module pricing.",
+        bullets: ["Unlimited contacts and seats", "CRM, estimating, dispatch, field PWA, invoicing, and reporting", "Job costing, permissions, audit history, and priority support"],
       },
       {
-        title: "Pro — $99/mo",
-        body: "Unlimited scale plus the admin and team controls that come with running a real company.",
-        bullets: ["Unlimited contacts and seats", "Admin roles, permissions, and audit history", "Team invites, org switching, and priority support"],
+        title: "A clean commercial path",
+        body: "Start the 14-day All-In Pro trial from signup, complete Stripe-hosted checkout, and manage the subscription without waiting on sales.",
+        bullets: ["Secure Stripe checkout", "Self-serve billing portal", "Signed webhooks keep workspace access in sync"],
       },
     ],
   },
@@ -336,15 +336,15 @@ export const marketingPages: MarketingPage[] = [
     slug: "integrations",
     navLabel: "Integrations",
     eyebrow: "Interfaces",
-    title: "Keep integrations narrow until the operating core is trustworthy.",
-    lede: "Google Maps links are live in v1. QuickBooks, Stripe payments, SMS/email, supplier APIs, and HubSpot sync are intentionally deferred.",
+    title: "Connect the essentials without creating integration sprawl.",
+    lede: "Google Maps links, Stripe subscription billing, and the Convex operating core are live. Accounting, communications, and supplier sync are staged behind stable data contracts.",
     primaryAction: "See integration plan",
-    proof: ["Google Maps live", "Convex source of truth", "Audit export", "Postgres mirror later"],
+    proof: ["Google Maps live", "Stripe billing live", "Convex source of truth", "Signed webhooks", "Audit export"],
     sections: [
       {
         title: "Live now",
-        body: "V1 uses Google Maps links generated from property addresses and Convex as the operational source of truth.",
-        bullets: ["Google Maps deep links", "Convex realtime data", "Audit events"],
+        body: "V1 uses Google Maps links generated from property addresses, Stripe-hosted subscription billing, and Convex as the operational source of truth.",
+        bullets: ["Google Maps deep links", "Stripe Checkout and customer portal", "Convex realtime data and audit events"],
       },
       {
         title: "Next adapters",
@@ -353,8 +353,8 @@ export const marketingPages: MarketingPage[] = [
       },
       {
         title: "Deferred sync",
-        body: "QuickBooks, Stripe live payments, SMS/email, HubSpot, and supplier APIs should wait until the operating workflow is reliable.",
-        bullets: ["QuickBooks accounting", "Stripe payments", "SMS and email automation"],
+        body: "QuickBooks, customer invoice card payments, SMS/email, HubSpot, and supplier APIs follow after their operating workflows are stable.",
+        bullets: ["QuickBooks accounting", "Customer invoice payment collection", "SMS and email automation"],
       },
     ],
   },
@@ -365,7 +365,7 @@ export const marketingPages: MarketingPage[] = [
     title: "Multi-tenant isolation, role-based access, and an audit trail on every change.",
     lede: "Every read and write is checked against organization membership and role before it touches tenant data. Nothing is shared across workspaces.",
     primaryAction: "Talk to us",
-    proof: ["Tenant isolation", "7 roles", "Audit log", "Encrypted at rest", "Daily backups", "Stripe-hosted billing"],
+    proof: ["Tenant isolation", "7 roles", "Audit history", "Encrypted at rest", "Documented restore plan", "Stripe-hosted billing"],
     sections: [
       {
         title: "Access control",
@@ -374,8 +374,8 @@ export const marketingPages: MarketingPage[] = [
       },
       {
         title: "Data protection",
-        body: "Your data lives in Convex with automatic daily backups and an exportable audit trail.",
-        bullets: ["Encrypted in transit and at rest", "Daily automatic backups with tested restore", "Every mutation writes an audit event with before/after state"],
+        body: "Your data lives in Convex with encryption, an exportable audit trail, and a documented backup and restore runbook for production operations.",
+        bullets: ["Encrypted in transit and at rest", "Production backup and restore runbook", "Audited operating and administrative changes"],
       },
       {
         title: "Payments",
@@ -445,7 +445,17 @@ export type MarketingNavItem = {
 };
 
 export const marketingNav: MarketingNavItem[] = [
-  { label: "Features", href: "/features" },
+  {
+    label: "Features",
+    children: [
+      { label: "Features overview", href: "/features" },
+      { label: "Lead Ops", href: "/lead-ops" },
+      { label: "CRM", href: "/crm" },
+      { label: "Dispatch & Routing", href: "/dispatch" },
+      { label: "Field App", href: "/field" },
+      { label: "Job Costing", href: "/job-costing" },
+    ],
+  },
   {
     label: "Solutions",
     children: [

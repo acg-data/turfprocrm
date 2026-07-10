@@ -83,7 +83,7 @@ async function assertSubscriptionWritable(ctx: Ctx, organizationId: Id<"organiza
   if (!WRITE_OK_STATUSES.has(subscription.status)) {
     throw new ConvexError({
       code: "SUBSCRIPTION_INACTIVE",
-      message: "Your subscription is inactive. Update billing in Admin → Billing to make changes.",
+      message: "Your subscription is inactive. Open Account & billing to make changes.",
     });
   }
   if (
@@ -93,7 +93,7 @@ async function assertSubscriptionWritable(ctx: Ctx, organizationId: Id<"organiza
   ) {
     throw new ConvexError({
       code: "TRIAL_EXPIRED",
-      message: "Your trial has ended. Choose a plan in Admin → Billing to keep making changes.",
+      message: "Your trial has ended. Open Account & billing to choose a plan and keep making changes.",
     });
   }
 }

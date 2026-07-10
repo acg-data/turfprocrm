@@ -101,6 +101,10 @@ export function Footer({ year }: { year: number }) {
         <div className={styles.footerBottom}>
           <span className={styles.copyright}>© {year} Turf Pro CRM. All rights reserved.</span>
           <span className={styles.footerMark}>
+            <Link href={route("/privacy")} className={styles.footLink}>Privacy Policy</Link>
+            <span aria-hidden="true">·</span>
+            <Link href={route("/terms")} className={styles.footLink}>Terms of Service</Link>
+            <span aria-hidden="true">·</span>
             <Leaf size={13} /> Built for the green industry
           </span>
         </div>

@@ -1,7 +1,7 @@
 "use client";
 
 import { motion, useReducedMotion, type Variants } from "motion/react";
-import type { ReactNode } from "react";
+import type { CSSProperties, ReactNode } from "react";
 
 const EASE_OUT = [0.16, 1, 0.3, 1] as const;
 
@@ -67,20 +67,29 @@ export function Stagger({
   children,
   className,
   gap = 0.06,
+  step = 0,
+  style,
 }: {
   children: ReactNode;
   className?: string;
   gap?: number;
+  step?: number;
+  style?: CSSProperties;
 }) {
   const reduceMotion = useReducedMotion();
 
   const variants: Variants = {
     hidden: {},
-    show: { transition: { staggerChildren: reduceMotion ? 0 : gap } },
+    show: {
+      transition: {
+        delayChildren: reduceMotion ? 0 : step * 0.06,
+        staggerChildren: reduceMotion ? 0 : gap,
+      },
+    },
   };
 
   return (
-    <motion.div className={className} initial="hidden" whileInView="show" viewport={{ once: true, margin: "-80px" }} variants={variants}>
+    <motion.div className={className} style={style} initial="hidden" whileInView="show" viewport={{ once: true, margin: "-80px" }} variants={variants}>
       {children}
     </motion.div>
   );

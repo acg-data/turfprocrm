@@ -1,364 +1,148 @@
 import Link from "next/link";
 import type { Route } from "next";
-import type { ReactNode } from "react";
 import {
   ArrowRight,
   BarChart3,
+  Bell,
+  Bug,
   CalendarDays,
-  CloudSun,
-  Database,
-  DollarSign,
+  Check,
+  CheckCircle2,
+  CircleDollarSign,
+  ClipboardCheck,
+  CloudUpload,
   Filter,
-  MapPin,
-  Route as RouteIcon,
+  Headset,
+  Leaf,
+  Mountain,
+  Navigation,
+  Plug,
   ShieldCheck,
+  Smartphone,
+  Sprout,
+  ThumbsUp,
+  TreePine,
   UsersRound,
+  Workflow,
 } from "lucide-react";
-import { type MarketingPage, productModules } from "@/data/marketing";
+import type { MarketingPage } from "@/data/marketing";
 import { MarketingNav } from "./chrome";
 import { Footer } from "./footer";
 import { Reveal, Stagger, StaggerItem } from "./reveal";
+import { DashboardMock, PhoneMock } from "./device-mocks";
+import { FloatingChips, IconColumns, SectionHead, StatBand as SharedStatBand } from "./kit";
 import styles from "./turf-pro-marketing.module.css";
+import hm from "./home.module.css";
+import fx from "./features.module.css";
 
 const route = (href: string) => href as Route;
 
-function ProductWorkbench() {
+/* ---------- Shared CTA band (used on home + template pages) ---------- */
+
+export function CtaBand({
+  title,
+  accent,
+  body,
+}: {
+  title: string;
+  accent: string;
+  body: string;
+}) {
   return (
-    <figure className={styles.workbench} aria-label="Turf Pro CRM operating workbench preview">
-      <div className={styles.boardTop}>
-        <div>
-          <div className={styles.boardTitle}>Greenline operating board</div>
-          <div className={styles.boardMeta}>
-            <span className={styles.liveDot} aria-hidden="true" />
-            Live workspace
+    <div className={styles.wrap}>
+      <Reveal>
+        <div className={fx.ctaBand}>
+          <span className={fx.ctaIcon}>
+            <ShieldCheck size={26} />
+          </span>
+          <div>
+            <h2>
+              {title} <em>{accent}</em>
+            </h2>
+            <p>{body}</p>
+          </div>
+          <div className={fx.ctaActions}>
+            <Link href={route("/signin?plan=pro")} className={styles.button}>
+              Start Free Trial
+            </Link>
+            <Link href={route("/demo")} className={styles.buttonSoft}>
+              Book a Demo
+            </Link>
           </div>
         </div>
-        <span className={styles.pill}>Source of truth</span>
-      </div>
-      <div className={styles.boardGrid}>
-        <div className={styles.surface}>
-          <div className={styles.metricRow}>
-            <div className={styles.metric}>
-              <div className={styles.metricLabel}>Pipeline</div>
-              <div className={styles.metricValue}>$16k</div>
-            </div>
-            <div className={styles.metric}>
-              <div className={styles.metricLabel}>Visits</div>
-              <div className={styles.metricValue}>2</div>
-            </div>
-            <div className={styles.metric}>
-              <div className={styles.metricLabel}>AR</div>
-              <div className={styles.metricValue}>$6.5k</div>
-            </div>
-            <div className={styles.metric}>
-              <div className={styles.metricLabel}>Margin</div>
-              <div className={styles.metricValue}>86%</div>
-            </div>
-          </div>
-          <div className={styles.lane} style={{ marginTop: "var(--space-md)" }}>
-            {[
-              ["Lead Ops", "Megan Walsh", "Mosquito and tick package"],
-              ["Dispatch", "Brookside HOA", "Six-step season"],
-              ["Costing", "Northgate Park", "Weekly maintenance"],
-            ].map(([stage, account, title]) => (
-              <div key={stage} className={styles.ticket}>
-                <div className={styles.laneHeader}>
-                  <span>{stage}</span>
-                  <span>ready</span>
-                </div>
-                <strong>{account}</strong>
-                <small>{title}</small>
-              </div>
-            ))}
-          </div>
-        </div>
-        <div className={styles.surfaceDark}>
-          <div className={styles.laneHeader} style={{ color: "inherit" }}>
-            <span>Today route</span>
-            <MapPin size={16} />
-          </div>
-          <div className={styles.routeRows} style={{ marginTop: "var(--space-md)" }}>
-            {[
-              ["1", "Brookside common areas", "8:30 AM"],
-              ["2", "Northgate Building 4", "11:00 AM"],
-              ["3", "Megan Walsh estimate", "2:45 PM"],
-            ].map(([index, label, time]) => (
-              <div key={index} className={styles.routeRow}>
-                <span className={styles.routeNumber}>{index}</span>
-                <span>{label}</span>
-                <span className={styles.routeTime}>{time}</span>
-              </div>
-            ))}
-          </div>
-          <div className={styles.pillRow} style={{ marginTop: "var(--space-lg)" }}>
-            <span className={styles.pill}>Checklist</span>
-            <span className={styles.pill}>Weather</span>
-            <span className={styles.pill}>Materials</span>
-          </div>
-        </div>
-      </div>
-    </figure>
+      </Reveal>
+    </div>
   );
 }
+
+/* ---------- Hero ---------- */
 
 function HomeHero() {
   return (
-    <section className={styles.hero}>
-      <div className={`${styles.wrap} ${styles.heroGrid}`}>
-        <Reveal immediate className={styles.heroCopy}>
-          <p className={styles.eyebrow}>Landscape / Pest SaaS</p>
-          <h1 className={styles.title}>
-            The outdoor CRM <span>that follows the work.</span>
+    <section className={hm.hero}>
+      <div className={`${styles.wrap} ${hm.heroGrid}`}>
+        <Reveal immediate className={hm.heroCopy}>
+          <h1 className={hm.heroTitle}>
+            The All-in-One CRM Built for <em>Outdoor Professionals</em>
           </h1>
-          <p className={styles.lede}>
-            Turf Pro CRM connects lead operations, customer records, estimates, dispatch, field completion, admin controls, and job costing for landscaping and pest-control operators.
+          <p className={hm.heroLede}>
+            Turf Pro CRM helps lawn care, landscaping, and pest control businesses streamline operations, impress customers, and grow with confidence.
           </p>
-          <div className={styles.heroActions}>
-            <Link href={route("/signin")} className={styles.button}>
-              Start free <ArrowRight size={16} />
+          <div className={hm.heroActions}>
+            <Link href={route("/signin?plan=pro")} className={styles.button}>
+              Start Free Trial
             </Link>
-            <Link href={route("/features")} className={styles.buttonSoft}>
-              See the product
+            <Link href={route("/demo")} className={styles.buttonSoft}>
+              Book a Demo
             </Link>
           </div>
-          <div className={styles.proofRail} aria-label="Product proof points">
-            {["Multi-tenant Convex backend", "Lead Ops command table", "Mobile field PWA", "Job-costing and profit dashboard"].map((item) => (
-              <span key={item} className={styles.proofItem}>
-                {item}
-              </span>
-            ))}
+          <div className={hm.microProof}>
+            <span className={hm.microProofItem}>
+              <Check size={15} strokeWidth={3} /> 14-day All-In Pro trial
+            </span>
+            <span className={hm.microProofItem}>
+              <Check size={15} strokeWidth={3} /> Cancel anytime
+            </span>
           </div>
         </Reveal>
         <Reveal immediate step={1}>
-          <ProductWorkbench />
-        </Reveal>
-      </div>
-    </section>
-  );
-}
-
-function OperatingBand() {
-  return (
-    <section className={styles.band}>
-      <div className={`${styles.wrap} ${styles.bandGrid}`}>
-        <Reveal>
-          <div className={styles.bandText}>One operating record from first lead to collected revenue.</div>
-        </Reveal>
-        <Stagger className={styles.bandItems}>
-          {["Lead", "Estimate", "Visit", "Profit"].map((item) => (
-            <StaggerItem key={item} className={styles.bandItem}>
-              {item}
-            </StaggerItem>
-          ))}
-        </Stagger>
-      </div>
-    </section>
-  );
-}
-
-function ModuleIcon({ label }: { label: string }) {
-  const icons: Record<string, ReactNode> = {
-    "Lead Ops": <Filter size={18} />,
-    CRM: <UsersRound size={18} />,
-    Estimating: <DollarSign size={18} />,
-    Dispatch: <CalendarDays size={18} />,
-    "Field PWA": <RouteIcon size={18} />,
-    "Job Costing": <BarChart3 size={18} />,
-    "Cost Intel": <CloudSun size={18} />,
-    Admin: <ShieldCheck size={18} />,
-  };
-  return <span className={styles.moduleIcon}>{icons[label] ?? <Database size={18} />}</span>;
-}
-
-function ProductModules() {
-  return (
-    <section className={styles.section}>
-      <div className={styles.wrap}>
-        <Reveal>
-          <div className={styles.sectionHeader}>
-            <p className={styles.eyebrow}>Product areas</p>
-            <h2 className={styles.sectionTitle}>Built as modules, not loose tabs.</h2>
-            <p className={styles.sectionLede}>
-              Each page below mirrors a real area already represented in the app and backend, so the marketing surface sells the product you are actually running.
-            </p>
-          </div>
-        </Reveal>
-        <Stagger className={styles.moduleGrid}>
-          {productModules.map((feature) => (
-            <StaggerItem key={feature.label}>
-              <Link href={route(feature.href)} className={styles.moduleCard}>
-                <div className={styles.moduleTop}>
-                  <ModuleIcon label={feature.label} />
-                  <span className={styles.moduleLabel}>{feature.label}</span>
-                </div>
-                <h3>{feature.title}</h3>
-                <p>{feature.body}</p>
-                <span className={styles.moduleLink}>
-                  View page <ArrowRight size={16} />
-                </span>
-              </Link>
-            </StaggerItem>
-          ))}
-        </Stagger>
-      </div>
-    </section>
-  );
-}
-
-function WorkflowSection() {
-  return (
-    <section className={styles.section}>
-      <div className={`${styles.wrap} ${styles.split}`}>
-        <Reveal>
-          <div>
-            <p className={styles.eyebrow}>Workflow</p>
-            <h2 className={styles.sectionTitle}>The same job, seen by sales, dispatch, field, and owner.</h2>
-            <p className={styles.sectionLede}>
-              One operating record follows the work from first contact to collected revenue: tenant records, workflow states, cost snapshots, audit events, and profit summaries all stay connected.
-            </p>
-            <div className={styles.heroActions} style={{ marginTop: "var(--space-lg)" }}>
-              <Link href={route("/job-costing")} className={styles.button}>
-                Follow the money
-              </Link>
-              <Link href={route("/dispatch")} className={styles.buttonSoft}>
-                Follow the route
-              </Link>
+          <div className={hm.deviceStack}>
+            <div className={hm.tabletFrame}>
+              <DashboardMock />
+            </div>
+            <div className={hm.phoneFloat}>
+              <PhoneMock />
             </div>
           </div>
         </Reveal>
-        <Reveal step={1}>
-          <div className={styles.splitVisual}>
-            <Stagger className={styles.timeline} gap={0.08}>
-              {[
-                ["Lead arrives", "Owner, source, status, grade, program, spam and quality score"],
-                ["Estimate accepted", "Service catalog, line items, property area, price book context"],
-                ["Visit scheduled", "Crew assignment, route order, maps link, weather snapshot"],
-                ["Work submitted", "Checklist, materials, issue flags, timesheet, audit events"],
-                ["Profit reviewed", "Revenue, AR, labor, material, equipment, overhead, margin"],
-              ].map(([title, body]) => (
-                <StaggerItem key={title} className={styles.timelineItem}>
-                  <span className={styles.timelineDot} />
-                  <div>
-                    <strong>{title}</strong>
-                    <p>{body}</p>
-                  </div>
-                </StaggerItem>
-              ))}
-            </Stagger>
-          </div>
-        </Reveal>
       </div>
     </section>
   );
 }
 
-function TestimonialSection() {
-  const quotes = [
-    {
-      quote: "We stopped losing leads in a spreadsheet the first week. Lead Ops alone paid for the plan.",
-      name: "Dana R.",
-      role: "Owner, 3-crew lawn care company",
-    },
-    {
-      quote: "Job costing next to dispatch means I know a route is unprofitable before the season ends, not after.",
-      name: "Marcus T.",
-      role: "Operations manager, pest control",
-    },
-    {
-      quote: "Our techs actually use the field app. Checklist plus photos plus notes, done in the yard.",
-      name: "Priya S.",
-      role: "Owner-operator, landscaping",
-    },
-  ];
-  return (
-    <section className={`${styles.section} ${styles.testimonials}`}>
-      <div className={styles.wrap}>
-        <Reveal>
-          <div className={styles.sectionHeader}>
-            <p className={styles.eyebrow}>Operators say</p>
-            <h2 className={styles.sectionTitle}>Built with the people who run the trucks.</h2>
-          </div>
-        </Reveal>
-        <Stagger className={styles.testimonialGrid}>
-          {quotes.map((item) => (
-            <StaggerItem key={item.name} as="article" className={styles.testimonialCard}>
-              <p className={styles.testimonialQuote}>&ldquo;{item.quote}&rdquo;</p>
-              <div className={styles.testimonialAuthor}>
-                <span className={styles.testimonialAvatar} aria-hidden="true">
-                  {item.name[0]}
-                </span>
-                <div>
-                  <div className={styles.testimonialName}>{item.name}</div>
-                  <div className={styles.testimonialRole}>{item.role}</div>
-                </div>
-              </div>
-            </StaggerItem>
-          ))}
-        </Stagger>
-      </div>
-    </section>
-  );
-}
+/* ---------- Trust logo bar ---------- */
 
-const pricingCards: Array<{ name: string; body: string; price: string; trial?: string; featured?: boolean; badge?: string; bullets: string[] }> = [
-  {
-    name: "Free",
-    body: "Test the CRM before moving real operations in.",
-    price: "$0",
-    bullets: ["10 contacts included", "Lead, CRM, dispatch, field, and costing demo access", "Single sign-in onboarding"],
-  },
-  {
-    name: "Starter",
-    body: "For a growing crew that needs the operating core.",
-    price: "$49",
-    trial: "14-day free trial",
-    bullets: ["250 contacts, 3 seats", "Lead Ops, CRM, dispatch, field PWA", "Job costing and cost intelligence"],
-  },
-  {
-    name: "Pro",
-    body: "For operators who want the full Arborgold-style depth.",
-    price: "$99",
-    trial: "14-day free trial",
-    featured: true,
-    badge: "Most popular",
-    bullets: [
-      "Unlimited contacts and seats",
-      "Everything in Starter, plus admin roles, permissions, and audit history",
-      "Team invites, org switching, and priority support",
-    ],
-  },
+const trustLogos = [
+  { name: "Lawn Care", sub: "Operators", icon: Leaf },
+  { name: "Landscape", sub: "Companies", icon: Sprout },
+  { name: "Tree & Shrub", sub: "Specialists", icon: Mountain },
+  { name: "Pest Control", sub: "Teams", icon: Bug },
+  { name: "Snow & Seasonal", sub: "Crews", icon: TreePine },
 ];
 
-function PricingSection() {
+function TrustBar() {
   return (
-    <section className={`${styles.section} ${styles.pricing}`}>
+    <section className={hm.logoBar}>
       <div className={styles.wrap}>
-        <Reveal>
-          <div className={styles.sectionHeader}>
-            <p className={styles.eyebrow}>Commercial path</p>
-            <h2 className={styles.sectionTitle}>Simple, honest pricing.</h2>
-            <p className={styles.sectionLede}>Start free with 10 contacts, then upgrade to Starter or Pro — both come with a 14-day trial, no card required to begin.</p>
-          </div>
-        </Reveal>
-        <Stagger className={styles.priceGrid}>
-          {pricingCards.map(({ name, body, price, trial, featured, badge, bullets }) => (
-            <StaggerItem key={name} as="article" className={`${styles.priceCard} ${featured ? styles.priceCardFeatured : ""}`}>
-              {badge ? <span className={styles.priceBadge}>{badge}</span> : null}
-              <h3>{name}</h3>
-              <p>{body}</p>
-              <div className={styles.price}>
-                {price}
-                {price !== "$0" ? <small>/mo</small> : null}
-              </div>
-              {trial ? <div className={styles.priceTrial}>{trial}</div> : null}
-              <ul className={styles.list}>
-                {bullets.map((item) => (
-                  <li key={item}>{item}</li>
-                ))}
-              </ul>
-              <Link href={route("/signin")} className={featured ? styles.button : styles.buttonSoft}>
-                {price === "$0" ? "Start free" : `Start ${name}`}
-              </Link>
+        <div className={hm.logoBarLabel}>Purpose-built for the outdoor service businesses that keep properties thriving</div>
+        <Stagger className={hm.logoRow} gap={0.05}>
+          {trustLogos.map(({ name, sub, icon: Icon }) => (
+            <StaggerItem key={name} className={hm.brandLogo}>
+              <Icon size={22} />
+              <span className={hm.brandLogoText}>
+                <strong>{name}</strong>
+                <small>{sub}</small>
+              </span>
             </StaggerItem>
           ))}
         </Stagger>
@@ -367,55 +151,331 @@ function PricingSection() {
   );
 }
 
-function ResourceSection() {
+/* ---------- Powerful tools row ---------- */
+
+const tools = [
+  { icon: CalendarDays, title: "Scheduling & Routing", body: "Optimize routes, manage appointments, and keep your team on track." },
+  { icon: UsersRound, title: "Customer Management", body: "Store every detail, track history, and build stronger customer relationships." },
+  { icon: ClipboardCheck, title: "Work Management", body: "Create work orders, assign techs, and ensure nothing falls through the cracks." },
+  { icon: BarChart3, title: "Reports & Analytics", body: "Real-time insights to monitor performance and make smarter decisions." },
+  { icon: CircleDollarSign, title: "Invoicing & AR", body: "Track invoices, record payments, and keep receivables tied to the work." },
+];
+
+function ToolsRow() {
   return (
-    <section className={styles.section}>
+    <section className={hm.section}>
       <div className={styles.wrap}>
-        <Reveal>
-          <div className={styles.sectionHeader}>
-            <p className={styles.eyebrow}>Sales enablement</p>
-            <h2 className={styles.sectionTitle}>Pages that explain why this is not generic CRM.</h2>
-          </div>
-        </Reveal>
-        <Stagger className={styles.resourceGrid}>
-          {[
-            ["Arborgold and Aspire gap", "Position the product as operational depth with Jobber-level usability."],
-            ["Lead import checklist", "Show operators how to clean source, status, owner, program, and quality fields."],
-            ["Job-costing demo script", "Walk from estimate to visit completion to profit dashboard."],
-          ].map(([title, body]) => (
-            <StaggerItem key={title} as="article" className={styles.resourceCard}>
-              <h3>{title}</h3>
-              <p>{body}</p>
-              <Link href={route("/resources")} className={styles.miniLink}>
-                Read more <ArrowRight size={16} />
-              </Link>
-            </StaggerItem>
-          ))}
-        </Stagger>
+        <SectionHead kicker="Everything You Need. All in One Place." title="Powerful Tools to" accent="Run Your Business" />
+        <IconColumns cols={5} items={tools} />
       </div>
     </section>
   );
 }
+
+/* ---------- Industry solutions ---------- */
+
+function IndustrySection() {
+  const chips = [
+    { icon: CalendarDays, title: "New Job Scheduled", sub: "123 Greenway Dr. · Lawn Care Service", style: { top: "8%", left: "6%" } },
+    { icon: CircleDollarSign, title: "Invoice Paid", sub: "$245.00 · View Receipt", style: { top: "10%", right: "5%" } },
+    { icon: Navigation, title: "Technician En Route", sub: "Mike S. · 10 mins away", style: { bottom: "12%", left: "8%" } },
+    { icon: CheckCircle2, title: "Service Completed", sub: "Fertilization Treatment", style: { bottom: "10%", right: "6%" } },
+  ];
+  return (
+    <section className={hm.section}>
+      <div className={styles.wrap}>
+        <Reveal>
+          <div className={hm.industryCard}>
+            <div>
+              <p className={hm.kicker}>Built for Your Industry</p>
+              <h2 className={hm.sectionTitle} style={{ maxWidth: "14ch" }}>
+                Solutions that grow with your business.
+              </h2>
+              <p className={hm.sectionLede}>
+                Whether you&apos;re a solo operator or managing multiple crews, Turf Pro CRM adapts to the way you work.
+              </p>
+              <div className={hm.checkList}>
+                {["Lawn Care", "Landscaping", "Pest Control", "Snow & Seasonal Services"].map((item) => (
+                  <div key={item} className={hm.checkItem}>
+                    <span className={hm.checkIcon}>
+                      <Check size={12} strokeWidth={3} />
+                    </span>
+                    {item}
+                  </div>
+                ))}
+              </div>
+              <div className={hm.heroActions}>
+                <Link href={route("/solutions")} className={styles.button}>
+                  Explore Solutions
+                </Link>
+              </div>
+            </div>
+            <div className={hm.industryVisual} role="img" aria-label="Live job activity notifications over a serviced property">
+              <svg className={hm.industryScene} viewBox="0 0 400 300" preserveAspectRatio="xMidYMax slice" xmlns="http://www.w3.org/2000/svg" aria-hidden="true">
+                <path d="M0 220 Q90 190 200 214 T400 208 L400 300 L0 300 Z" fill="oklch(45% 0.11 148)" />
+                <path d="M0 250 Q120 226 240 248 T400 244 L400 300 L0 300 Z" fill="oklch(38% 0.09 152)" />
+                <path d="M150 150 L200 110 L250 150 Z" fill="oklch(96% 0.01 95)" />
+                <rect x="158" y="150" width="84" height="58" fill="oklch(92% 0.015 95)" />
+                <rect x="188" y="172" width="22" height="36" fill="oklch(35% 0.07 152)" />
+                <circle cx="96" cy="180" r="26" fill="oklch(52% 0.13 146)" />
+                <rect x="92" y="196" width="8" height="20" fill="oklch(35% 0.08 60)" />
+                <circle cx="316" cy="172" r="32" fill="oklch(48% 0.12 148)" />
+                <rect x="312" y="192" width="8" height="24" fill="oklch(35% 0.08 60)" />
+                <path d="M180 300 Q200 250 220 300 Z" fill="oklch(80% 0.03 95)" />
+              </svg>
+              <FloatingChips items={chips} />
+            </div>
+          </div>
+        </Reveal>
+      </div>
+    </section>
+  );
+}
+
+/* ---------- Advantage strip ---------- */
+
+function AdvantageStrip() {
+  return (
+    <div className={styles.wrap}>
+      <Reveal>
+        <div className={hm.advantage}>
+          <h2>
+            More Time. Happier Customers. Bigger Profits.
+            <br />
+            That&apos;s the <em>Turf Pro CRM Advantage</em>.
+          </h2>
+          <div className={hm.advantageActions}>
+            <Link href={route("/signin?plan=pro")} className={styles.button}>
+              Start Free Trial
+            </Link>
+            <Link href={route("/demo")} className={styles.buttonSoft}>
+              Book a Demo
+            </Link>
+          </div>
+          <div className={hm.advantageProof}>
+            {[
+              { icon: ThumbsUp, label: "Easy to use" },
+              { icon: Headset, label: "Human-centered support" },
+              { icon: ShieldCheck, label: "Secure & reliable" },
+            ].map(({ icon: Icon, label }) => (
+              <span key={label} className={hm.advantageProofItem}>
+                <Icon size={22} />
+                {label}
+              </span>
+            ))}
+          </div>
+        </div>
+      </Reveal>
+    </div>
+  );
+}
+
+/* ---------- Capabilities row + integrations ---------- */
+
+const capabilities = [
+  { icon: Smartphone, title: "Mobile Access", body: "Manage your business from anywhere with our powerful mobile app." },
+  { icon: Bell, title: "Actionable Reminders", body: "Keep tasks, trial reminders, and payment issues visible before they become problems." },
+  { icon: Workflow, title: "Custom Workflows", body: "Build processes that match the way your business runs." },
+  { icon: UsersRound, title: "Team Collaboration", body: "Keep your team connected and every job on the same page." },
+  { icon: CloudUpload, title: "Cloud-Based & Secure", body: "Your data is safe, backed up, and accessible 24/7." },
+  { icon: Plug, title: "Secure Connections", body: "Run identity, billing, and app data through focused, auditable integrations." },
+];
+
+function CapabilitiesSection() {
+  return (
+    <section className={hm.section}>
+      <div className={styles.wrap}>
+        <SectionHead
+          kicker="Built to Save Time & Drive Results"
+          title="Everything You Need."
+          accent="All in One Place."
+          lede="Turf Pro CRM brings your entire business together — so you can focus on what you do best."
+        />
+        <IconColumns cols={6} items={capabilities} />
+        <Reveal step={1}>
+          <div className={hm.integrations} style={{ marginTop: "var(--space-xl)" }}>
+            <h2>Production-Ready Foundations</h2>
+            <div className={hm.integrationRow}>
+              <span className={hm.integrationMark} style={{ fontFamily: "var(--font-display)" }}>
+                Convex realtime data
+              </span>
+              <span className={hm.integrationMark} style={{ fontStyle: "italic", letterSpacing: "-0.02em" }}>
+                Stripe billing
+              </span>
+              <span className={hm.integrationMark}>
+                <Navigation size={18} /> Google Maps links
+              </span>
+              <span className={hm.integrationMark}>
+                <ShieldCheck size={16} /> Clerk identity
+              </span>
+              <span className={hm.integrationMark} style={{ color: "oklch(58% 0.18 40 / 0.75)" }}>
+                Cloudflare ready
+              </span>
+              <span className={hm.integrationMark}>
+                <small>More adapters on the roadmap</small>
+              </span>
+            </div>
+          </div>
+        </Reveal>
+      </div>
+    </section>
+  );
+}
+
+/* ---------- Testimonial ---------- */
+
+function TestimonialSection() {
+  return (
+    <section className={hm.section}>
+      <div className={styles.wrap}>
+        <Reveal>
+          <div className={hm.testimonial}>
+            <div>
+              <h2 className={hm.sectionTitle}>
+                Designed Around the Work. <em>Down to Every Detail.</em>
+              </h2>
+              <div className={hm.quoteMark} aria-hidden="true">
+                &ldquo;
+              </div>
+              <p className={hm.quoteText}>
+                From the first lead to the final payment, every screen is designed around the real decisions outdoor service teams make each day.
+              </p>
+              <div className={hm.quoteAuthor}>The Turf Pro standard</div>
+              <div className={hm.quoteRole}>Clear workflows. Reliable numbers. A faster day.</div>
+            </div>
+            <div className={hm.portraitWrap}>
+              <div className={hm.portrait} role="img" aria-label="Turf Pro CRM product promise">
+                <span className={hm.portraitInitials}>TP</span>
+              </div>
+              <div className={hm.statCard}>
+                <div className={hm.statCardLabel}>One Connected Operating System</div>
+                <div className={hm.statCardRow}>
+                  <span className={hm.statCell}>
+                    <strong>Lead</strong>
+                    <small>Capture &amp; qualify</small>
+                  </span>
+                  <span className={hm.statCell}>
+                    <strong>Field</strong>
+                    <small>Schedule &amp; deliver</small>
+                  </span>
+                  <span className={hm.statCell}>
+                    <strong>Profit</strong>
+                    <small>Invoice &amp; improve</small>
+                  </span>
+                </div>
+              </div>
+            </div>
+          </div>
+        </Reveal>
+      </div>
+    </section>
+  );
+}
+
+/* ---------- Stats band ---------- */
+
+const stats = [
+  { icon: UsersRound, value: "7", label: "Role-Based Access Levels" },
+  { icon: ClipboardCheck, value: "10", label: "Contacts Included Free" },
+  { icon: BarChart3, value: "14 Days", label: "All-In Pro Trial" },
+  { icon: CircleDollarSign, value: "$99", label: "One All-In Monthly Plan" },
+];
+
+function StatsBand() {
+  return <SharedStatBand title="Built for Serious Work." accent="Priced for Growing Teams." stats={stats} />;
+}
+
+/* ---------- Resources ---------- */
+
+const resourceCards = [
+  { kicker: "Guide", title: "The Ultimate Guide to Scaling Your Landscaping Business", action: "Read More", icon: Sprout },
+  { kicker: "Webinar", title: "How to Maximize Profits with Smarter Scheduling & Routing", action: "Watch Now", icon: CalendarDays },
+  { kicker: "Article", title: "5 Ways Pest Control Pros Can Improve Customer Retention", action: "Read More", icon: Bug },
+];
+
+function ResourcesSection() {
+  return (
+    <section className={hm.section}>
+      <div className={styles.wrap}>
+        <div className={hm.resourcesGrid}>
+          <Reveal>
+            <p className={hm.kickerCaps}>Learn. Grow. Succeed.</p>
+            <h2 className={hm.sectionTitle}>
+              Resources to Help You <em>Grow Your Business</em>
+            </h2>
+            <p className={hm.sectionLede}>
+              Explore our library of guides, webinars, and articles designed to help outdoor professionals work smarter and grow faster.
+            </p>
+            <div className={hm.heroActions}>
+              <Link href={route("/resources")} className={styles.button}>
+                Visit Resource Center
+              </Link>
+            </div>
+          </Reveal>
+          <Stagger className={hm.resourceCards} step={1}>
+            {resourceCards.map(({ kicker, title, action, icon: Icon }) => (
+              <StaggerItem key={title}>
+                <Link href={route("/resources")} className={hm.resourceCard}>
+                  <span className={hm.resourceThumb}>
+                    <Icon size={34} strokeWidth={1.5} />
+                  </span>
+                  <span className={hm.resourceBody}>
+                    <span className={hm.resourceKicker}>{kicker}</span>
+                    <h3>{title}</h3>
+                    <span className={hm.resourceLink}>
+                      {action} <ArrowRight size={14} />
+                    </span>
+                  </span>
+                </Link>
+              </StaggerItem>
+            ))}
+          </Stagger>
+        </div>
+      </div>
+    </section>
+  );
+}
+
+/* ---------- Landing page ---------- */
 
 export function TurfProLandingPage() {
   return (
     <main className={styles.site}>
       <MarketingNav />
       <HomeHero />
-      <OperatingBand />
-      <ProductModules />
-      <WorkflowSection />
+      <TrustBar />
+      <ToolsRow />
+      <IndustrySection />
+      <AdvantageStrip />
+      <CapabilitiesSection />
       <TestimonialSection />
-      <PricingSection />
-      <ResourceSection />
+      <StatsBand />
+      <ResourcesSection />
+      <section style={{ paddingBottom: "var(--space-2xl)" }}>
+        <CtaBand
+          title="Ready to Take Your Business to the"
+          accent="Next Level?"
+          body="Bring leads, crews, jobs, payments, and profit into one calm, connected workspace."
+        />
+      </section>
       <Footer year={new Date().getFullYear()} />
     </main>
   );
 }
 
+/* ---------- Template page (all /[slug] marketing pages) ---------- */
+
 const sectionIcons = [Filter, UsersRound, BarChart3];
 
+function splitTitle(title: string): { lead: string; accent: string } {
+  const words = title.replace(/\.$/, "").split(" ");
+  if (words.length <= 3) return { lead: title, accent: "" };
+  const split = Math.max(2, words.length - 3);
+  return { lead: words.slice(0, split).join(" "), accent: words.slice(split).join(" ") + "." };
+}
+
 export function TurfProMarketingPage({ page }: { page: MarketingPage }) {
+  const { lead, accent } = splitTitle(page.title);
   return (
     <main className={styles.site}>
       <MarketingNav />
@@ -423,7 +483,9 @@ export function TurfProMarketingPage({ page }: { page: MarketingPage }) {
         <div className={`${styles.wrap} ${styles.pageHeroGrid}`}>
           <Reveal immediate>
             <p className={styles.eyebrow}>{page.eyebrow}</p>
-            <h1 className={styles.pageTitle}>{page.title}</h1>
+            <h1 className={styles.pageTitle}>
+              {lead} {accent ? <span>{accent}</span> : null}
+            </h1>
           </Reveal>
           <Reveal immediate step={1}>
             <p className={styles.lede}>{page.lede}</p>
@@ -431,8 +493,8 @@ export function TurfProMarketingPage({ page }: { page: MarketingPage }) {
               <Link href={route("/signin")} className={styles.button}>
                 {page.primaryAction}
               </Link>
-              <Link href={route("/")} className={styles.buttonSoft}>
-                Back home
+              <Link href={route("/demo")} className={styles.buttonSoft}>
+                Book a Demo
               </Link>
             </div>
             <div className={styles.pageProof} style={{ marginTop: "var(--space-lg)" }}>
@@ -467,6 +529,13 @@ export function TurfProMarketingPage({ page }: { page: MarketingPage }) {
             })}
           </Stagger>
         </div>
+      </section>
+      <section style={{ paddingBottom: "var(--space-2xl)" }}>
+        <CtaBand
+          title="Everything You Need."
+          accent="All in One Place."
+          body="Turf Pro CRM has the tools to help you save time, impress customers, and grow your business."
+        />
       </section>
       <Footer year={new Date().getFullYear()} />
     </main>

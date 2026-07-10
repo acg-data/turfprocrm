@@ -62,9 +62,10 @@ import type { Id } from "../../../convex/_generated/dataModel";
 
 type View = "dashboard" | "prime_time" | "lead_ops" | "crm" | "pipeline" | "dispatch" | "jobs" | "field" | "costing" | "profit" | "cost_intel" | "admin" | "onboarding" | "specs";
 
-const VIEW_KEYS: View[] = ["dashboard", "prime_time", "lead_ops", "crm", "pipeline", "dispatch", "jobs", "field", "costing", "profit", "cost_intel", "admin", "onboarding", "specs"];
+const showInternalTools = process.env.NEXT_PUBLIC_LOCAL_DEMO === "1";
+const internalViews = new Set<View>(["prime_time", "onboarding", "specs"]);
 
-const navItems: Array<{ id: View; label: string; icon: ReactNode }> = [
+const allNavItems: Array<{ id: View; label: string; icon: ReactNode }> = [
   { id: "dashboard", label: "Dashboard", icon: <LayoutDashboard size={18} /> },
   { id: "prime_time", label: "Prime Time", icon: <ListChecks size={18} /> },
   { id: "lead_ops", label: "Lead Ops", icon: <Filter size={18} /> },
@@ -80,6 +81,9 @@ const navItems: Array<{ id: View; label: string; icon: ReactNode }> = [
   { id: "onboarding", label: "Onboarding", icon: <Briefcase size={18} /> },
   { id: "specs", label: "Specs", icon: <Database size={18} /> },
 ];
+
+const navItems = allNavItems.filter((item) => showInternalTools || !internalViews.has(item.id));
+const VIEW_KEYS = navItems.map((item) => item.id);
 
 const categoryLabels: Record<ServiceCategory, string> = {
   lawn_care: "Lawn care",
@@ -1347,7 +1351,7 @@ function LandscapeOsLiveApp() {
     return (
       <AppGate
         title="Sign in to open your workspace"
-        detail="The operating app is tenant-scoped: every read and write is checked against your organization membership and role."
+        detail="Your workspace is protected. Sign in with an authorized account to continue."
       >
         <Link
           href="/signin"
@@ -1675,6 +1679,8 @@ function LandscapeOsWorkspace({
   // Deep links: /app?view=lead_ops opens that view; the URL tracks navigation.
   useEffect(() => {
     const param = new URLSearchParams(window.location.search).get("view");
+    // Apply deep-link state after hydration so server and client initially render the same shell.
+    // eslint-disable-next-line react-hooks/set-state-in-effect
     if (param && VIEW_KEYS.includes(param as View)) setView(param as View);
   }, []);
   useEffect(() => {
@@ -2236,9 +2242,11 @@ function LandscapeOsWorkspace({
                 <div className="text-xs text-stone-500">Landscape CRM</div>
               </div>
             </div>
-            <IconButton title="Close navigation" onClick={() => setMobileNavOpen(false)}>
-              <X size={17} />
-            </IconButton>
+            <span className={showInternalTools ? "" : "lg:hidden"}>
+              <IconButton title="Close navigation" onClick={() => setMobileNavOpen(false)}>
+                <X size={17} />
+              </IconButton>
+            </span>
           </div>
 
           <nav className="mt-6 grid gap-1">
@@ -2261,21 +2269,25 @@ function LandscapeOsWorkspace({
             ))}
           </nav>
 
-          <div className="mt-6 rounded-lg border border-stone-200 bg-[#fbfaf4] p-3">
-            <div className="flex items-center gap-2 text-sm font-semibold">
-              <ShieldCheck size={16} />
-              Tenant isolation
-            </div>
-            <div className="mt-2 text-xs leading-5 text-stone-600">All production functions require organization membership and role checks.</div>
-          </div>
+          {showInternalTools ? (
+            <>
+              <div className="mt-6 rounded-lg border border-stone-200 bg-[#fbfaf4] p-3">
+                <div className="flex items-center gap-2 text-sm font-semibold">
+                  <ShieldCheck size={16} />
+                  Tenant isolation
+                </div>
+                <div className="mt-2 text-xs leading-5 text-stone-600">All production functions require organization membership and role checks.</div>
+              </div>
 
-          <div className={cn("mt-3 rounded-lg border p-3", backendState.mode === "convex-live" ? "border-emerald-200 bg-emerald-50" : "border-amber-200 bg-amber-50")}>
-            <div className="flex items-center gap-2 text-sm font-semibold">
-              <Database size={16} />
-              {backendState.label}
-            </div>
-            <div className="mt-2 text-xs leading-5 text-stone-600">{backendState.detail}</div>
-          </div>
+              <div className={cn("mt-3 rounded-lg border p-3", backendState.mode === "convex-live" ? "border-emerald-200 bg-emerald-50" : "border-amber-200 bg-amber-50")}>
+                <div className="flex items-center gap-2 text-sm font-semibold">
+                  <Database size={16} />
+                  {backendState.label}
+                </div>
+                <div className="mt-2 text-xs leading-5 text-stone-600">{backendState.detail}</div>
+              </div>
+            </>
+          ) : null}
         </aside>
 
         {mobileNavOpen ? <button aria-label="Close menu overlay" className="fixed inset-0 z-20 bg-black/20 lg:hidden" onClick={() => setMobileNavOpen(false)} /> : null}
@@ -2284,9 +2296,11 @@ function LandscapeOsWorkspace({
           <header className="sticky top-0 z-10 border-b border-stone-200 bg-[#f6f7f1]/95 px-4 py-3 backdrop-blur lg:px-6">
             <div className="flex items-center justify-between gap-3">
               <div className="flex min-w-0 items-center gap-3">
-                <IconButton title="Open navigation" onClick={() => setMobileNavOpen(true)}>
-                  <Menu size={18} />
-                </IconButton>
+                <span className={showInternalTools ? "" : "lg:hidden"}>
+                  <IconButton title="Open navigation" onClick={() => setMobileNavOpen(true)}>
+                    <Menu size={18} />
+                  </IconButton>
+                </span>
                 <div className="min-w-0">
                   <h1 className="truncate text-xl font-bold">{navItems.find((item) => item.id === view)?.label}</h1>
                   <p className="truncate text-sm text-stone-500">CRM, estimating, dispatch, projects, and field work in one operating surface.</p>
@@ -2297,10 +2311,10 @@ function LandscapeOsWorkspace({
                   <Bell size={18} />
                 </IconButton>
                 {viewerMember ? (
-                  <span className="inline-flex min-h-10 items-center justify-center gap-2 rounded-md border border-stone-200 bg-stone-50 px-3 text-sm font-semibold text-stone-800">
+                  <Link href="/signin" title="Account and billing" className="inline-flex min-h-10 items-center justify-center gap-2 rounded-md border border-stone-200 bg-stone-50 px-3 text-sm font-semibold text-stone-800 transition hover:bg-white">
                     <UserRound size={16} />
                     {viewerMember.name}
-                  </span>
+                  </Link>
                 ) : (
                   <Link
                     href="/signin"

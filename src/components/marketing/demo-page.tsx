@@ -4,6 +4,7 @@ import { useMutation } from "convex/react";
 import { motion } from "motion/react";
 import { Check, Loader2, Sparkles } from "lucide-react";
 import { FormEvent, useState } from "react";
+import Link from "next/link";
 import { api } from "../../../convex/_generated/api";
 import { MarketingNav } from "./chrome";
 import { Footer } from "./footer";
@@ -163,6 +164,9 @@ function DemoPageLive() {
                       "Request a demo"
                     )}
                   </button>
+                  <p className={formStyles.privacyNote}>
+                    By submitting, you agree that Turf Pro CRM may contact you about your request. See our <Link href="/privacy">Privacy Policy</Link>.
+                  </p>
                 </form>
               )}
             </div>

@@ -21,11 +21,11 @@ Everything code-side is wired; these are the dashboard/env steps to flip product
 - [ ] Webhooks → add endpoint `https://<convex-prod>.convex.site/webhooks/clerk`, subscribe to `user.created`, `user.updated`, `user.deleted`; copy the signing secret → Convex env `CLERK_WEBHOOK_SECRET`.
 - [ ] Frontend host env (Replit Secrets): `NEXT_PUBLIC_CLERK_PUBLISHABLE_KEY`, `CLERK_SECRET_KEY`.
 
-## 3. Stripe (billing — Starter $49 / Pro $99)
+## 3. Stripe (billing — All-In Pro $99)
 
-- [ ] Create two recurring monthly Products/Prices: Starter $49, Pro $99 → copy price IDs → Convex env `STRIPE_PRICE_STARTER`, `STRIPE_PRICE_PRO`.
+- [ ] Create one recurring monthly Product/Price: All-In Pro $99 → copy the price ID → Convex env `STRIPE_PRICE_PRO`. `STRIPE_PRICE_STARTER` is only needed if a legacy Starter workspace must be migrated.
 - [ ] Developers → Webhooks → add endpoint `https://<convex-prod>.convex.site/webhooks/stripe`, events: `checkout.session.completed`, `customer.subscription.updated`, `customer.subscription.deleted`, `invoice.payment_failed`; copy signing secret → `STRIPE_WEBHOOK_SECRET`.
-- [ ] Settings → Billing → Customer portal: enable, allow plan switching between the two prices.
+- [ ] Settings → Billing → Customer portal: enable subscription cancellation, payment-method updates, and invoice history.
 - [ ] API keys → secret key → Convex env `STRIPE_SECRET_KEY`.
 - [ ] Test in **test mode** first with card `4242 4242 4242 4242` (see verification below).
 
@@ -36,7 +36,7 @@ Everything code-side is wired; these are the dashboard/env steps to flip product
 
 ## 5. Frontend hosting (Replit)
 
-- [ ] Secrets: `NEXT_PUBLIC_CONVEX_URL` (prod deployment URL), `NEXT_PUBLIC_CLERK_PUBLISHABLE_KEY`, `CLERK_SECRET_KEY`.
+- [ ] Secrets: `NEXT_PUBLIC_CONVEX_URL` (prod deployment URL), `NEXT_PUBLIC_CLERK_PUBLISHABLE_KEY`, `CLERK_SECRET_KEY`, and `NEXT_PUBLIC_APP_URL` (canonical public origin).
 - [ ] Deploy (autoscale target in `.replit`); point your domain at it; set `APP_BASE_URL` in Convex to match.
 
 ## 6. Monitoring

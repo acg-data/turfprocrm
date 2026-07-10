@@ -8,7 +8,7 @@ async function openAppView(page: Page, name: string) {
 
 test("marketing front page routes to product pages and the live app", async ({ page }) => {
   await page.goto("/");
-  await expect(page.getByRole("heading", { name: /The outdoor CRM that follows the work\./i })).toBeVisible();
+  await expect(page.getByRole("heading", { name: /All-in-One CRM Built for/i })).toBeVisible();
   const menuButton = page.getByRole("button", { name: "Open menu" });
   if (await menuButton.isVisible()) await menuButton.click();
   await expect(page.locator("header").getByRole("link", { name: "Get Started" }).first()).toHaveAttribute("href", "/signin");
@@ -19,13 +19,18 @@ test("marketing front page routes to product pages and the live app", async ({ p
   await expect(page.getByText("Get Paid Faster. Without the Hassle.")).toBeVisible();
 
   await page.goto("/signin");
-  await expect(page.getByRole("heading", { name: "Sign in, then launch the workspace" })).toBeVisible();
-  await expect(page.getByText("Single sign-in + Convex onboarding")).toBeVisible();
+  await expect(page.getByRole("heading", { name: "One account. Your entire operation." })).toBeVisible();
+  await expect(page.getByText("Secure account setup")).toBeVisible();
   await expect(page.getByText("10 contacts included").first()).toBeVisible();
   await expect(page.getByText("All-In Pro").first()).toBeVisible();
 
   await page.goto("/signup");
   await expect(page).toHaveURL("/signin");
+
+  await page.goto("/privacy");
+  await expect(page.getByRole("heading", { name: "Privacy Policy" })).toBeVisible();
+  await page.goto("/terms");
+  await expect(page.getByRole("heading", { name: "Terms of Service" })).toBeVisible();
 });
 
 test("loads the operating shell and creates a lead", async ({ page }) => {

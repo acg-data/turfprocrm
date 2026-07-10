@@ -40,10 +40,6 @@ function NavDropdown({ item, pathname }: { item: MarketingNavItem; pathname: str
   const isActive = item.children?.some((child) => child.href === pathname);
 
   useEffect(() => {
-    setOpen(false);
-  }, [pathname]);
-
-  useEffect(() => {
     if (!open) return;
     function onPointerDown(event: PointerEvent) {
       if (!wrapperRef.current?.contains(event.target as Node)) setOpen(false);
@@ -89,6 +85,7 @@ function NavDropdown({ item, pathname }: { item: MarketingNavItem; pathname: str
                 key={child.href}
                 href={route(child.href)}
                 className={cn(styles.dropdownLink, pathname === child.href && styles.dropdownLinkActive)}
+                onClick={() => setOpen(false)}
               >
                 {child.label}
               </Link>
@@ -112,10 +109,6 @@ export function MarketingNav() {
     window.addEventListener("scroll", onScroll, { passive: true });
     return () => window.removeEventListener("scroll", onScroll);
   }, []);
-
-  useEffect(() => {
-    setOpen(false);
-  }, [pathname]);
 
   return (
     <header className={cn(styles.mast, scrolled && styles.mastScrolled)}>
@@ -169,22 +162,22 @@ export function MarketingNav() {
                   <div key={item.label}>
                     <div className={styles.mobileGroupLabel}>{item.label}</div>
                     {item.children.map((child) => (
-                      <Link key={child.href} href={route(child.href)} className={cn(styles.mobileLink, styles.mobileChildLink)}>
+                      <Link key={child.href} href={route(child.href)} className={cn(styles.mobileLink, styles.mobileChildLink)} onClick={() => setOpen(false)}>
                         {child.label}
                       </Link>
                     ))}
                   </div>
                 ) : (
-                  <Link key={item.label} href={route(item.href!)} className={styles.mobileLink}>
+                  <Link key={item.label} href={route(item.href!)} className={styles.mobileLink} onClick={() => setOpen(false)}>
                     {item.label}
                   </Link>
                 ),
               )}
               <div className={styles.mobileActions}>
-                <Link href={route("/signin")} className={styles.buttonSoft} style={{ flex: 1 }}>
+                <Link href={route("/signin")} className={styles.buttonSoft} style={{ flex: 1 }} onClick={() => setOpen(false)}>
                   Log In
                 </Link>
-                <Link href={route("/signin")} className={styles.button} style={{ flex: 1 }}>
+                <Link href={route("/signin")} className={styles.button} style={{ flex: 1 }} onClick={() => setOpen(false)}>
                   Get Started
                 </Link>
               </div>

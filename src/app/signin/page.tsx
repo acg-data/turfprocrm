@@ -6,6 +6,7 @@ export const metadata: Metadata = {
   description: "Sign in or create a Turf Pro CRM account, choose a plan, and provision your landscaping or pest-control workspace.",
 };
 
-export default function SignInPage() {
-  return <AuthEntryPage />;
+export default async function SignInPage({ searchParams }: { searchParams: Promise<{ plan?: string | string[] }> }) {
+  const plan = (await searchParams).plan;
+  return <AuthEntryPage initialPlan={plan === "pro" ? "pro" : "free"} />;
 }

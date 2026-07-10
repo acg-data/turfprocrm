@@ -30,7 +30,7 @@ const plans: Array<{
     id: "pro",
     name: "All-In Pro",
     price: "$99/mo",
-    description: "For operators who want Arborgold-style depth without enterprise-tier pricing.",
+    description: "The complete operating system for teams ready to grow without feature gates.",
     highlights: ["Unlimited contacts and land measurements", "CRM, estimating, scheduling, routes, jobs, invoicing, payments, and reporting", "Job costing, material inventory, chemical tracking, renewals, permissions, and profit dashboards"],
   },
 ];
@@ -49,41 +49,67 @@ const clerkAppearance = {
 type WorkspaceRows = FunctionReturnType<typeof api.setup.listMyOrganizations>;
 type CreateOrganizationFn = ReactMutation<typeof api.setup.createOrganization>;
 type CreateCheckoutFn = (args: { organizationId: WorkspaceRows[number]["organization"]["_id"]; plan: "starter" | "pro" }) => Promise<{ url: string | null }>;
+type CreatePortalFn = (args: { organizationId: WorkspaceRows[number]["organization"]["_id"] }) => Promise<{ url: string | null }>;
 
-export function AuthEntryPage() {
+export function AuthEntryPage({ initialPlan = "free" }: { initialPlan?: SignupPlan }) {
   // Convex hooks can only run under a ConvexProvider, which AppProviders only mounts when the URL is configured.
   if (!process.env.NEXT_PUBLIC_CONVEX_URL) {
-    return <AuthEntryPageBody workspaces={undefined} createOrganization={null} createCheckoutSession={null} />;
+    return <AuthEntryPageBody initialPlan={initialPlan} workspaces={undefined} createOrganization={null} createCheckoutSession={null} createBillingPortalSession={null} />;
   }
-  return <AuthEntryPageWithConvex />;
+  return <AuthEntryPageWithConvex initialPlan={initialPlan} />;
 }
 
-function AuthEntryPageWithConvex() {
+function AuthEntryPageWithConvex({ initialPlan }: { initialPlan: SignupPlan }) {
   const workspaces = useQuery(api.setup.listMyOrganizations);
   const createOrganization = useMutation(api.setup.createOrganization);
   const createCheckoutSession = useAction(api.billing.createCheckoutSession);
-  return <AuthEntryPageBody workspaces={workspaces} createOrganization={createOrganization} createCheckoutSession={createCheckoutSession} />;
+  const createBillingPortalSession = useAction(api.billing.createBillingPortalSession);
+  return <AuthEntryPageBody initialPlan={initialPlan} workspaces={workspaces} createOrganization={createOrganization} createCheckoutSession={createCheckoutSession} createBillingPortalSession={createBillingPortalSession} />;
 }
 
 function AuthEntryPageBody({
+  initialPlan,
   workspaces,
   createOrganization,
   createCheckoutSession,
+  createBillingPortalSession,
 }: {
+  initialPlan: SignupPlan;
   workspaces: WorkspaceRows | undefined;
   createOrganization: CreateOrganizationFn | null;
   createCheckoutSession: CreateCheckoutFn | null;
+  createBillingPortalSession: CreatePortalFn | null;
 }) {
   const authConfigured = Boolean(process.env.NEXT_PUBLIC_CLERK_PUBLISHABLE_KEY);
   const convexConfigured = Boolean(process.env.NEXT_PUBLIC_CONVEX_URL);
   const [authMode, setAuthMode] = useState<AuthMode>("signin");
   const [companyName, setCompanyName] = useState("");
   const [industryFocus, setIndustryFocus] = useState<IndustryFocus>("both");
-  const [selectedPlan, setSelectedPlan] = useState<SignupPlan>("free");
+  const [selectedPlan, setSelectedPlan] = useState<SignupPlan>(initialPlan);
   const [createdWorkspaceId, setCreatedWorkspaceId] = useState<string | null>(null);
   const [error, setError] = useState<string | null>(null);
   const [isCreating, setIsCreating] = useState(false);
+  const [billingBusyId, setBillingBusyId] = useState<string | null>(null);
   const timezone = useMemo(() => Intl.DateTimeFormat().resolvedOptions().timeZone || "America/New_York", []);
+
+  async function openBilling(row: WorkspaceRows[number]) {
+    const organizationId = row.organization._id;
+    setError(null);
+    setBillingBusyId(organizationId);
+    try {
+      const result = row.subscription?.stripeCustomerId && createBillingPortalSession
+        ? await createBillingPortalSession({ organizationId })
+        : createCheckoutSession
+          ? await createCheckoutSession({ organizationId, plan: "pro" })
+          : null;
+      if (result?.url) window.location.assign(result.url);
+      else setError("Stripe billing is not configured for this environment yet.");
+    } catch (caught) {
+      setError(caught instanceof Error ? caught.message : "Could not open billing.");
+    } finally {
+      setBillingBusyId(null);
+    }
+  }
 
   async function submitWorkspace(event: FormEvent) {
     event.preventDefault();
@@ -109,11 +135,11 @@ function AuthEntryPageBody({
         try {
           const { url } = await createCheckoutSession({ organizationId, plan: "pro" });
           if (url) {
-            window.location.href = url;
+            window.location.assign(url);
             return;
           }
         } catch {
-          setError("Workspace created on a trial — Stripe checkout isn't configured yet, so billing can be finished later from Admin → Billing.");
+          setError("Workspace created on a trial — Stripe checkout isn't configured yet, so billing can be finished later from this account page.");
         }
       }
     } catch (caught) {
@@ -151,19 +177,19 @@ function AuthEntryPageBody({
           <div>
             <div className="inline-flex items-center gap-2 rounded-full border border-emerald-200 bg-emerald-50 px-3 py-1 text-sm font-semibold text-emerald-800">
               <ShieldCheck size={15} />
-              Single sign-in + Convex onboarding
+              Secure account setup
             </div>
-            <h1 className="mt-5 max-w-xl text-4xl font-bold tracking-normal md:text-5xl">Sign in, then launch the workspace</h1>
+            <h1 className="mt-5 max-w-xl text-4xl font-bold tracking-normal md:text-5xl">One account. Your entire operation.</h1>
             <p className="mt-4 max-w-xl text-base leading-7 text-stone-600">
-              One route handles sign in, account creation, plan selection, and workspace provisioning. Clerk handles identity and SSO; Convex creates the tenant, subscription, defaults, and audit trail after auth.
+              Sign in or create an account, choose the plan that fits today, and launch a workspace built around your crews, customers, and jobs.
             </p>
           </div>
 
           <div className="grid gap-3 rounded-lg border border-stone-200 bg-white p-4">
             {[
-              ["One entry point", "Every marketing, login, and trial click lands here first"],
+              ["Secure sign-in", "Email and social sign-in keep account access simple"],
               ["Free account", "10 contacts included before upgrading"],
-              ["$99/mo paid plan", "All Arborgold-style operating modules included in one plan"],
+              ["$99/mo paid plan", "Every core operating module included in one plan"],
               ["Guided onboarding", "After sign-in, create the company workspace and continue into the OS"],
             ].map(([title, body]) => (
               <div key={title} className="flex gap-3">
@@ -188,11 +214,12 @@ function AuthEntryPageBody({
         </div>
 
         <div className="grid gap-4">
-          <div className="grid gap-3 md:grid-cols-2">
+          <div className="grid gap-3 md:grid-cols-2" role="group" aria-label="Choose a plan">
             {plans.map((plan) => (
               <button
                 key={plan.id}
                 type="button"
+                aria-pressed={selectedPlan === plan.id}
                 onClick={() => setSelectedPlan(plan.id)}
                 className={`rounded-lg border bg-white p-5 text-left shadow-sm transition ${selectedPlan === plan.id ? "border-[#315a4d] ring-2 ring-[#315a4d]/15" : "border-stone-200 hover:border-stone-300"}`}
               >
@@ -224,7 +251,7 @@ function AuthEntryPageBody({
                       <LockKeyhole size={20} className="text-[#224036]" />
                       Step 1: sign in or create account
                     </h2>
-                    <p className="mt-2 text-sm leading-6 text-stone-500">Use the same route for returning clients, new free trials, Google/Microsoft login, and future SSO.</p>
+                    <p className="mt-2 text-sm leading-6 text-stone-500">Use your existing account or create one in a few moments.</p>
                   </div>
                   <div className="grid grid-cols-2 gap-2 rounded-lg bg-stone-100 p-1">
                     <button type="button" onClick={() => setAuthMode("signin")} className={`min-h-10 rounded-md text-sm font-semibold transition ${authMode === "signin" ? "bg-white text-stone-950 shadow-sm" : "text-stone-600"}`}>
@@ -262,7 +289,7 @@ function AuthEntryPageBody({
                 <div className="flex items-start justify-between gap-3">
                   <div>
                     <h2 className="text-xl font-bold">Step 2: create the workspace</h2>
-                    <p className="mt-2 text-sm leading-6 text-stone-500">This writes the organization, owner membership, subscription, operating defaults, tag taxonomy, onboarding checklist, and audit event to Convex.</p>
+                    <p className="mt-2 text-sm leading-6 text-stone-500">Tell us about the company and we&apos;ll prepare the workspace, operating defaults, and guided setup.</p>
                   </div>
                   <div className="grid h-10 w-10 place-items-center rounded-md bg-[#e8efe8] text-[#224036]">
                     <UsersRound size={18} />
@@ -309,8 +336,16 @@ function AuthEntryPageBody({
                         </div>
                         <div className="rounded-full border border-stone-200 bg-stone-50 px-2 py-1 text-xs font-semibold uppercase">{row.subscription?.plan ?? row.organization.billingPlan ?? "free"}</div>
                       </div>
-                      <div className="mt-3 text-sm text-stone-600">
-                        {row.usage.contacts} contacts used{row.usage.contactLimit ? ` of ${row.usage.contactLimit}` : ""}
+                      <div className="mt-3 flex flex-wrap items-center justify-between gap-3 text-sm text-stone-600">
+                        <span>{row.usage.contacts} contacts used{row.usage.contactLimit ? ` of ${row.usage.contactLimit}` : ""}</span>
+                        <button
+                          type="button"
+                          onClick={() => void openBilling(row)}
+                          disabled={billingBusyId === row.organization._id || (!createCheckoutSession && !createBillingPortalSession)}
+                          className="inline-flex min-h-9 items-center justify-center rounded-md border border-stone-200 bg-white px-3 text-xs font-semibold text-[#224036] disabled:opacity-50"
+                        >
+                          {billingBusyId === row.organization._id ? "Opening billing..." : row.subscription?.stripeCustomerId ? "Manage billing" : "Upgrade to All-In Pro"}
+                        </button>
                       </div>
                     </div>
                   ))

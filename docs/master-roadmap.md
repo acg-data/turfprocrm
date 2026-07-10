@@ -744,6 +744,34 @@ Reusable machinery every wave builds on (do not reinvent): tenant guards `requir
 | **W11** | Trust & scale | CSP, status page, DR drills, retention + GDPR deletion, SOC 2 Type I evidence, rate limiting + bot protection, TCPA/CAN-SPAM ledgers, PII encryption, COI vault, support impersonation, 100k-record SLOs, WCAG AA, i18n/Spanish app-wide, app-store PWA (D18, D19 remainder) | Vanta-style tooling optional | Enterprise security questionnaire passes; 100k-record org stays fast |
 | **W12** | Marketing growth engine | Comparison/alternative pages, vertical landers, programmatic SEO, ROI calculator + free tools, template library, blog engine, help center, interactive tour, case studies, changelog, technical SEO, A/B tests, site→signup attribution, benchmark report (D20) | Content pipeline | Organic signups measurable; every competitor search has a TurfPro answer |
 
+### W12 marketing design system
+
+Every W12 page is assembled from typed content data and the shared components in `src/components/marketing/kit/`. No W12 route introduces bespoke page CSS unless it adds a genuinely new reusable pattern to that kit.
+
+**Page archetypes**
+
+1. **Landing / vertical:** hero, product mock, industry proof, icon columns, operational visual, outcome band, resources, and CTA. Data shape: `{ hero, tools[], industry, testimonial?, stats[], resources[] }`. Use for lawn care, landscaping, tree care, pest control, irrigation, and snow.
+2. **Comparison:** `Turf Pro vs {competitor}` hero, `FeatureTable`, switch-reason cards, migration proof, and CTA. Data shape: `{ competitor, rows: [{ feature, us, them }], switchReasons[] }`.
+3. **Alternative:** search-focused single-column intro, capability checklist, migration steps, proof, and CTA. Data shape: `{ competitor, intro, advantages[] }`.
+4. **Programmatic local SEO:** location-merged hero, local operating context, shared feature grid, relevant state/metro facts, and CTA. Generate from typed `states.ts` and `metros.ts` sources with `generateStaticParams`; never fabricate local proof.
+5. **Tool / calculator:** a small `"use client"` calculator island inside the server-rendered marketing shell, with useful ungated results and an optional consent-aware email CTA.
+6. **Content:** article header, metadata, prose/MDX, related resources, newsletter CTA, and footer. Use for guides, glossary terms, case studies, blog posts, and help articles.
+7. **Legal / simple:** the shipped `LegalPage` pattern for policy, trust, and compact company pages.
+
+**Shared kit**
+
+- Existing shell: `MarketingNav`, `Footer`, `Reveal`, `Stagger`, `CtaBand`, and device mocks.
+- Shipped primitives: `SectionHead`, `IconColumns`, `StatBand`, `FloatingChips`, and `FeatureTable` in `src/components/marketing/kit/`.
+- Add future reusable visuals (dispatch board, invoice, map, testimonial proof, migration steps) to the kit before using them across archetypes.
+- Keep content in typed files such as `src/data/marketing/verticals.ts`, `comparisons.ts`, `alternatives.ts`, and `locations.ts`. Hundreds of URLs should mean data entries, not copied components.
+
+**SEO and trust contract**
+
+- Every archetype provides `generateMetadata`, canonical URLs, Open Graph data, sitemap coverage, and the appropriate schema.org JSON-LD through a shared `src/lib/seo.ts` helper.
+- Claims, customer logos, testimonials, benchmarks, and local proof require a source of record. Unverified numbers never ship as marketing proof.
+- All calls to action preserve plan and campaign attribution through signup. Interactive forms include validation, consent language where needed, success states, and failure recovery.
+- Acceptance includes keyboard navigation, reduced motion, 375/768/1400px layouts, Core Web Vitals, and a Playwright route/link check.
+
 Parallelism notes: W12 can run any time (no app deps). W2 needs W1's send actions; W4 needs W3's Stripe Connect start; W5's renewals hook into W3's renewal engine; W10 last among product waves (feeds on data the earlier waves create). Within a wave, epics fan out to parallel agents once W0's route split lands.
 
 ---
@@ -756,6 +784,7 @@ Parallelism notes: W12 can run any time (no app deps). W2 needs W1's send action
 4. **Gates (every epic, no exceptions):** `npx tsc --noEmit` clean → `npx vitest run` green (new convex-test coverage for every new module: tenancy rejection + permission rejection + happy path) → `npm run build` → `npx playwright test` (add a spec per new surface) → commit with board-status update → push. Stripe/Clerk/Twilio work verified in test mode with documented manual steps appended to `docs/production-launch-checklist.md`.
 5. **External-service checklist per wave** (pause and collect from Justin): W1 Twilio + Google/Microsoft OAuth apps; W3/W4 Stripe Connect + QBO app; W5 Mapbox; W6 Google Business Profile; W9 Zapier; W10 Anthropic API key. Keys land in Convex env / Replit secrets per the launch checklist.
 6. **Non-negotiables carried from S1:** every new backend function goes through `requireWorkspace`/`requireMembership` with an explicit permission; every write audits; every public token (portal, quote links, forms) is unguessable + expiring + rate-limited; money stays integer cents; timestamps epoch ms; no unauthenticated Convex function ever ships again.
+7. **Marketing composition rule:** all marketing pages compose the archetypes and primitives in `src/components/marketing/kit/`; no bespoke page CSS unless the pattern is first made reusable and documented in the kit.
 
 ## Verification
 

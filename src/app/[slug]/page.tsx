@@ -3,6 +3,7 @@ import { notFound } from "next/navigation";
 import { FeaturesPage } from "@/components/marketing/features-page";
 import { TurfProMarketingPage } from "@/components/marketing/turf-pro-marketing";
 import { getMarketingPage, marketingSlugs } from "@/data/marketing";
+import { marketingMetadata } from "@/lib/seo";
 
 export function generateStaticParams() {
   return marketingSlugs.map((slug) => ({ slug }));
@@ -16,20 +17,14 @@ export async function generateMetadata({
   const { slug } = await params;
 
   if (slug === "features") {
-    return {
-      title: "Features - Turf Pro CRM",
-      description: "Powerful Turf Pro CRM features for scheduling, routing, customer management, work orders, invoicing, and payments.",
-    };
+    return marketingMetadata({ title: "Features", description: "Powerful Turf Pro CRM features for scheduling, routing, customer management, work orders, invoicing, and payments.", path: "/features" });
   }
 
   const page = getMarketingPage(slug);
 
   if (!page) return {};
 
-  return {
-    title: `${page.navLabel} - Turf Pro CRM`,
-    description: page.lede,
-  };
+  return marketingMetadata({ title: page.navLabel, description: page.lede, path: `/${page.slug}` });
 }
 
 export default async function MarketingDetailPage({

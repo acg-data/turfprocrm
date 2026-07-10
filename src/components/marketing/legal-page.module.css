@@ -1,0 +1,68 @@
+.legalHero {
+  padding: clamp(7rem, 12vw, 10rem) 0 var(--space-xl);
+  background:
+    radial-gradient(circle at 88% 18%, color-mix(in oklch, var(--color-accent), transparent 82%), transparent 28rem),
+    var(--color-paper-field);
+  border-bottom: 1px solid var(--color-rule);
+}
+
+.legalTitle {
+  max-width: 13ch;
+  margin: 0;
+  font-family: var(--font-display);
+  font-size: clamp(2.7rem, 7vw, 5.2rem);
+  line-height: 0.98;
+  letter-spacing: -0.045em;
+  color: var(--color-ink);
+}
+
+.legalTitle span {
+  color: var(--color-accent-dark);
+}
+
+.updated {
+  margin-top: var(--space-md);
+  color: var(--color-ink-muted);
+  font-size: var(--text-sm);
+}
+
+.legalBody {
+  width: min(100% - 2rem, 52rem);
+  margin-inline: auto;
+  padding-block: clamp(3rem, 7vw, 6rem);
+}
+
+.intro {
+  margin: 0 0 var(--space-xl);
+  color: var(--color-ink-muted);
+  font-size: clamp(1.08rem, 2vw, 1.25rem);
+  line-height: 1.75;
+}
+
+.section {
+  padding-block: var(--space-lg);
+  border-top: 1px solid var(--color-rule);
+}
+
+.section h2 {
+  margin: 0 0 var(--space-sm);
+  font-family: var(--font-display);
+  font-size: clamp(1.35rem, 2.8vw, 1.8rem);
+  letter-spacing: -0.02em;
+}
+
+.section p,
+.section li {
+  color: var(--color-ink-muted);
+  line-height: 1.75;
+}
+
+.section ul {
+  padding-left: 1.2rem;
+  list-style: disc;
+}
+
+.section a {
+  color: var(--color-accent-dark);
+  font-weight: 700;
+}
