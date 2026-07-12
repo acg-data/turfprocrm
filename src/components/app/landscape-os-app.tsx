@@ -43,6 +43,7 @@ import { useConvexAuth, useMutation, useQuery } from "convex/react";
 import Link from "next/link";
 import { FormEvent, ReactNode, useEffect, useMemo, useRef, useState } from "react";
 import { demoWorkspace } from "@/data/demo-workspace";
+import { getDemoUser, type DemoUser } from "@/lib/demo-auth";
 import { primeTimeBacklog, primeTimeGroups, type PrimeTimeStatus } from "@/data/prime-time-roadmap";
 import type { JobVisit, Opportunity, WorkspaceSnapshot } from "@/domain/types";
 import {
@@ -1326,19 +1327,45 @@ export function LandscapeOsApp() {
   // Live mode needs Convex + Clerk; NEXT_PUBLIC_LOCAL_DEMO forces the in-memory demo (e2e, offline review).
   const liveConfigured = Boolean(process.env.NEXT_PUBLIC_CONVEX_URL && process.env.NEXT_PUBLIC_CLERK_PUBLISHABLE_KEY);
   if (process.env.NEXT_PUBLIC_LOCAL_DEMO === "1" || !liveConfigured) {
-    return (
-      <LandscapeOsWorkspace
-        initialWorkspace={demoWorkspace}
-        backendState={{
-          mode: "local",
-          label: "Local demo",
-          detail: "Convex and Clerk are not both configured (or NEXT_PUBLIC_LOCAL_DEMO is set), so this session is using in-memory demo data.",
-          blueprint: fallbackBackendBlueprint,
-        }}
-      />
-    );
+    return <LandscapeOsDemoApp />;
   }
   return <LandscapeOsLiveApp />;
+}
+
+function LandscapeOsDemoApp() {
+  const [demoUser, setDemoUserState] = useState<DemoUser | null>(null);
+
+  useEffect(() => {
+    setDemoUserState(getDemoUser());
+  }, []);
+
+  // Personalize the demo so the signed-in user (from the local demo login)
+  // appears as the workspace owner in the header and viewer-aware surfaces.
+  const workspace = useMemo<WorkspaceSnapshot>(() => {
+    if (!demoUser) return demoWorkspace;
+    const members = demoWorkspace.members.map((member, index) =>
+      index === 0 ? { ...member, name: demoUser.name, email: demoUser.email } : member,
+    );
+    return {
+      ...demoWorkspace,
+      members,
+      viewer: { userId: members[0]?.id ?? "u-justin", role: members[0]?.role ?? "owner" },
+    };
+  }, [demoUser]);
+
+  return (
+    <LandscapeOsWorkspace
+      initialWorkspace={workspace}
+      backendState={{
+        mode: "local",
+        label: "Local demo",
+        detail: demoUser
+          ? `Signed in as ${demoUser.email} against in-memory demo data. Connect Convex + Clerk for a live workspace.`
+          : "Convex and Clerk are not both configured (or NEXT_PUBLIC_LOCAL_DEMO is set), so this session is using in-memory demo data.",
+        blueprint: fallbackBackendBlueprint,
+      }}
+    />
+  );
 }
 
 function LandscapeOsLiveApp() {

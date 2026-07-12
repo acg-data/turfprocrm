@@ -3,10 +3,11 @@
 import { Show, SignIn, SignUp, UserButton } from "@clerk/nextjs";
 import { useAction, useMutation, useQuery, type ReactMutation } from "convex/react";
 import type { FunctionReturnType } from "convex/server";
-import { ArrowRight, Check, CreditCard, LockKeyhole, ShieldCheck, Sprout, UsersRound } from "lucide-react";
+import { Check, CreditCard, LockKeyhole, ShieldCheck, Sprout, UsersRound } from "lucide-react";
 import Link from "next/link";
 import { FormEvent, useMemo, useState } from "react";
 import { api } from "../../../convex/_generated/api";
+import { DemoSignIn } from "./demo-signin";
 
 type SignupPlan = "free" | "pro";
 type IndustryFocus = "landscaping" | "pest_control" | "both";
@@ -275,16 +276,7 @@ function AuthEntryPageBody({
                 </div>
               </Show>
             ) : (
-              <div className="grid gap-4">
-                <div>
-                  <h2 className="text-xl font-bold">Step 1: sign in</h2>
-                  <p className="mt-2 text-sm leading-6 text-stone-500">Add Clerk keys to enable the live sign-in page. Until then, use the demo app for product review.</p>
-                </div>
-                <Link href="/app" className="inline-flex min-h-10 w-fit items-center justify-center gap-2 rounded-md bg-[#224036] px-4 text-sm font-semibold text-white">
-                  Open demo app
-                  <ArrowRight size={16} />
-                </Link>
-              </div>
+              <DemoSignIn />
             )}
 
             {authConfigured ? (
