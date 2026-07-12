@@ -1,6 +1,8 @@
 # TurfPro CRM — Master Plan: The Definitive Green-Industry Business OS
 
 > Supersedes the "Convex Production Plan" previously in this file — that plan **shipped** (commits `80e0fcd`…`deee614`: Clerk auth, Stripe billing, invites, email, ops hardening, marketing rebuild + restyle). This plan is the next horizon: everything.
+>
+> **Read with `docs/beyond-parity.md`** — the parity-to-category-best delta: 5 strategic moves (money loop, payments-as-business-model, speed/offline, agentic AI, activation), measurable quality bars, ~60 [EDGE] capabilities per-domain that this catalog doesn't contain, monetization tiers, and an amended wave order (W0 → W3 → W4 → W5 before full W1/W2).
 
 ## Context
 
