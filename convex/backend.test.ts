@@ -402,6 +402,46 @@ describe("Convex operating system functions", () => {
     expect(reordered.audits.some((event) => event.action === "visit.reorder" && event.entityId === tenant.visitId && event.after?.routeOrder === 3)).toBe(true);
   });
 
+  it("creates and edits a calendar visit with assignment and audit history", async () => {
+    const t = convexTest(schema, modules);
+    const tenant = await createOperationalTenant(t, "calendar_visit_edit");
+    const scheduledStart = tenant.scheduledStart + 2 * 24 * 60 * 60 * 1000;
+    const created = await tenant.owner.mutation(api.dispatch.createVisit, {
+      organizationId: tenant.organizationId,
+      jobId: tenant.jobId,
+      scheduledStart,
+      durationMinutes: 75,
+      crewId: null,
+    });
+
+    await tenant.owner.mutation(api.dispatch.updateVisit, {
+      organizationId: tenant.organizationId,
+      visitId: created.visitId,
+      scheduledStart: scheduledStart + 30 * 60 * 1000,
+      scheduledEnd: scheduledStart + 120 * 60 * 1000,
+      crewId: tenant.crewId,
+      status: "scheduled",
+      routeOrder: 4,
+    });
+
+    const persisted = await t.run(async (ctx) => {
+      const [visit, assignments, audits] = await Promise.all([
+        ctx.db.get(created.visitId),
+        ctx.db.query("visitAssignments").withIndex("by_visit", (q) => q.eq("visitId", created.visitId)).collect(),
+        ctx.db.query("auditEvents").withIndex("by_org", (q) => q.eq("organizationId", tenant.organizationId)).collect(),
+      ]);
+      return { visit, assignments, audits };
+    });
+
+    expect(persisted.visit?.scheduledStart).toBe(scheduledStart + 30 * 60 * 1000);
+    expect(persisted.visit?.scheduledEnd).toBe(scheduledStart + 120 * 60 * 1000);
+    expect(persisted.visit?.assignedCrewId).toBe(tenant.crewId);
+    expect(persisted.visit?.routeOrder).toBe(4);
+    expect(persisted.assignments.some((assignment) => assignment.crewId === tenant.crewId && assignment.status === "assigned")).toBe(true);
+    expect(persisted.audits.some((event) => event.action === "visit.create" && event.entityId === created.visitId)).toBe(true);
+    expect(persisted.audits.some((event) => event.action === "visit.update_schedule" && event.entityId === created.visitId)).toBe(true);
+  });
+
   it("generates recurring maintenance route visits, assignments, recurrence, and audit trail", async () => {
     const t = convexTest(schema, modules);
     const tenant = await createOperationalTenant(t, "recurring_route");
@@ -441,6 +481,30 @@ describe("Convex operating system functions", () => {
     expect(persisted.visits.every((visit) => Boolean(visit && visit.assignedCrewId === tenant.crewId && visit.checklist.some((item) => item.label === "Confirm recurring scope and property access")))).toBe(true);
     expect(generated.visitIds.every((visitId) => persisted.assignments.some((assignment) => assignment.visitId === visitId && assignment.crewId === tenant.crewId && assignment.status === "assigned"))).toBe(true);
     expect(persisted.audits.some((event) => event.action === "recurring_route.generate" && event.entityId === tenant.jobId && event.after?.count === 3)).toBe(true);
+  });
+
+  it("keeps monthly recurring visits on calendar months instead of 28-day intervals", async () => {
+    const t = convexTest(schema, modules);
+    const tenant = await createOperationalTenant(t, "monthly_calendar_route");
+    const firstStart = new Date(2026, 0, 31, 9, 15, 0, 0).getTime();
+    const generated = await tenant.owner.mutation(api.dispatch.generateRecurringRoute, {
+      organizationId: tenant.organizationId,
+      jobId: tenant.jobId,
+      frequency: "monthly",
+      count: 3,
+      firstStart,
+      durationMinutes: 60,
+      crewId: tenant.crewId,
+    });
+    const visits = await t.run(async (ctx) => Promise.all(generated.visitIds.map((visitId) => ctx.db.get(visitId))));
+
+    expect(new Date(visits[0]!.scheduledStart).getMonth()).toBe(0);
+    expect(new Date(visits[0]!.scheduledStart).getDate()).toBe(31);
+    expect(new Date(visits[1]!.scheduledStart).getMonth()).toBe(1);
+    expect(new Date(visits[1]!.scheduledStart).getDate()).toBe(28);
+    expect(new Date(visits[2]!.scheduledStart).getMonth()).toBe(2);
+    expect(new Date(visits[2]!.scheduledStart).getDate()).toBe(31);
+    expect(visits.every((visit) => new Date(visit!.scheduledStart).getHours() === 9 && new Date(visit!.scheduledStart).getMinutes() === 15)).toBe(true);
   });
 
   it("creates and approves a job change order with margin, schedule, task, and audit impact", async () => {

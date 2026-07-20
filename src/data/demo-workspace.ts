@@ -453,6 +453,7 @@ const baseDemoWorkspace: WorkspaceSnapshot = {
       priority: "normal",
       managerId: "u-justin",
       startDate: at(8, 30),
+      recurrence: "custom",
     },
     {
       id: "job-northgate",
@@ -511,6 +512,20 @@ const baseDemoWorkspace: WorkspaceSnapshot = {
     },
   ],
   recurringServicePlans: [
+    {
+      id: "rsp-brookside-six-step",
+      customerId: "cust-brookside",
+      propertyId: "prop-brookside",
+      jobId: "job-brookside",
+      crewId: "crew-alpha",
+      name: "Brookside six-step treatment season",
+      frequency: "custom",
+      intervalDays: 42,
+      visitDurationMinutes: 120,
+      nextRunAt: at(8, 30, 42),
+      generatedVisitIds: ["visit-brookside-am"],
+      status: "active",
+    },
     {
       id: "rsp-northgate-weekly",
       customerId: "cust-northgate",

@@ -85,6 +85,7 @@ import {
 import { cn, currency, googleMapsUrl, shortDate, timeRange } from "@/lib/utils";
 import { api } from "../../../convex/_generated/api";
 import type { Id } from "../../../convex/_generated/dataModel";
+import { ServiceCalendarView } from "./service-calendar-view";
 
 type View = "dashboard" | "prime_time" | "journeys" | "lead_ops" | "crm" | "pipeline" | "estimates" | "calendar" | "dispatch" | "routing" | "jobs" | "job_analysis" | "job_pricer" | "chemicals" | "field" | "costing" | "profit" | "churn_ltv" | "cost_intel" | "admin" | "onboarding" | "specs";
 
@@ -140,7 +141,7 @@ const viewDescriptions: Partial<Record<View, string>> = {
   crm: "Customers, contacts, properties, notes, and service history.",
   pipeline: "Move opportunities from first conversation to approved work.",
   estimates: "Send, approve, and convert customer estimates into scheduled work.",
-  calendar: "See the day clearly and open any scheduled visit.",
+  calendar: "Schedule visits, balance crew capacity, and resolve daily conflicts.",
   dispatch: "Balance crews, timing, route order, and workload conflicts.",
   routing: "Plan efficient service routes and open stops in the field view.",
   jobs: "Run active work from approved scope through completion.",
@@ -578,6 +579,20 @@ type LiveActions = {
   advanceOpportunity?: (opportunityId: string, stage: Opportunity["stage"]) => void;
   assignVisit?: (visitId: string, crewId: string) => void;
   reorderVisit?: (visitId: string, routeOrder: number) => void;
+  updateVisit?: (input: {
+    visitId: string;
+    scheduledStart: number;
+    scheduledEnd: number;
+    crewId: string;
+    status: JobVisit["status"];
+    routeOrder: number;
+  }) => Promise<void>;
+  createVisit?: (input: {
+    jobId: string;
+    scheduledStart: number;
+    durationMinutes: number;
+    crewId: string;
+  }) => Promise<{ visitId?: string; routeOrder?: number; scheduledEnd?: number } | void>;
   generateRecurringRoute?: (input: {
     jobId: string;
     frequency: "weekly" | "biweekly" | "monthly" | "seasonal" | "custom";
@@ -2276,6 +2291,10 @@ function LandscapeOsLiveApp({ initialDemoPersona, initialView }: { initialDemoPe
   const assignProductionVisitMutation = useMutation(api.dispatch.assignVisit);
   const reorderVisitMutation = useMutation(api.demo.reorderVisit);
   const reorderProductionVisitMutation = useMutation(api.dispatch.reorderVisit);
+  const updateVisitMutation = useMutation(api.demo.updateVisit);
+  const updateProductionVisitMutation = useMutation(api.dispatch.updateVisit);
+  const createVisitMutation = useMutation(api.demo.createVisit);
+  const createProductionVisitMutation = useMutation(api.dispatch.createVisit);
   const generateRecurringRouteMutation = useMutation(api.demo.generateRecurringRoute);
   const generateProductionRecurringRouteMutation = useMutation(api.dispatch.generateRecurringRoute);
   const createChangeOrderMutation = useMutation(api.demo.createChangeOrder);
@@ -2548,11 +2567,52 @@ function LandscapeOsLiveApp({ initialDemoPersona, initialView }: { initialDemoPe
         void assignVisitMutation({ visitId: visitId as Id<"jobVisits">, crewId: crewId as Id<"crews"> }).catch((error) => logConvexWriteFailure("assignVisit", error));
       },
       reorderVisit: (visitId, routeOrder) => {
+        if (isLocalDemoPersona) return;
         if (!isDemoMode && activeOrganizationId) {
           void reorderProductionVisitMutation({ organizationId: activeOrganizationId as Id<"organizations">, visitId: visitId as Id<"jobVisits">, routeOrder }).catch((error) => logConvexWriteFailure("reorderVisit", error));
           return;
         }
         void reorderVisitMutation({ visitId: visitId as Id<"jobVisits">, routeOrder }).catch((error) => logConvexWriteFailure("reorderVisit", error));
+      },
+      updateVisit: async (input) => {
+        if (isLocalDemoPersona) return;
+        try {
+          if (!isDemoMode && activeOrganizationId) {
+            await updateProductionVisitMutation({
+              organizationId: activeOrganizationId as Id<"organizations">,
+              visitId: input.visitId as Id<"jobVisits">,
+              scheduledStart: input.scheduledStart,
+              scheduledEnd: input.scheduledEnd,
+              crewId: input.crewId ? input.crewId as Id<"crews"> : null,
+              status: input.status,
+              routeOrder: input.routeOrder,
+            });
+            return;
+          }
+          await updateVisitMutation({
+            visitId: input.visitId as Id<"jobVisits">,
+            scheduledStart: input.scheduledStart,
+            scheduledEnd: input.scheduledEnd,
+            crewId: input.crewId ? input.crewId as Id<"crews"> : null,
+            status: input.status,
+            routeOrder: input.routeOrder,
+          });
+        } catch (error) {
+          logConvexWriteFailure("updateVisit", error);
+          throw error;
+        }
+      },
+      createVisit: async (input) => {
+        if (isLocalDemoPersona) return;
+        try {
+          if (!isDemoMode && activeOrganizationId) {
+            return await createProductionVisitMutation({ organizationId: activeOrganizationId as Id<"organizations">, jobId: input.jobId as Id<"jobs">, scheduledStart: input.scheduledStart, durationMinutes: input.durationMinutes, crewId: input.crewId ? input.crewId as Id<"crews"> : null });
+          }
+          return await createVisitMutation({ jobId: input.jobId as Id<"jobs">, scheduledStart: input.scheduledStart, durationMinutes: input.durationMinutes, crewId: input.crewId ? input.crewId as Id<"crews"> : null });
+        } catch (error) {
+          logConvexWriteFailure("createVisit", error);
+          throw error;
+        }
       },
       generateRecurringRoute: async (input) => {
         try {
@@ -2804,9 +2864,12 @@ function LandscapeOsLiveApp({ initialDemoPersona, initialView }: { initialDemoPe
       createLeadForCustomerMutation,
       createProductionLeadMutation,
       createLeadMutation,
+      createProductionVisitMutation,
+      createVisitMutation,
       generateProductionRecurringRouteMutation,
       generateRecurringRouteMutation,
       isDemoMode,
+      isLocalDemoPersona,
       reorderProductionVisitMutation,
       reorderVisitMutation,
       sendProductionEstimateMutation,
@@ -2817,6 +2880,8 @@ function LandscapeOsLiveApp({ initialDemoPersona, initialView }: { initialDemoPe
       submitVisitMutation,
       toggleServiceMutation,
       toggleProductionServiceMutation,
+      updateProductionVisitMutation,
+      updateVisitMutation,
       upsertProductionServiceCatalogItemMutation,
       upsertServiceCatalogItemMutation,
     ],
@@ -4485,6 +4550,71 @@ function LandscapeOsWorkspace({
     liveActions?.assignVisit?.(visitId, crewId);
   }
 
+  async function updateScheduledVisit(input: {
+    visitId: string;
+    scheduledStart: number;
+    scheduledEnd: number;
+    crewId: string;
+    status: JobVisit["status"];
+    routeOrder: number;
+  }) {
+    const previous = workspaceRef.current.visits.find((visit) => visit.id === input.visitId);
+    setWorkspace((current) => ({
+      ...current,
+      visits: current.visits.map((visit) => visit.id === input.visitId ? {
+        ...visit,
+        scheduledStart: input.scheduledStart,
+        scheduledEnd: input.scheduledEnd,
+        crewId: input.crewId,
+        status: input.status,
+        routeOrder: Math.max(1, Math.round(input.routeOrder)),
+      } : visit),
+    }));
+    try {
+      await liveActions?.updateVisit?.(input);
+    } catch (error) {
+      if (previous) {
+        setWorkspace((current) => ({
+          ...current,
+          visits: current.visits.map((visit) => visit.id === input.visitId ? previous : visit),
+        }));
+      }
+      throw error;
+    }
+  }
+
+  async function createScheduledVisit(input: { jobId: string; scheduledStart: number; durationMinutes: number; crewId: string }) {
+    const liveResult = await liveActions?.createVisit?.(input);
+    const visitId = liveResult?.visitId ?? newId("visit");
+    const job = workspaceRef.current.jobs.find((item) => item.id === input.jobId);
+    if (!job) throw new Error("Choose a valid job before scheduling the visit.");
+    const scheduledEnd = liveResult?.scheduledEnd ?? input.scheduledStart + input.durationMinutes * 60 * 1000;
+    const routeOrder = liveResult?.routeOrder ?? workspaceRef.current.visits
+      .filter((visit) => sameCalendarDay(visit.scheduledStart, input.scheduledStart) && visit.crewId === input.crewId)
+      .reduce((max, visit) => Math.max(max, visit.routeOrder), 0) + 1;
+    setWorkspace((current) => current.visits.some((visit) => visit.id === visitId) ? current : ({
+      ...current,
+      visits: [...current.visits, {
+        id: visitId,
+        jobId: job.id,
+        customerId: job.customerId,
+        propertyId: job.propertyId,
+        scheduledStart: input.scheduledStart,
+        scheduledEnd,
+        status: "scheduled",
+        routeOrder,
+        crewId: input.crewId,
+        checklist: [
+          { id: "scheduled-1", label: "Confirm property access and approved scope", isDone: false },
+          { id: "scheduled-2", label: "Complete scheduled service", isDone: false },
+          { id: "scheduled-3", label: "Log materials, photos, and customer notes", isDone: false },
+        ],
+        notes: "Scheduled from the service calendar.",
+      }],
+    }));
+    return { visitId, routeOrder, scheduledEnd };
+  }
+
   function moveRouteStop(visitId: string, direction: "up" | "down") {
     const orderedVisits = workspaceRef.current.visits
       .slice()
@@ -4522,7 +4652,7 @@ function LandscapeOsWorkspace({
     durationMinutes: number;
     crewId?: string;
   }) {
-    const intervalDaysByFrequency = { weekly: 7, biweekly: 14, monthly: 28, seasonal: 90, custom: 7 } as const;
+    const intervalDaysByFrequency = { weekly: 7, biweekly: 14, monthly: 30, seasonal: 90, custom: 7 } as const;
     const count = Math.max(1, Math.min(26, Math.round(input.count)));
     const durationMinutes = Math.max(30, Math.min(12 * 60, Math.round(input.durationMinutes)));
     const intervalDays = intervalDaysByFrequency[input.frequency];
@@ -4536,7 +4666,7 @@ function LandscapeOsWorkspace({
       const job = current.jobs.find((item) => item.id === input.jobId);
       if (!job) return current;
       const generatedVisits = visitIds.map((visitId, index) => {
-        const scheduledStart = input.firstStart + index * intervalDays * 24 * 60 * 60 * 1000;
+        const scheduledStart = recurringVisitStart(input.firstStart, index, input.frequency, intervalDays);
         const crewId = input.crewId ?? current.crews.find((crew) => crew.active)?.id ?? "";
         const routeOrder = current.visits
           .filter((visit) => sameCalendarDay(visit.scheduledStart, scheduledStart) && visit.crewId === crewId)
@@ -4560,7 +4690,7 @@ function LandscapeOsWorkspace({
         };
       });
       generatedCount = generatedVisits.length;
-      const nextRunAt = liveResult?.nextRunAt ?? input.firstStart + generatedCount * intervalDays * 24 * 60 * 60 * 1000;
+      const nextRunAt = liveResult?.nextRunAt ?? recurringVisitStart(input.firstStart, generatedCount, input.frequency, intervalDays);
       return {
         ...current,
         jobs: current.jobs.map((item) => (item.id === job.id ? { ...item, recurrence: input.frequency } : item)),
@@ -5195,7 +5325,7 @@ function LandscapeOsWorkspace({
             {view === "pipeline" && <PipelineView workspace={workspace} customersById={customersById} moveOpportunity={moveOpportunity} createQuoteFromOpportunity={createQuoteFromOpportunity} sendQuoteToCustomer={sendQuoteToCustomer} acceptQuoteFromCustomer={acceptQuoteFromCustomer} convertAcceptedQuoteToJob={convertAcceptedQuoteToJob} openJob={(jobId) => { setSelectedJobId(jobId); setView("jobs"); }} />}
             {view === "estimates" && <EstimatesView workspace={workspace} customersById={customersById} sendQuoteToCustomer={sendQuoteToCustomer} acceptQuoteFromCustomer={acceptQuoteFromCustomer} convertAcceptedQuoteToJob={convertAcceptedQuoteToJob} openJob={(jobId) => { setSelectedJobId(jobId); setView("jobs"); }} />}
             {view === "calendar" && (
-              <CalendarDayView
+              <ServiceCalendarView
                 workspace={workspace}
                 customersById={customersById}
                 propertiesById={propertiesById}
@@ -5204,6 +5334,9 @@ function LandscapeOsWorkspace({
                 setSelectedVisitId={setSelectedVisitId}
                 setView={setView}
                 generateRecurringRoute={generateRecurringRoute}
+                updateVisit={updateScheduledVisit}
+                createVisit={createScheduledVisit}
+                operatingDepth={effectiveOperatingDepth}
               />
             )}
             {view === "dispatch" && (
@@ -5832,12 +5965,25 @@ function calendarInputDate(value: number) {
 function recurringFrequencyLabel(frequency: WorkspaceSnapshot["recurringServicePlans"][number]["frequency"], intervalDays: number) {
   if (frequency === "weekly") return "Weekly";
   if (frequency === "biweekly") return "Every 2 weeks";
-  if (frequency === "monthly") return "Every 4 weeks";
+  if (frequency === "monthly") return "Monthly";
   if (frequency === "seasonal") return "Seasonal";
   return `Every ${intervalDays} days`;
 }
 
-function CalendarDayView({
+function recurringVisitStart(firstStart: number, index: number, frequency: "weekly" | "biweekly" | "monthly" | "seasonal" | "custom", intervalDays: number) {
+  const result = new Date(firstStart);
+  if (frequency === "monthly" || frequency === "seasonal") {
+    const day = result.getDate();
+    result.setDate(1);
+    result.setMonth(result.getMonth() + index * (frequency === "seasonal" ? 3 : 1));
+    result.setDate(Math.min(day, new Date(result.getFullYear(), result.getMonth() + 1, 0).getDate()));
+  } else {
+    result.setDate(result.getDate() + index * intervalDays);
+  }
+  return result.getTime();
+}
+
+export function LegacyCalendarDayView({
   workspace,
   customersById,
   propertiesById,
@@ -6055,7 +6201,7 @@ function CalendarDayView({
                 <select aria-label="Cadence frequency" value={cadenceFrequency} onChange={(event) => setCadenceFrequency(event.target.value as typeof cadenceFrequency)} className="h-10 rounded-md border border-stone-200 bg-white px-3 text-sm font-medium text-stone-900">
                   <option value="weekly">Weekly</option>
                   <option value="biweekly">Every 2 weeks</option>
-                  <option value="monthly">Every 4 weeks</option>
+                  <option value="monthly">Monthly</option>
                   <option value="seasonal">Seasonal</option>
                 </select>
               </Field>

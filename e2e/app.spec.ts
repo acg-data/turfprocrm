@@ -282,16 +282,27 @@ test("dispatch surfaces route confidence and crew risk", async ({ page }) => {
   await expect(page.getByText("3 generated").first()).toBeVisible();
 
   await openAppView(page, "Calendar");
-  await expect(page.getByRole("heading", { name: "Daily routes" })).toBeVisible();
-  await expect(page.getByRole("form", { name: "Add service cadence" })).toBeVisible();
-  await page.getByLabel("Cadence client job").selectOption({ label: "Northgate Industrial Park - Northgate weekly maintenance" });
-  await page.getByLabel("Cadence frequency").selectOption("biweekly");
-  await page.getByLabel("Cadence visit count").selectOption("4");
-  await page.getByLabel("Cadence crew").selectOption({ label: "Charlie Maintenance" });
-  await page.getByRole("button", { name: "Add cadence to calendar" }).click();
-  await expect(page.getByText(/4 every 2 weeks visits added for Northgate weekly maintenance\./)).toBeVisible({ timeout: convexWriteTimeout });
-  await expect(page.getByRole("region", { name: "Charlie Maintenance route" })).toContainText("Northgate Industrial Park");
-  await expect(page.getByRole("region", { name: "Charlie Maintenance route" })).toContainText("Every 2 weeks");
+  await expect(page.getByText("Service planner", { exact: true })).toBeVisible();
+  await expect(page.getByRole("button", { name: "Day", exact: true })).toBeVisible();
+  await page.getByRole("button", { name: "Visit", exact: true }).click();
+  const scheduleDialog = page.getByRole("dialog", { name: "Schedule visit" });
+  await expect(scheduleDialog).toBeVisible();
+  await scheduleDialog.getByRole("button", { name: "Recurring", exact: true }).click();
+  await scheduleDialog.getByRole("combobox", { name: "Customer job" }).selectOption({ label: "Northgate Industrial Park - Northgate weekly maintenance" });
+  await scheduleDialog.getByRole("combobox", { name: "Cadence" }).selectOption("biweekly");
+  await scheduleDialog.getByRole("combobox", { name: "Visits" }).selectOption("4");
+  await scheduleDialog.getByRole("combobox", { name: "Crew" }).selectOption({ label: "Charlie Maintenance" });
+  await scheduleDialog.getByRole("button", { name: "Create recurring visits" }).click();
+  await expect(scheduleDialog.getByText("4 recurring visits added.", { exact: true })).toBeVisible({ timeout: convexWriteTimeout });
+  await expect(scheduleDialog.getByLabel("Active service cadences").getByText("Every 2 weeks", { exact: true }).first()).toBeVisible();
+  await scheduleDialog.getByRole("button", { name: "Close drawer" }).click();
+  await expect(page.getByText("Northgate Industrial Park").first()).toBeVisible();
+  await page.getByRole("button", { name: "Week", exact: true }).click();
+  await expect(page.getByRole("button", { name: "Week", exact: true })).toHaveAttribute("class", /bg-white/);
+  await page.getByRole("button", { name: "Month", exact: true }).click();
+  await expect(page.getByText("Mon", { exact: true })).toBeVisible();
+  await page.getByRole("button", { name: "Agenda", exact: true }).click();
+  await expect(page.getByRole("button", { name: "Agenda", exact: true })).toHaveAttribute("class", /bg-white/);
 
   await openAppView(page, "Job costing");
   await expect(page.getByRole("heading", { name: "Service Package Picker" })).toBeVisible();

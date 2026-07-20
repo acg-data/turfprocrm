@@ -2516,6 +2516,79 @@ export const reorderVisit = mutation({
   },
 });
 
+export const updateVisit = mutation({
+  args: {
+    visitId: v.id("jobVisits"),
+    scheduledStart: v.number(),
+    scheduledEnd: v.number(),
+    crewId: v.union(v.id("crews"), v.null()),
+    status: v.union(v.literal("scheduled"), v.literal("en_route"), v.literal("on_site"), v.literal("complete"), v.literal("missed"), v.literal("canceled")),
+    routeOrder: v.number(),
+  },
+  handler: async (ctx, args) => {
+    const org = await requireDemoOrg(ctx);
+    const visit = await ctx.db.get(args.visitId);
+    if (!visit || visit.organizationId !== org._id) throw new Error("Visit not found.");
+    if (!Number.isFinite(args.scheduledStart) || !Number.isFinite(args.scheduledEnd) || args.scheduledEnd <= args.scheduledStart) throw new Error("Visit end time must be after its start time.");
+    if (args.scheduledEnd - args.scheduledStart > 24 * 60 * 60 * 1000) throw new Error("A visit cannot exceed 24 hours.");
+    const crew = args.crewId ? await ctx.db.get(args.crewId) : null;
+    if (args.crewId && (!crew || crew.organizationId !== org._id)) throw new Error("Crew not found.");
+    const owner = await ctx.db.query("memberships").withIndex("by_org", (q) => q.eq("organizationId", org._id)).first();
+    const routeOrder = Math.max(1, Math.round(args.routeOrder));
+    const now = Date.now();
+    await ctx.db.patch(args.visitId, {
+      scheduledStart: args.scheduledStart,
+      scheduledEnd: args.scheduledEnd,
+      assignedCrewId: args.crewId ?? undefined,
+      status: args.status,
+      routeOrder,
+      completedAt: args.status === "complete" ? visit.completedAt ?? now : undefined,
+      updatedAt: now,
+    });
+    const assignments = await ctx.db.query("visitAssignments").withIndex("by_visit", (q) => q.eq("visitId", args.visitId)).collect();
+    const primaryAssignment = assignments.find((assignment) => assignment.organizationId === org._id && assignment.role === "Primary crew");
+    if (args.crewId) {
+      if (primaryAssignment) await ctx.db.patch(primaryAssignment._id, { crewId: args.crewId, status: "assigned", updatedAt: now });
+      else await ctx.db.insert("visitAssignments", { organizationId: org._id, visitId: args.visitId, crewId: args.crewId, role: "Primary crew", status: "assigned", createdAt: now, updatedAt: now });
+    } else if (primaryAssignment) {
+      await ctx.db.delete(primaryAssignment._id);
+    }
+    await ctx.db.insert("auditEvents", {
+      organizationId: org._id,
+      actorUserId: owner?.userId,
+      action: "demo.visit.update_schedule",
+      entityType: "visit",
+      entityId: args.visitId,
+      summary: `Updated visit schedule${crew ? ` for ${crew.name}` : " and left it unassigned"}`,
+      before: { scheduledStart: visit.scheduledStart, scheduledEnd: visit.scheduledEnd, assignedCrewId: visit.assignedCrewId, status: visit.status, routeOrder: visit.routeOrder },
+      after: { scheduledStart: args.scheduledStart, scheduledEnd: args.scheduledEnd, assignedCrewId: args.crewId, status: args.status, routeOrder },
+      createdAt: now,
+    });
+    return { visitId: args.visitId, scheduledStart: args.scheduledStart, scheduledEnd: args.scheduledEnd, crewId: args.crewId, status: args.status, routeOrder };
+  },
+});
+
+export const createVisit = mutation({
+  args: { jobId: v.id("jobs"), scheduledStart: v.number(), durationMinutes: v.number(), crewId: v.union(v.id("crews"), v.null()) },
+  handler: async (ctx, args) => {
+    const org = await requireDemoOrg(ctx);
+    const job = await ctx.db.get(args.jobId);
+    if (!job || job.organizationId !== org._id) throw new Error("Job not found.");
+    const crew = args.crewId ? await ctx.db.get(args.crewId) : null;
+    if (args.crewId && (!crew || crew.organizationId !== org._id)) throw new Error("Crew not found.");
+    const durationMinutes = Math.max(15, Math.min(24 * 60, Math.round(args.durationMinutes)));
+    const scheduledEnd = args.scheduledStart + durationMinutes * 60 * 1000;
+    const existingVisits = await ctx.db.query("jobVisits").withIndex("by_org", (q) => q.eq("organizationId", org._id)).collect();
+    const routeOrder = existingVisits.filter((visit) => visit.assignedCrewId === args.crewId).reduce((max, visit) => Math.max(max, visit.routeOrder ?? 0), 0) + 1;
+    const owner = await ctx.db.query("memberships").withIndex("by_org", (q) => q.eq("organizationId", org._id)).first();
+    const now = Date.now();
+    const visitId = await ctx.db.insert("jobVisits", { organizationId: org._id, jobId: job._id, customerId: job.customerId, propertyId: job.propertyId, scheduledStart: args.scheduledStart, scheduledEnd, status: "scheduled", routeOrder, assignedCrewId: args.crewId ?? undefined, checklist: [{ id: "scheduled-1", label: "Confirm property access and approved scope", isDone: false }, { id: "scheduled-2", label: "Complete scheduled service", isDone: false }, { id: "scheduled-3", label: "Log materials, photos, and customer notes", isDone: false }], notes: "Scheduled from the service calendar.", createdAt: now, updatedAt: now });
+    if (args.crewId) await ctx.db.insert("visitAssignments", { organizationId: org._id, visitId, crewId: args.crewId, role: "Primary crew", status: "assigned", createdAt: now, updatedAt: now });
+    await ctx.db.insert("auditEvents", { organizationId: org._id, actorUserId: owner?.userId, action: "demo.visit.create", entityType: "visit", entityId: visitId, summary: `Scheduled ${job.title}${crew ? ` for ${crew.name}` : " without a crew"}`, after: { jobId: job._id, scheduledStart: args.scheduledStart, scheduledEnd, assignedCrewId: args.crewId, routeOrder }, createdAt: now });
+    return { visitId, routeOrder, scheduledEnd };
+  },
+});
+
 export const generateRecurringRoute = mutation({
   args: {
     jobId: v.id("jobs"),
@@ -2532,7 +2605,7 @@ export const generateRecurringRoute = mutation({
     const crew = args.crewId ? await ctx.db.get(args.crewId) : null;
     if (args.crewId && (!crew || crew.organizationId !== org._id)) throw new Error("Crew not found.");
 
-    const intervalDaysByFrequency = { weekly: 7, biweekly: 14, monthly: 28, seasonal: 90, custom: 7 } as const;
+    const intervalDaysByFrequency = { weekly: 7, biweekly: 14, monthly: 30, seasonal: 90, custom: 7 } as const;
     const count = Math.max(1, Math.min(26, Math.round(args.count)));
     const durationMinutes = Math.max(30, Math.min(12 * 60, Math.round(args.durationMinutes)));
     const intervalDays = intervalDaysByFrequency[args.frequency];
@@ -2559,7 +2632,17 @@ export const generateRecurringRoute = mutation({
 
     const visitIds: Array<Id<"jobVisits">> = [];
     for (let index = 0; index < count; index += 1) {
-      const scheduledStart = args.firstStart + index * intervalDays * 24 * 60 * 60 * 1000;
+      const recurringDate = new Date(args.firstStart);
+      if (args.frequency === "monthly" || args.frequency === "seasonal") {
+        const day = recurringDate.getDate();
+        recurringDate.setDate(1);
+        recurringDate.setMonth(recurringDate.getMonth() + index * (args.frequency === "seasonal" ? 3 : 1));
+        const lastDay = new Date(recurringDate.getFullYear(), recurringDate.getMonth() + 1, 0).getDate();
+        recurringDate.setDate(Math.min(day, lastDay));
+      } else {
+        recurringDate.setDate(recurringDate.getDate() + index * intervalDays);
+      }
+      const scheduledStart = recurringDate.getTime();
       const visitId = await ctx.db.insert("jobVisits", {
         organizationId: org._id,
         jobId: job._id,
@@ -2593,10 +2676,20 @@ export const generateRecurringRoute = mutation({
       }
     }
 
+    const nextRunAt = (() => {
+      const next = new Date(args.firstStart);
+      if (args.frequency === "monthly" || args.frequency === "seasonal") {
+        const day = next.getDate();
+        next.setDate(1);
+        next.setMonth(next.getMonth() + count * (args.frequency === "seasonal" ? 3 : 1));
+        next.setDate(Math.min(day, new Date(next.getFullYear(), next.getMonth() + 1, 0).getDate()));
+      } else next.setDate(next.getDate() + count * intervalDays);
+      return next.getTime();
+    })();
     await ctx.db.patch(planId, {
       lastGeneratedAt: now,
       generatedVisitIds: visitIds,
-      nextRunAt: args.firstStart + count * intervalDays * 24 * 60 * 60 * 1000,
+      nextRunAt,
       updatedAt: now,
     });
     await ctx.db.patch(job._id, { recurrence: args.frequency, updatedAt: now });
@@ -2611,7 +2704,7 @@ export const generateRecurringRoute = mutation({
       createdAt: now,
     });
 
-    return { planId, visitIds, generatedCount: visitIds.length, nextRunAt: args.firstStart + count * intervalDays * 24 * 60 * 60 * 1000 };
+    return { planId, visitIds, generatedCount: visitIds.length, nextRunAt };
   },
 });
 
