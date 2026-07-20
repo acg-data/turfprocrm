@@ -3590,7 +3590,9 @@ function LandscapeOsWorkspace({
     const tomorrow = todayStart.getTime() + 24 * 60 * 60 * 1000;
     return {
       pipelineValue: openOpps.reduce((sum, opp) => sum + opp.valueCents, 0),
-      todayVisits: workspace.visits.filter((visit) => visit.scheduledStart >= todayStart.getTime() && visit.scheduledStart < tomorrow),
+      todayVisits: workspace.visits
+        .filter((visit) => visit.scheduledStart >= todayStart.getTime() && visit.scheduledStart < tomorrow)
+        .sort((left, right) => left.scheduledStart - right.scheduledStart),
       overdueTasks: workspace.tasks.filter((task) => task.status !== "done" && task.dueAt < now()),
       openEstimates: workspace.estimates.filter((estimate) => ["draft", "sent"].includes(estimate.status)),
     };
@@ -5578,7 +5580,7 @@ function DashboardView({
   const unassignedVisits = workspace.visits.filter((visit) => !visit.crewId && !["complete", "canceled"].includes(visit.status));
   const staleOpportunities = workspace.opportunities.filter((opportunity) => !["won", "lost"].includes(opportunity.stage) && opportunity.updatedAt < dashboardOpenedAt - 7 * 24 * 60 * 60 * 1000);
   const actionItems = [
-    { id: "overdue-tasks", title: `${dashboard.overdueTasks.length} overdue ${dashboard.overdueTasks.length === 1 ? "task" : "tasks"}`, detail: "Close the loop on customer and production commitments.", count: dashboard.overdueTasks.length, view: "jobs" as View, lenses: ["owner", "operations", "field"] },
+    { id: "overdue-tasks", title: `${dashboard.overdueTasks.length} overdue ${dashboard.overdueTasks.length === 1 ? "task" : "tasks"}`, detail: "Close the loop on customer and production commitments.", count: dashboard.overdueTasks.length, view: "jobs" as View, lenses: ["owner", "operations", "field"], urgent: true },
     { id: "stale-opportunities", title: `${staleOpportunities.length} sales ${staleOpportunities.length === 1 ? "follow-up" : "follow-ups"} due`, detail: "Advance, reschedule, or close opportunities that need a next step.", count: staleOpportunities.length, view: "pipeline" as View, lenses: ["owner", "sales"] },
     { id: "unassigned-visits", title: `${unassignedVisits.length} unassigned ${unassignedVisits.length === 1 ? "visit" : "visits"}`, detail: "Assign a crew before the route is released to the field.", count: unassignedVisits.length, view: "dispatch" as View, lenses: ["owner", "operations"] },
     { id: "open-estimates", title: `${dashboard.openEstimates.length} open ${dashboard.openEstimates.length === 1 ? "estimate" : "estimates"}`, detail: "Review aging quotes and capture the next customer decision.", count: dashboard.openEstimates.length, view: "pipeline" as View, lenses: ["owner", "sales"] },
@@ -5587,8 +5589,8 @@ function DashboardView({
   return (
     <div className="grid gap-4">
       <div className="grid gap-4 md:grid-cols-2 xl:grid-cols-4">
-        <Metric icon={<DollarSign size={18} />} label="Open pipeline" value={currency(dashboard.pipelineValue)} detail="Open pipeline" onClick={() => setView("pipeline")} />
-        <Metric icon={<Route size={18} />} label="Today visits" value={String(dashboard.todayVisits.length)} detail="Open today's calendar" onClick={() => setView("calendar")} />
+        <Metric icon={<DollarSign size={18} />} label="Open pipeline" value={currency(dashboard.pipelineValue)} detail="Review pipeline" onClick={() => setView("pipeline")} />
+        <Metric icon={<Route size={18} />} label="Today's visits" value={String(dashboard.todayVisits.length)} detail="Open today's calendar" onClick={() => setView("calendar")} />
         <Metric icon={<FileText size={18} />} label="Open estimates" value={String(dashboard.openEstimates.length)} detail="Review estimates" onClick={() => setView("pipeline")} />
         <Metric icon={<ClipboardCheck size={18} />} label="Overdue tasks" value={String(dashboard.overdueTasks.length)} detail="Review job tasks" onClick={() => setView("jobs")} tone={dashboard.overdueTasks.length ? "danger" : "success"} />
       </div>
@@ -5671,7 +5673,7 @@ function DashboardView({
               </div>
             ) : actionItems.map((item) => (
               <button key={item.id} type="button" onClick={() => setView(item.view)} className="group flex items-start gap-3 rounded-md border border-stone-200 p-3 text-left transition hover:border-[#8aa99a] hover:bg-[#f5f8f5]">
-                <span className="grid h-8 w-8 shrink-0 place-items-center rounded-md bg-amber-50 text-sm font-bold text-amber-700">{item.count}</span>
+                <span className={cn("grid h-8 w-8 shrink-0 place-items-center rounded-md text-sm font-bold", "urgent" in item && item.urgent ? "bg-rose-50 text-rose-700" : "bg-amber-50 text-amber-700")}>{item.count}</span>
                 <span className="min-w-0 flex-1">
                   <span className="block text-sm font-bold text-stone-900">{item.title}</span>
                   <span className="mt-1 block text-xs leading-5 text-stone-500">{item.detail}</span>
@@ -5689,7 +5691,7 @@ function DashboardView({
           <Badge>{workspace.activities.length} events</Badge>
         </div>
         <div className="mt-4 grid gap-3 md:grid-cols-2 xl:grid-cols-3">
-          {workspace.activities.length === 0 ? <div className="text-sm text-stone-500">Calls, notes, estimates, schedule changes, and completed visits will appear here.</div> : workspace.activities.slice(0, 6).map((activity) => (
+          {workspace.activities.length === 0 ? <div className="text-sm text-stone-500">Calls, notes, estimates, schedule changes, and completed visits will appear here.</div> : [...workspace.activities].sort((left, right) => right.occurredAt - left.occurredAt).slice(0, 6).map((activity) => (
             <div key={activity.id} className="flex gap-3 rounded-md border border-stone-200 p-3">
               <div className="mt-1 h-2 w-2 shrink-0 rounded-full bg-[#224036]" />
               <div className="min-w-0">
