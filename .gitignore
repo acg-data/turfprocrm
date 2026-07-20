@@ -19,6 +19,7 @@
 /.next/
 /out/
 /.open-next/
+/.sites-wrangler-build/
 /.wrangler/
 cloudflare-env.d.ts
 
