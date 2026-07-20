@@ -10,6 +10,7 @@
 
 import type * as activities from "../activities.js";
 import type * as admin from "../admin.js";
+import type * as billing from "../billing.js";
 import type * as crm from "../crm.js";
 import type * as crons from "../crons.js";
 import type * as dashboard from "../dashboard.js";
@@ -32,6 +33,7 @@ import type * as pipeline from "../pipeline.js";
 import type * as pricing from "../pricing.js";
 import type * as setup from "../setup.js";
 import type * as specs from "../specs.js";
+import type * as workspace from "../workspace.js";
 
 import type {
   ApiFromModules,
@@ -42,6 +44,7 @@ import type {
 declare const fullApi: ApiFromModules<{
   activities: typeof activities;
   admin: typeof admin;
+  billing: typeof billing;
   crm: typeof crm;
   crons: typeof crons;
   dashboard: typeof dashboard;
@@ -64,6 +67,7 @@ declare const fullApi: ApiFromModules<{
   pricing: typeof pricing;
   setup: typeof setup;
   specs: typeof specs;
+  workspace: typeof workspace;
 }>;
 
 /**

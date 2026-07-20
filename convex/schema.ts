@@ -155,7 +155,17 @@ const importStatus = v.union(v.literal("queued"), v.literal("processing"), v.lit
 const importRowStatus = v.union(v.literal("pending"), v.literal("imported"), v.literal("skipped"), v.literal("failed"));
 const exportStatus = v.union(v.literal("queued"), v.literal("running"), v.literal("completed"), v.literal("failed"));
 const billingPlan = v.union(v.literal("free"), v.literal("starter"), v.literal("pro"), v.literal("growth"), v.literal("enterprise"));
-const subscriptionStatus = v.union(v.literal("trialing"), v.literal("active"), v.literal("past_due"), v.literal("canceled"), v.literal("manual"));
+const subscriptionStatus = v.union(
+  v.literal("trialing"),
+  v.literal("active"),
+  v.literal("past_due"),
+  v.literal("canceled"),
+  v.literal("unpaid"),
+  v.literal("incomplete"),
+  v.literal("incomplete_expired"),
+  v.literal("paused"),
+  v.literal("manual"),
+);
 const routeStatus = v.union(v.literal("draft"), v.literal("published"), v.literal("in_progress"), v.literal("completed"));
 const automationStatus = v.union(v.literal("draft"), v.literal("active"), v.literal("paused"), v.literal("archived"));
 const costSource = v.union(v.literal("admin_override"), v.literal("vendor_import"), v.literal("nws"), v.literal("bls"), v.literal("fred"), v.literal("world_bank"), v.literal("manual"));
@@ -1560,6 +1570,9 @@ export default defineSchema({
     organizationId: v.id("organizations"),
     stripeCustomerId: v.optional(v.string()),
     stripeSubscriptionId: v.optional(v.string()),
+    paddleCustomerId: v.optional(v.string()),
+    paddleSubscriptionId: v.optional(v.string()),
+    paddleTransactionId: v.optional(v.string()),
     plan: billingPlan,
     status: subscriptionStatus,
     seats: v.number(),
@@ -1571,12 +1584,17 @@ export default defineSchema({
   })
     .index("by_org", ["organizationId"])
     .index("by_stripe_customer", ["stripeCustomerId"])
+    .index("by_stripe_subscription", ["stripeSubscriptionId"])
+    .index("by_paddle_customer", ["paddleCustomerId"])
+    .index("by_paddle_subscription", ["paddleSubscriptionId"])
+    .index("by_paddle_transaction", ["paddleTransactionId"])
     .index("by_status", ["status"]),
 
   invoices: defineTable({
     organizationId: v.id("organizations"),
     subscriptionId: v.optional(v.id("subscriptions")),
     stripeInvoiceId: v.optional(v.string()),
+    paddleTransactionId: v.optional(v.string()),
     status: v.union(v.literal("draft"), v.literal("open"), v.literal("paid"), v.literal("void"), v.literal("uncollectible")),
     amountDueCents: v.number(),
     amountPaidCents: v.number(),
@@ -1587,7 +1605,8 @@ export default defineSchema({
   })
     .index("by_org", ["organizationId"])
     .index("by_subscription", ["subscriptionId"])
-    .index("by_stripe_invoice", ["stripeInvoiceId"]),
+    .index("by_stripe_invoice", ["stripeInvoiceId"])
+    .index("by_paddle_transaction", ["paddleTransactionId"]),
 
   onboardingChecklistItems: defineTable({
     organizationId: v.id("organizations"),

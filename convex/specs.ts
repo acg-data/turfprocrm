@@ -195,7 +195,7 @@ const readiness = [
   { item: "Convex scheduled jobs", status: "done", owner: "engineering" },
   { item: "Live NWS/BLS/FRED/World Bank API adapters", status: "next", owner: "data" },
   { item: "Clerk organization setup", status: "next", owner: "ops" },
-  { item: "Stripe billing and plan gates", status: "next", owner: "ops" },
+  { item: "Paddle billing and plan gates", status: "next", owner: "ops" },
   { item: "Legacy Google Sheet importer", status: "next", owner: "engineering" },
   { item: "Postgres reporting mirror", status: "deferred", owner: "data" },
   { item: "Production observability", status: "next", owner: "engineering" },

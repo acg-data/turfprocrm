@@ -22,16 +22,20 @@
     "test:e2e": "playwright test",
     "verify": "npm run lint && npm run typecheck && npm run test:once && npm run build"
   },
+  "overrides": {
+    "postcss": "8.5.19"
+  },
   "dependencies": {
     "@clerk/nextjs": "^7.5.5",
     "@opennextjs/cloudflare": "^1.19.11",
     "class-variance-authority": "^0.7.1",
     "clsx": "^2.1.1",
-    "convex": "^1.41.0",
+    "convex": "^1.42.3",
     "lucide-react": "^1.21.0",
-    "next": "16.2.9",
+    "next": "^16.2.10",
     "react": "19.2.4",
     "react-dom": "19.2.4",
+    "stripe": "^22.2.3",
     "tailwind-merge": "^3.6.0"
   },
   "devDependencies": {

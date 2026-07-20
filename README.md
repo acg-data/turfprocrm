@@ -25,7 +25,7 @@ The app is currently linked to the Convex dev deployment:
 - Client URL: `https://dutiful-salmon-300.convex.cloud`
 - Site URL: `https://dutiful-salmon-300.convex.site`
 
-The UI runs with seeded local demo data if Convex is not configured. With `NEXT_PUBLIC_CONVEX_URL` present, it loads the live `Greenline Turf & Pest` demo workspace and writes demo interactions through Convex mutations. To keep Convex and Next running locally:
+The UI runs with seeded local demo data if Convex is not configured. With `NEXT_PUBLIC_CONVEX_URL` present, `/app` loads the selected Convex organization for the signed-in user and exposes the shared demo workspace only through the protected workspace selector. To keep Convex and Next running locally:
 
 ```bash
 npm run dev:convex
@@ -48,17 +48,36 @@ NEXT_PUBLIC_CLERK_SIGN_IN_URL=/signin
 NEXT_PUBLIC_CLERK_SIGN_UP_URL=/signin
 ```
 
-The free plan is first-class in Convex. New free workspaces get owner membership, subscription state, default lead statuses, saved views, service catalog, crew defaults, feature flags, onboarding checklist, integrations, and an audit event. `crm.createLead` enforces the free cap at the backend: free workspaces can create 10 contacts, and the 11th contact/lead is rejected with `PLAN_LIMIT_REACHED`. Paid `pro` workspaces do not use the free contact cap.
+Required billing variables:
+
+```bash
+NEXT_PUBLIC_APP_URL=
+STRIPE_SECRET_KEY=
+STRIPE_WEBHOOK_SECRET=
+STRIPE_PRO_MONTHLY_PRICE_ID=
+PADDLE_API_KEY=
+PADDLE_ENVIRONMENT=sandbox
+PADDLE_WEBHOOK_SECRET_KEY=
+PADDLE_PRO_MONTHLY_PRICE_ID=
+```
+
+The free plan is first-class in Convex. New free workspaces get owner membership, subscription state, default lead statuses, saved views, service catalog, crew defaults, feature flags, onboarding checklist, integrations, and an audit event. `crm.createLead` enforces the free cap at the backend: free workspaces can create 10 contacts, and the 11th contact/lead is rejected with `PLAN_LIMIT_REACHED`. Paid `pro` workspaces do not use the free contact cap. Pro billing now supports Paddle Checkout and Paddle Customer Portal for the `$99/mo` subscription, with Stripe routes retained as a fallback. Billing checkout and portal routes require a client-supplied Convex JWT in the `Authorization` header, then Convex verifies tenant membership before any provider session is created.
 
 ## App Areas
 
 - Dashboard: pipeline value, visits, open estimates, overdue work, and recent activity
 - CRM: customers, properties, lead creation, owner context, and timelines
 - Pipeline: opportunity stages with guarded transitions
+- Calendar: day-to-day visit schedule, clickable visit status, crew, property, and stop views
 - Dispatch: schedule board, crew assignment, route order, and Maps links
+- Routing: route confidence, crew stop order, Maps links, equipment conflicts, and routing warnings
 - Jobs: job workspace, visits, and tasks
+- Job Analysis: estimated vs actual revenue, labor, materials, equipment, overhead, margin, and variance
+- Jobs Pricer: labor/material/equipment/overhead calculator with target margin pricing
+- Chemicals: material catalog, restricted-use flags, EPA label tracking, weather rules, and compliance records
 - Field: mobile job list, checklist completion, issue flags, and visit submission
 - Admin: members, crews, service catalog, materials, and settings foundation
+- Churn + LTV: GreenAce/Turf Pro reference metrics plus live tenant churn cohorts, LTV, CAC, P&L, and customer risk
 - Prime Time: top-100 SaaS launch-hardening board with owner, priority, status, launch score, P0 blockers, and track progress
 - Specs: live backend blueprint, modeled table groups, Netlify dashboard parity, external interface boundaries, and SaaS readiness
 
@@ -69,6 +88,7 @@ Implemented public functions:
 - Queries: `dashboard.getOverview`, `crm.listCustomers`, `crm.getCustomerProfile`, `pipeline.listOpportunities`, `dispatch.getSchedule`, `field.getMyVisits`, `jobs.getJobWorkspace`, `admin.getSettings`
 - Mutations: `crm.createLead`, `crm.updateCustomer`, `pipeline.advanceOpportunity`, `estimates.createEstimate`, `estimates.convertToJob`, `dispatch.assignVisit`, `field.completeChecklistItem`, `field.submitVisit`, `jobs.addTask`, `activities.addNote`
 - Setup helpers: `setup.syncCurrentUser`, `setup.listMyOrganizations`, `setup.createOrganization`
+- Billing helpers: `billing.getBillingContext`, `billing.attachStripeCustomer`, `billing.attachPaddleCustomer`, `billing.syncStripeSubscriptionFromWebhook`, `billing.syncPaddleSubscriptionFromWebhook`
 - Live demo helpers: `demo.bootstrapWorkspace`, `demo.getWorkspace`, `demo.createLead`, `demo.advanceOpportunity`, `demo.assignVisit`, `demo.completeChecklistItem`, `demo.submitVisit`, `demo.addTask`, `demo.createCrew`, `demo.toggleServiceCatalogItem`
 - Backend spec query: `specs.getBackendBlueprint`
 

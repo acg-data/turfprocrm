@@ -1,9 +1,10 @@
-import { v } from "convex/values";
+import { ConvexError, v } from "convex/values";
 import { internalMutation, mutation, query } from "./_generated/server";
 import type { Doc, Id } from "./_generated/dataModel";
 import type { MutationCtx, QueryCtx } from "./_generated/server";
 import { activeFertilizationPricingAdjustments, calculateFertilizationProgramPricing } from "../src/domain/fertilization-pricing";
 import { commitLeadImportJob, createLeadImportPreviewJob } from "./lib/importRecords";
+import { requireMembership, type Permission } from "./lib/auth";
 
 const DEMO_SLUG = "greenline-demo";
 
@@ -33,6 +34,19 @@ async function requireDemoOrg(ctx: Ctx) {
   const org = await ctx.db.query("organizations").withIndex("by_slug", (q) => q.eq("slug", DEMO_SLUG)).unique();
   if (!org) throw new Error("Demo workspace has not been bootstrapped yet.");
   return org;
+}
+
+async function requireOperatingOrg(ctx: Ctx, organizationId?: Id<"organizations">, permission?: Permission) {
+  if (!organizationId) {
+    const org = await requireDemoOrg(ctx);
+    const owner = await ctx.db.query("memberships").withIndex("by_org", (q) => q.eq("organizationId", org._id)).first();
+    return { org, userId: owner?.userId };
+  }
+
+  const { user } = await requireMembership(ctx, organizationId, permission);
+  const org = await ctx.db.get(organizationId);
+  if (!org) throw new ConvexError({ code: "NOT_FOUND", message: "Organization not found." });
+  return { org, userId: user._id };
 }
 
 async function listOperatingOrganizations(ctx: Ctx) {
@@ -141,7 +155,9 @@ function auditModule(action: string) {
     task: "Jobs",
     vendor_catalog: "Cost Intel/Admin",
     visit: "Field",
+    compliance_record: "Compliance",
     workflow_status: "Admin",
+    job: "Jobs",
   };
   return moduleLabels[prefix] ?? formatStatus(prefix || "system");
 }
@@ -257,7 +273,9 @@ async function getOperatingCollections(ctx: Ctx, organizationId: Id<"organizatio
     ctx.db.query("dataQualityIssues").withIndex("by_org", (q) => q.eq("organizationId", organizationId)).collect(),
     ctx.db.query("leadStatusSettings").withIndex("by_org", (q) => q.eq("organizationId", organizationId)).collect(),
     ctx.db.query("featureFlags").withIndex("by_org", (q) => q.eq("organizationId", organizationId)).collect(),
-    ctx.db.query("auditEvents").withIndex("by_org_time", (q) => q.eq("organizationId", organizationId)).order("desc").take(50),
+    // Admin audit search is a working operational view, not just a recent-activity widget.
+    // Keep enough history in the query for filters to find a just-created event after a busy demo run.
+    ctx.db.query("auditEvents").withIndex("by_org_time", (q) => q.eq("organizationId", organizationId)).order("desc").take(250),
     ctx.db.query("importJobs").withIndex("by_org", (q) => q.eq("organizationId", organizationId)).collect(),
     ctx.db.query("importRows").withIndex("by_org", (q) => q.eq("organizationId", organizationId)).collect(),
   ]);
@@ -359,6 +377,89 @@ function computeJobSummary(
     grossProfitCents,
     grossMarginPercent,
     varianceCents,
+  };
+}
+
+function activeInvoice(invoice: Doc<"customerInvoices">) {
+  return invoice.status !== "void";
+}
+
+function nextInvoiceNumber(existingInvoices: Doc<"customerInvoices">[], now: number) {
+  const year = new Date(now).getFullYear();
+  const currentYearCount = existingInvoices.filter((invoice) => invoice.invoiceNumber.includes(String(year))).length;
+  return `INV-${year}-${String(1100 + currentYearCount + 1).padStart(4, "0")}`;
+}
+
+async function createInvoiceForJob(
+  ctx: MutationCtx,
+  org: Doc<"organizations">,
+  job: Doc<"jobs">,
+  collections: Awaited<ReturnType<typeof getOperatingCollections>>,
+  now: number,
+  options: { status?: "draft" | "sent"; dueInDays?: number } = {},
+) {
+  const existingInvoice = collections.customerInvoices.find((invoice) => invoice.jobId === job._id && activeInvoice(invoice));
+  if (existingInvoice) {
+    return {
+      invoiceId: existingInvoice._id,
+      invoiceNumber: existingInvoice.invoiceNumber,
+      created: false,
+      totalCents: existingInvoice.totalCents,
+      balanceCents: Math.max(0, existingInvoice.totalCents - existingInvoice.paidCents),
+    };
+  }
+
+  const summary = computeJobSummary(job, collections);
+  const approvedChangeOrders = await ctx.db.query("changeOrders").withIndex("by_job", (q) => q.eq("jobId", job._id)).collect();
+  const approvedChangeOrderCents = approvedChangeOrders
+    .filter((changeOrder) => changeOrder.organizationId === org._id && changeOrder.status === "approved")
+    .reduce((sum, changeOrder) => sum + changeOrder.revenueDeltaCents, 0);
+  const subtotalCents = Math.max(0, summary.actualRevenueCents + approvedChangeOrderCents);
+  if (subtotalCents <= 0) throw new Error("Job has no billable revenue to invoice.");
+
+  const invoiceNumber = nextInvoiceNumber(collections.customerInvoices, now);
+  const status = options.status ?? "sent";
+  const invoiceId = await ctx.db.insert("customerInvoices", {
+    organizationId: org._id,
+    customerId: job.customerId,
+    jobId: job._id,
+    estimateId: job.estimateId,
+    invoiceNumber,
+    status,
+    subtotalCents,
+    taxCents: 0,
+    totalCents: subtotalCents,
+    paidCents: 0,
+    dueAt: now + (options.dueInDays ?? 14) * 24 * 60 * 60 * 1000,
+    sentAt: status === "sent" ? now : undefined,
+    createdAt: now,
+    updatedAt: now,
+  });
+  await ctx.db.insert("activities", {
+    organizationId: org._id,
+    entityType: "job",
+    entityId: job._id,
+    kind: "system",
+    summary: `Invoice ${invoiceNumber} generated from completed work.`,
+    metadata: { invoiceId, subtotalCents, approvedChangeOrderCents },
+    occurredAt: now,
+  });
+  await ctx.db.insert("auditEvents", {
+    organizationId: org._id,
+    action: "revenue.invoice.generate",
+    entityType: "customer_invoice",
+    entityId: invoiceId,
+    summary: `Generated invoice ${invoiceNumber} for ${job.title}`,
+    after: { invoiceId, jobId: job._id, customerId: job.customerId, totalCents: subtotalCents, status, reportingMirror: "customer_invoice" },
+    createdAt: now,
+  });
+
+  return {
+    invoiceId,
+    invoiceNumber,
+    created: true,
+    totalCents: subtotalCents,
+    balanceCents: subtotalCents,
   };
 }
 
@@ -1076,10 +1177,12 @@ export const bootstrapOperatingDepth = mutation({
 });
 
 export const getDemoOperatingDepth = query({
-  args: {},
-  handler: async (ctx) => {
-    const org = await ctx.db.query("organizations").withIndex("by_slug", (q) => q.eq("slug", DEMO_SLUG)).unique();
-    if (!org) return null;
+  args: { organizationId: v.optional(v.id("organizations")) },
+  handler: async (ctx, args) => {
+    const result = args.organizationId
+      ? await requireOperatingOrg(ctx, args.organizationId)
+      : await requireDemoOrg(ctx).then((org) => ({ org, userId: undefined }));
+    const { org } = result;
     const collections = await getOperatingCollections(ctx, org._id);
     const userById = new Map(collections.users.map((user) => [user._id, user]));
     const customerById = new Map(collections.customers.map((customer) => [customer._id, customer]));
@@ -1514,6 +1617,140 @@ export const getDemoOperatingDepth = query({
           }))
           .sort((left, right) => right.grossMarginPercent - left.grossMarginPercent || right.grossProfitCents - left.grossProfitCents)
       : buildServiceLineRollups(collections.jobCostSummaries, collections).map((rollup) => ({ ...rollup, calculatedAt: Math.max(0, ...collections.jobCostSummaries.map((summary) => summary.calculatedAt)) }));
+    const nowForFinance = Date.now();
+    const activeInvoiceJobIds = new Set(customerInvoices.filter(activeInvoice).map((invoice) => invoice.jobId).filter((jobId): jobId is Id<"jobs"> => Boolean(jobId)));
+    const invoiceableJobs = computedSummaries
+      .filter((summary) => {
+        const job = jobById.get(summary.jobId);
+        return Boolean(job) && !activeInvoiceJobIds.has(summary.jobId) && summary.actualRevenueCents > 0;
+      })
+      .map((summary) => ({
+        jobId: summary.jobId,
+        jobTitle: summary.jobTitle,
+        customerName: summary.customerName,
+        status: summary.status,
+        billableCents: summary.actualRevenueCents,
+        marginPercent: summary.grossMarginPercent,
+      }))
+      .sort((left, right) => right.billableCents - left.billableCents);
+    const arAging = customerInvoices
+      .filter(activeInvoice)
+      .map((invoice) => {
+        const balanceCents = Math.max(0, invoice.totalCents - invoice.paidCents);
+        const daysPastDue = invoice.dueAt ? Math.max(0, Math.floor((nowForFinance - invoice.dueAt) / (24 * 60 * 60 * 1000))) : 0;
+        const bucket = balanceCents <= 0
+          ? "paid"
+          : daysPastDue <= 0
+            ? "current"
+            : daysPastDue <= 30
+              ? "1-30"
+              : daysPastDue <= 60
+                ? "31-60"
+                : daysPastDue <= 90
+                  ? "61-90"
+                  : "90+";
+        return {
+          invoiceId: invoice._id,
+          invoiceNumber: invoice.invoiceNumber,
+          customerName: customerById.get(invoice.customerId)?.name ?? "Unknown",
+          jobTitle: invoice.jobId ? jobById.get(invoice.jobId)?.title ?? "Unassigned job" : "Unassigned job",
+          status: invoice.status,
+          totalCents: invoice.totalCents,
+          paidCents: invoice.paidCents,
+          balanceCents,
+          dueAt: invoice.dueAt,
+          daysPastDue,
+          bucket,
+          nextAction: balanceCents <= 0 ? "No action" : daysPastDue > 0 ? "Create collections touch" : "Monitor due date",
+          risk: daysPastDue >= 60 ? "high" : daysPastDue > 0 ? "medium" : "low",
+        };
+      })
+      .filter((invoice) => invoice.balanceCents > 0)
+      .sort((left, right) => right.daysPastDue - left.daysPastDue || right.balanceCents - left.balanceCents);
+    const customerProfitability = collections.customers
+      .map((customer) => {
+        const lifecycle = latestLifecycleByCustomer.get(customer._id);
+        const customerSummaries = computedSummaries.filter((summary) => jobById.get(summary.jobId)?.customerId === customer._id);
+        const invoices = customerInvoices.filter((invoice) => invoice.customerId === customer._id);
+        const payments = collections.customerPayments.filter((payment) => payment.customerId === customer._id);
+        const openBalanceCents = invoices.reduce((sum, invoice) => sum + Math.max(0, invoice.totalCents - invoice.paidCents), 0);
+        const lifetimeRevenueCents = lifecycle?.lifetimeRevenueCents ?? customerSummaries.reduce((sum, summary) => sum + summary.actualRevenueCents, 0);
+        const lifetimeCostCents = lifecycle?.lifetimeCostCents ?? customerSummaries.reduce((sum, summary) => sum + summary.actualLaborCostCents + summary.actualMaterialCostCents + summary.actualEquipmentCostCents + summary.overheadCostCents, 0);
+        const grossProfitCents = lifecycle?.grossProfitCents ?? lifetimeRevenueCents - lifetimeCostCents;
+        const customerJobs = collections.jobs.filter((job) => job.customerId === customer._id);
+        const serviceMix = [...new Set(customerJobs.flatMap((job) => serviceCategoriesForJob(job, collections).map((category) => categoryLabels[category] ?? formatStatus(category))))];
+        const callbackCount = collections.tasks.filter((task) => {
+          if (task.entityType !== "job") return false;
+          const job = jobById.get(task.entityId as Id<"jobs">);
+          const normalizedTitle = task.title.toLowerCase();
+          return job?.customerId === customer._id && (normalizedTitle.includes("callback") || normalizedTitle.includes("repair") || normalizedTitle.includes("follow"));
+        }).length;
+        const oldestOpenInvoice = invoices
+          .filter((invoice) => Math.max(0, invoice.totalCents - invoice.paidCents) > 0)
+          .sort((left, right) => (left.dueAt ?? Number.MAX_SAFE_INTEGER) - (right.dueAt ?? Number.MAX_SAFE_INTEGER))[0];
+        const paymentBehavior = openBalanceCents <= 0
+          ? "Current"
+          : oldestOpenInvoice?.dueAt && oldestOpenInvoice.dueAt < nowForFinance
+            ? "Past due"
+            : "Open AR";
+        return {
+          customerId: customer._id,
+          customerName: customer.name,
+          customerType: customer.type,
+          lifetimeRevenueCents,
+          lifetimeCostCents,
+          grossProfitCents,
+          grossMarginPercent: lifecycle?.grossMarginPercent ?? pct(grossProfitCents, lifetimeRevenueCents),
+          estimatedLtvCents: lifecycle?.estimatedLtvCents ?? Math.max(grossProfitCents * 3, grossProfitCents),
+          openBalanceCents,
+          invoiceCount: invoices.length,
+          paymentCount: payments.length,
+          callbackCount,
+          churnRiskLevel: lifecycle?.churnRiskLevel ?? (openBalanceCents > 0 ? "medium" : "low"),
+          churnRiskScore: lifecycle?.churnRiskScore ?? (openBalanceCents > 0 ? 45 : 18),
+          churnDrivers: lifecycle?.churnDrivers ?? (openBalanceCents > 0 ? ["Open AR balance"] : ["Healthy account"]),
+          nextBestAction: lifecycle?.nextBestAction ?? (openBalanceCents > 0 ? "Review payment plan before renewal" : "Offer renewal or upsell review"),
+          paymentBehavior,
+          serviceMix,
+        };
+      })
+      .sort((left, right) => right.grossProfitCents - left.grossProfitCents);
+    const complianceRecords = collections.materialApplications.map((application, index) => {
+      const material = materialById.get(application.materialId);
+      const visit = collections.visits.find((candidate) => candidate._id === application.visitId);
+      const job = visit ? jobById.get(visit.jobId) : undefined;
+      const property = visit?.propertyId ? propertyById.get(visit.propertyId) : undefined;
+      const weather = collections.weatherSnapshots.find((snapshot) => snapshot.visitId === application.visitId || (visit?.propertyId && snapshot.propertyId === visit.propertyId));
+      const crew = visit?.assignedCrewId ? crewDocById.get(visit.assignedCrewId) : undefined;
+      const missing = [
+        ...(material?.epaRegistrationNumber ? [] : ["EPA registration"]),
+        ...(property ? [] : ["property"]),
+        ...(weather ? [] : ["weather snapshot"]),
+        ...(crew ? [] : ["applicator/crew"]),
+      ];
+      return {
+        id: application._id,
+        reportNumber: `CMP-${new Date(application.createdAt).getFullYear()}-${String(index + 1).padStart(4, "0")}`,
+        visitId: application.visitId,
+        jobTitle: job?.title ?? "Unassigned job",
+        customerName: job ? customerById.get(job.customerId)?.name ?? "Unknown customer" : "Unknown customer",
+        propertyName: property?.label ?? "Unknown property",
+        siteAddress: property ? jobAddress(property) : "Unknown address",
+        materialName: material?.name ?? "Unknown material",
+        epaRegistrationNumber: material?.epaRegistrationNumber,
+        restrictedUse: Boolean(material?.restrictedUse),
+        quantity: application.quantity,
+        unit: application.unit,
+        targetArea: application.targetAreaId ? collections.properties.find((candidate) => candidate._id === visit?.propertyId)?.label ?? "Mapped area" : "Whole property",
+        applicator: crew?.name ?? "Unassigned",
+        weatherSummary: weather ? `${weather.conditions ?? "Unknown"}, ${weather.temperatureF ?? "--"}F, wind ${weather.windMph ?? "--"} mph, ${weather.applicationRisk} risk` : "Missing weather",
+        applicationRisk: weather?.applicationRisk ?? "high",
+        notes: application.notes,
+        generatedAt: application.updatedAt,
+        ready: missing.length === 0,
+        missing,
+      };
+    });
 
     return {
       seeded: collections.laborRates.length > 0 && collections.jobCostSummaries.length > 0,
@@ -1535,6 +1772,7 @@ export const getDemoOperatingDepth = query({
       fieldOps: {
         routeConfidence,
         materialLots,
+        complianceRecords,
         timeBreakdowns,
         callbacks,
         equipmentCheckouts,
@@ -1599,8 +1837,11 @@ export const getDemoOperatingDepth = query({
         arCents,
         grossMarginPercent: pct(totals.grossProfitCents, totals.invoicedCents || totals.bookedRevenueCents),
         serviceLineProfitability,
-        invoices: customerInvoices.map((invoice) => ({ id: invoice._id, invoiceNumber: invoice.invoiceNumber, customerName: customerById.get(invoice.customerId)?.name ?? "Unknown", status: invoice.status, totalCents: invoice.totalCents, paidCents: invoice.paidCents, balanceCents: Math.max(0, invoice.totalCents - invoice.paidCents) })),
-        payments: collections.customerPayments.map((payment) => ({ id: payment._id, customerName: customerById.get(payment.customerId)?.name ?? "Unknown", status: payment.status, method: payment.method, amountCents: payment.amountCents, receivedAt: payment.receivedAt })),
+        customerProfitability,
+        arAging,
+        invoiceableJobs,
+        invoices: customerInvoices.map((invoice) => ({ id: invoice._id, customerId: invoice.customerId, jobId: invoice.jobId, invoiceNumber: invoice.invoiceNumber, customerName: customerById.get(invoice.customerId)?.name ?? "Unknown", jobTitle: invoice.jobId ? jobById.get(invoice.jobId)?.title ?? "Unassigned job" : "Unassigned job", status: invoice.status, totalCents: invoice.totalCents, paidCents: invoice.paidCents, balanceCents: Math.max(0, invoice.totalCents - invoice.paidCents), dueAt: invoice.dueAt })),
+        payments: collections.customerPayments.map((payment) => ({ id: payment._id, invoiceId: payment.invoiceId, customerName: customerById.get(payment.customerId)?.name ?? "Unknown", status: payment.status, method: payment.method, amountCents: payment.amountCents, receivedAt: payment.receivedAt, reference: payment.reference })),
       },
     };
   },
@@ -1608,15 +1849,16 @@ export const getDemoOperatingDepth = query({
 
 export const updateLead = mutation({
   args: {
+    organizationId: v.optional(v.id("organizations")),
     leadId: v.id("leads"),
     status: v.optional(leadStatus),
     grade: v.optional(leadGrade),
     hidden: v.optional(v.boolean()),
   },
   handler: async (ctx, args) => {
-    const org = await requireDemoOrg(ctx);
+    const { org, userId } = await requireOperatingOrg(ctx, args.organizationId, "managePipeline");
     const lead = await ctx.db.get(args.leadId);
-    if (!lead || lead.organizationId !== org._id) throw new Error("Lead not found.");
+    if (!lead || lead.organizationId !== org._id) throw new ConvexError({ code: "NOT_FOUND", message: "Lead not found." });
     const now = Date.now();
     await ctx.db.patch(args.leadId, {
       status: args.status ?? lead.status,
@@ -1624,14 +1866,14 @@ export const updateLead = mutation({
       hiddenAt: args.hidden === true ? now : args.hidden === false ? undefined : lead.hiddenAt,
       updatedAt: now,
     });
-    await ctx.db.insert("auditEvents", { organizationId: org._id, action: "lead.ops.update", entityType: "lead", entityId: args.leadId, summary: `Updated ${lead.title}`, before: { status: lead.status, grade: lead.grade }, after: args, createdAt: now });
+    await ctx.db.insert("auditEvents", { organizationId: org._id, actorUserId: args.organizationId ? userId : undefined, action: "lead.ops.update", entityType: "lead", entityId: args.leadId, summary: `Updated ${lead.title}`, before: { status: lead.status, grade: lead.grade }, after: args, createdAt: now });
   },
 });
 
 export const bulkUpdateLeads = mutation({
-  args: { leadIds: v.array(v.id("leads")), status: leadStatus },
+  args: { organizationId: v.optional(v.id("organizations")), leadIds: v.array(v.id("leads")), status: leadStatus },
   handler: async (ctx, args) => {
-    const org = await requireDemoOrg(ctx);
+    const { org, userId } = await requireOperatingOrg(ctx, args.organizationId, "managePipeline");
     const now = Date.now();
     let updated = 0;
     for (const leadId of args.leadIds) {
@@ -1640,13 +1882,14 @@ export const bulkUpdateLeads = mutation({
       await ctx.db.patch(leadId, { status: args.status, updatedAt: now });
       updated += 1;
     }
-    await ctx.db.insert("auditEvents", { organizationId: org._id, action: "lead.ops.bulk_update", entityType: "lead", entityId: org._id, summary: `Bulk updated ${updated} leads to ${args.status}`, after: args, createdAt: now });
+    await ctx.db.insert("auditEvents", { organizationId: org._id, actorUserId: args.organizationId ? userId : undefined, action: "lead.ops.bulk_update", entityType: "lead", entityId: org._id, summary: `Bulk updated ${updated} leads to ${args.status}`, after: args, createdAt: now });
     return { updated };
   },
 });
 
 export const upsertLeadStatusSetting = mutation({
   args: {
+    organizationId: v.optional(v.id("organizations")),
     id: v.optional(v.id("leadStatusSettings")),
     status: leadStatus,
     label: v.string(),
@@ -1656,7 +1899,7 @@ export const upsertLeadStatusSetting = mutation({
     active: v.boolean(),
   },
   handler: async (ctx, args) => {
-    const org = await requireDemoOrg(ctx);
+    const { org, userId } = await requireOperatingOrg(ctx, args.organizationId, "manageOrganization");
     const now = Date.now();
     const label = args.label.trim();
     const color = args.color.trim() || "#64748b";
@@ -1681,6 +1924,7 @@ export const upsertLeadStatusSetting = mutation({
       await ctx.db.patch(existing._id, patch);
       await ctx.db.insert("auditEvents", {
         organizationId: org._id,
+        actorUserId: args.organizationId ? userId : undefined,
         action: "workflow_status.update",
         entityType: "organization",
         entityId: org._id,
@@ -1695,6 +1939,7 @@ export const upsertLeadStatusSetting = mutation({
     const statusSettingId = await ctx.db.insert("leadStatusSettings", { organizationId: org._id, ...patch, createdAt: now });
     await ctx.db.insert("auditEvents", {
       organizationId: org._id,
+      actorUserId: args.organizationId ? userId : undefined,
       action: "workflow_status.create",
       entityType: "organization",
       entityId: org._id,
@@ -1708,15 +1953,15 @@ export const upsertLeadStatusSetting = mutation({
 
 export const createLeadImportPreview = mutation({
   args: {
+    organizationId: v.optional(v.id("organizations")),
     fileName: v.optional(v.string()),
     csvText: v.string(),
   },
   handler: async (ctx, args) => {
-    const org = await requireDemoOrg(ctx);
-    const owner = await ctx.db.query("memberships").withIndex("by_org", (q) => q.eq("organizationId", org._id)).first();
+    const { org, userId } = await requireOperatingOrg(ctx, args.organizationId, "managePipeline");
     return await createLeadImportPreviewJob(ctx, {
       organizationId: org._id,
-      actorUserId: owner?.userId,
+      actorUserId: userId,
       fileName: args.fileName,
       csvText: args.csvText,
     });
@@ -1725,17 +1970,17 @@ export const createLeadImportPreview = mutation({
 
 export const commitLeadImportRows = mutation({
   args: {
+    organizationId: v.optional(v.id("organizations")),
     importJobId: v.id("importJobs"),
     rowIds: v.optional(v.array(v.id("importRows"))),
     includeReviewRows: v.optional(v.boolean()),
   },
   handler: async (ctx, args) => {
-    const org = await requireDemoOrg(ctx);
-    const owner = await ctx.db.query("memberships").withIndex("by_org", (q) => q.eq("organizationId", org._id)).first();
+    const { org, userId } = await requireOperatingOrg(ctx, args.organizationId, "managePipeline");
     return await commitLeadImportJob(ctx, {
       organizationId: org._id,
       importJobId: args.importJobId,
-      actorUserId: owner?.userId,
+      actorUserId: userId,
       rowIds: args.rowIds,
       includeReviewRows: args.includeReviewRows,
     });
@@ -1743,24 +1988,27 @@ export const commitLeadImportRows = mutation({
 });
 
 export const updateMemberRole = mutation({
-  args: { membershipId: v.id("memberships"), role },
+  args: { organizationId: v.optional(v.id("organizations")), membershipId: v.id("memberships"), role },
   handler: async (ctx, args) => {
-    const org = await requireDemoOrg(ctx);
+    const { org, userId: actorUserId } = await requireOperatingOrg(ctx, args.organizationId, "manageMembers");
     const membership = await ctx.db.get(args.membershipId);
-    if (!membership || membership.organizationId !== org._id) throw new Error("Membership not found.");
+    if (!membership || membership.organizationId !== org._id) throw new ConvexError({ code: "NOT_FOUND", message: "Membership not found." });
+    if (membership.role === "owner" || args.role === "owner") throw new ConvexError({ code: "INVALID_ROLE", message: "Owner membership must be transferred explicitly." });
     await ctx.db.patch(args.membershipId, { role: args.role, updatedAt: Date.now() });
+    await ctx.db.insert("auditEvents", { organizationId: org._id, actorUserId: args.organizationId ? actorUserId : undefined, action: "member.role.update", entityType: "organization", entityId: org._id, summary: `Changed member role to ${args.role}`, before: { membershipId: args.membershipId, role: membership.role }, after: { membershipId: args.membershipId, role: args.role }, createdAt: Date.now() });
   },
 });
 
 export const inviteMember = mutation({
   args: {
+    organizationId: v.optional(v.id("organizations")),
     email: v.string(),
     name: v.optional(v.string()),
     role,
     expiresInDays: v.optional(v.number()),
   },
   handler: async (ctx, args) => {
-    const org = await requireDemoOrg(ctx);
+    const { org, userId: actorUserId } = await requireOperatingOrg(ctx, args.organizationId, "manageMembers");
     const email = normalizeEmail(args.email);
     if (!email || !/^[^\s@]+@[^\s@]+\.[^\s@]+$/.test(email)) throw new Error("A valid teammate email is required.");
     if (args.role === "owner") throw new Error("Invite teammates as admin, manager, sales, dispatcher, crew lead, or technician.");
@@ -1803,6 +2051,7 @@ export const inviteMember = mutation({
 
     await ctx.db.insert("auditEvents", {
       organizationId: org._id,
+      actorUserId: args.organizationId ? actorUserId : undefined,
       action: "member.invite",
       entityType: "organization",
       entityId: org._id,
@@ -1816,9 +2065,9 @@ export const inviteMember = mutation({
 });
 
 export const revokeMemberInvite = mutation({
-  args: { membershipId: v.id("memberships") },
+  args: { organizationId: v.optional(v.id("organizations")), membershipId: v.id("memberships") },
   handler: async (ctx, args) => {
-    const org = await requireDemoOrg(ctx);
+    const { org, userId } = await requireOperatingOrg(ctx, args.organizationId, "manageMembers");
     const membership = await ctx.db.get(args.membershipId);
     if (!membership || membership.organizationId !== org._id) throw new Error("Invite not found.");
     if (membership.status !== "invited" && membership.status !== "expired") throw new Error("Only pending or expired invites can be revoked.");
@@ -1826,6 +2075,7 @@ export const revokeMemberInvite = mutation({
     await ctx.db.patch(args.membershipId, { status: "revoked", inviteRevokedAt: now, updatedAt: now });
     await ctx.db.insert("auditEvents", {
       organizationId: org._id,
+      actorUserId: args.organizationId ? userId : undefined,
       action: "member.invite.revoke",
       entityType: "organization",
       entityId: org._id,
@@ -1838,9 +2088,9 @@ export const revokeMemberInvite = mutation({
 });
 
 export const expireMemberInvite = mutation({
-  args: { membershipId: v.id("memberships") },
+  args: { organizationId: v.optional(v.id("organizations")), membershipId: v.id("memberships") },
   handler: async (ctx, args) => {
-    const org = await requireDemoOrg(ctx);
+    const { org, userId } = await requireOperatingOrg(ctx, args.organizationId, "manageMembers");
     const membership = await ctx.db.get(args.membershipId);
     if (!membership || membership.organizationId !== org._id) throw new Error("Invite not found.");
     if (membership.status !== "invited") throw new Error("Only pending invites can expire.");
@@ -1848,6 +2098,7 @@ export const expireMemberInvite = mutation({
     await ctx.db.patch(args.membershipId, { status: "expired", updatedAt: now });
     await ctx.db.insert("auditEvents", {
       organizationId: org._id,
+      actorUserId: args.organizationId ? userId : undefined,
       action: "member.invite.expire",
       entityType: "organization",
       entityId: org._id,
@@ -1861,13 +2112,14 @@ export const expireMemberInvite = mutation({
 
 export const upsertLaborRate = mutation({
   args: {
+    organizationId: v.optional(v.id("organizations")),
     id: v.optional(v.id("laborRateCards")),
     roleName: v.string(),
     hourlyCostCents: v.number(),
     billableRateCents: v.optional(v.number()),
   },
   handler: async (ctx, args) => {
-    const org = await requireDemoOrg(ctx);
+    const { org, userId } = await requireOperatingOrg(ctx, args.organizationId, "manageCatalog");
     const now = Date.now();
     const roleName = args.roleName.trim();
     if (!roleName) throw new Error("Labor role is required.");
@@ -1879,6 +2131,7 @@ export const upsertLaborRate = mutation({
       await ctx.db.patch(args.id, { roleName, name: `${roleName} override`, hourlyCostCents, billableRateCents, source: "admin_override", updatedAt: now });
       await ctx.db.insert("auditEvents", {
         organizationId: org._id,
+        actorUserId: args.organizationId ? userId : undefined,
         action: "labor_rate.update",
         entityType: "labor_rate_card",
         entityId: args.id,
@@ -1892,6 +2145,7 @@ export const upsertLaborRate = mutation({
     const rateId = await ctx.db.insert("laborRateCards", { organizationId: org._id, roleName, name: `${roleName} override`, hourlyCostCents, billableRateCents, source: "admin_override", active: true, createdAt: now, updatedAt: now });
     await ctx.db.insert("auditEvents", {
       organizationId: org._id,
+      actorUserId: args.organizationId ? userId : undefined,
       action: "labor_rate.create",
       entityType: "labor_rate_card",
       entityId: rateId,
@@ -1905,6 +2159,7 @@ export const upsertLaborRate = mutation({
 
 export const upsertVendorCatalogItem = mutation({
   args: {
+    organizationId: v.optional(v.id("organizations")),
     id: v.optional(v.id("vendorCatalogs")),
     vendorName: v.string(),
     itemName: v.string(),
@@ -1913,7 +2168,7 @@ export const upsertVendorCatalogItem = mutation({
     unitCostCents: v.number(),
   },
   handler: async (ctx, args) => {
-    const org = await requireDemoOrg(ctx);
+    const { org, userId } = await requireOperatingOrg(ctx, args.organizationId, "manageCatalog");
     const now = Date.now();
     const vendorName = args.vendorName.trim();
     const itemName = args.itemName.trim();
@@ -1926,6 +2181,7 @@ export const upsertVendorCatalogItem = mutation({
       await ctx.db.patch(args.id, { vendorName, itemName, category: args.category, unit, unitCostCents, source: "admin_override", updatedAt: now });
       await ctx.db.insert("auditEvents", {
         organizationId: org._id,
+        actorUserId: args.organizationId ? userId : undefined,
         action: "vendor_catalog.update",
         entityType: "vendor_catalog",
         entityId: args.id,
@@ -1939,6 +2195,7 @@ export const upsertVendorCatalogItem = mutation({
     const vendorCatalogId = await ctx.db.insert("vendorCatalogs", { organizationId: org._id, vendorName, itemName, category: args.category, unit, unitCostCents, source: "admin_override", active: true, createdAt: now, updatedAt: now });
     await ctx.db.insert("auditEvents", {
       organizationId: org._id,
+      actorUserId: args.organizationId ? userId : undefined,
       action: "vendor_catalog.create",
       entityType: "vendor_catalog",
       entityId: vendorCatalogId,
@@ -1952,15 +2209,17 @@ export const upsertVendorCatalogItem = mutation({
 
 export const addTimesheetEntry = mutation({
   args: {
+    organizationId: v.optional(v.id("organizations")),
     jobId: v.id("jobs"),
     roleName: v.string(),
     hours: v.number(),
     hourlyCostCents: v.number(),
   },
   handler: async (ctx, args) => {
-    const org = await requireDemoOrg(ctx);
+    const { org, userId } = await requireOperatingOrg(ctx, args.organizationId, "manageFinance");
     const job = await ctx.db.get(args.jobId);
-    if (!job || job.organizationId !== org._id) throw new Error("Job not found.");
+    if (!job || job.organizationId !== org._id) throw new ConvexError({ code: "NOT_FOUND", message: "Job not found." });
+    if (!Number.isFinite(args.hours) || args.hours <= 0 || args.hours > 24) throw new ConvexError({ code: "VALIDATION_ERROR", message: "Hours must be greater than 0 and no more than 24." });
     const now = Date.now();
     const id = await ctx.db.insert("timesheetEntries", {
       organizationId: org._id,
@@ -1975,17 +2234,27 @@ export const addTimesheetEntry = mutation({
       createdAt: now,
       updatedAt: now,
     });
+    await ctx.db.insert("auditEvents", { organizationId: org._id, actorUserId: args.organizationId ? userId : undefined, action: "timesheet.create", entityType: "timesheet_entry", entityId: id, summary: `Added ${args.hours} labor hours to ${job.title}`, after: { jobId: job._id, roleName: args.roleName, hours: args.hours, hourlyCostCents: args.hourlyCostCents }, createdAt: now });
     await recalculateJobCostSummaries(ctx, org._id);
     return id;
   },
 });
 
 export const recordCustomerPayment = mutation({
-  args: { invoiceId: v.id("customerInvoices"), amountCents: v.number(), method: v.union(v.literal("cash"), v.literal("check"), v.literal("card"), v.literal("ach"), v.literal("other")) },
+  args: {
+    organizationId: v.optional(v.id("organizations")),
+    invoiceId: v.id("customerInvoices"),
+    amountCents: v.number(),
+    method: v.union(v.literal("cash"), v.literal("check"), v.literal("card"), v.literal("ach"), v.literal("other")),
+    reference: v.optional(v.string()),
+  },
   handler: async (ctx, args) => {
-    const org = await requireDemoOrg(ctx);
+    const { org, userId } = await requireOperatingOrg(ctx, args.organizationId, "manageFinance");
     const invoice = await ctx.db.get(args.invoiceId);
-    if (!invoice || invoice.organizationId !== org._id) throw new Error("Invoice not found.");
+    if (!invoice || invoice.organizationId !== org._id) throw new ConvexError({ code: "NOT_FOUND", message: "Invoice not found." });
+    const balanceCents = Math.max(0, invoice.totalCents - invoice.paidCents);
+    const allocationCents = Math.min(Math.max(0, Math.round(args.amountCents)), balanceCents);
+    if (allocationCents <= 0) throw new Error("Invoice has no open balance to allocate.");
     const now = Date.now();
     const paymentId = await ctx.db.insert("customerPayments", {
       organizationId: org._id,
@@ -1993,23 +2262,182 @@ export const recordCustomerPayment = mutation({
       invoiceId: args.invoiceId,
       status: "posted",
       method: args.method,
-      amountCents: args.amountCents,
+      amountCents: allocationCents,
       receivedAt: now,
+      reference: args.reference?.trim() || undefined,
       createdAt: now,
       updatedAt: now,
     });
-    await ctx.db.insert("paymentAllocations", { organizationId: org._id, paymentId, invoiceId: args.invoiceId, amountCents: args.amountCents, createdAt: now });
-    const paidCents = Math.min(invoice.totalCents, invoice.paidCents + args.amountCents);
+    await ctx.db.insert("paymentAllocations", { organizationId: org._id, paymentId, invoiceId: args.invoiceId, amountCents: allocationCents, createdAt: now });
+    const paidCents = Math.min(invoice.totalCents, invoice.paidCents + allocationCents);
     await ctx.db.patch(args.invoiceId, { paidCents, status: paidCents >= invoice.totalCents ? "paid" : "partially_paid", paidAt: paidCents >= invoice.totalCents ? now : invoice.paidAt, updatedAt: now });
+    await ctx.db.insert("auditEvents", {
+      organizationId: org._id,
+      actorUserId: args.organizationId ? userId : undefined,
+      action: "payment.record",
+      entityType: "customer_payment",
+      entityId: paymentId,
+      summary: `Recorded ${args.method} payment for ${invoice.invoiceNumber}`,
+      before: { invoiceId: invoice._id, paidCents: invoice.paidCents, status: invoice.status, balanceCents },
+      after: { paymentId, invoiceId: invoice._id, amountCents: allocationCents, method: args.method, reference: args.reference, paidCents, status: paidCents >= invoice.totalCents ? "paid" : "partially_paid", reportingMirror: "customer_payment" },
+      createdAt: now,
+    });
     await recalculateJobCostSummaries(ctx, org._id);
     return paymentId;
   },
 });
 
+export const generateInvoiceFromJob = mutation({
+  args: {
+    organizationId: v.optional(v.id("organizations")),
+    jobId: v.id("jobs"),
+    status: v.optional(v.union(v.literal("draft"), v.literal("sent"))),
+    dueInDays: v.optional(v.number()),
+  },
+  handler: async (ctx, args) => {
+    const { org, userId } = await requireOperatingOrg(ctx, args.organizationId, "manageFinance");
+    const job = await ctx.db.get(args.jobId);
+    if (!job || job.organizationId !== org._id) throw new ConvexError({ code: "NOT_FOUND", message: "Job not found." });
+    const now = Date.now();
+    const collections = await getOperatingCollections(ctx, org._id);
+    const result = await createInvoiceForJob(ctx, org, job, collections, now, { status: args.status ?? "sent", dueInDays: args.dueInDays });
+    await ctx.db.insert("auditEvents", { organizationId: org._id, actorUserId: args.organizationId ? userId : undefined, action: "revenue.invoice.generate", entityType: "customer_invoice", entityId: result.invoiceId, summary: `Generated invoice for ${job.title}`, after: result, createdAt: now });
+    await recalculateJobCostSummaries(ctx, org._id);
+    return result;
+  },
+});
+
+export const closeJob = mutation({
+  args: {
+    organizationId: v.optional(v.id("organizations")),
+    jobId: v.id("jobs"),
+    forceWithExceptions: v.optional(v.boolean()),
+    generateInvoice: v.optional(v.boolean()),
+  },
+  handler: async (ctx, args) => {
+    const { org, userId } = await requireOperatingOrg(ctx, args.organizationId, "manageFinance");
+    const job = await ctx.db.get(args.jobId);
+    if (!job || job.organizationId !== org._id) throw new ConvexError({ code: "NOT_FOUND", message: "Job not found." });
+    const now = Date.now();
+    const collections = await getOperatingCollections(ctx, org._id);
+    const visits = collections.visits.filter((visit) => visit.jobId === job._id);
+    const openVisits = visits.filter((visit) => !["complete", "canceled"].includes(visit.status));
+    const openTasks = collections.tasks.filter((task) => task.entityType === "job" && task.entityId === job._id && ["open", "in_progress"].includes(task.status));
+    const summary = computeJobSummary(job, collections);
+    const existingInvoice = collections.customerInvoices.find((invoice) => invoice.jobId === job._id && activeInvoice(invoice));
+    const blockers = [
+      ...(openVisits.length > 0 ? [`${openVisits.length} visit${openVisits.length === 1 ? "" : "s"} not complete`] : []),
+      ...(openTasks.length > 0 ? [`${openTasks.length} open task${openTasks.length === 1 ? "" : "s"}`] : []),
+      ...(summary.actualRevenueCents <= 0 ? ["No billable revenue"] : []),
+      ...(summary.grossMarginPercent < 10 ? [`Low margin ${summary.grossMarginPercent}%`] : []),
+    ];
+    if (blockers.length > 0 && !args.forceWithExceptions) throw new Error(`Closeout blocked: ${blockers.join(", ")}.`);
+
+    await ctx.db.patch(job._id, { status: "completed", endDate: now, updatedAt: now });
+    const phases = await ctx.db.query("jobPhases").withIndex("by_job", (q) => q.eq("jobId", job._id)).collect();
+    for (const phase of phases.filter((phase) => phase.organizationId === org._id && phase.status !== "canceled")) {
+      await ctx.db.patch(phase._id, { status: "completed", completedAt: phase.completedAt ?? now, updatedAt: now });
+    }
+
+    let invoice:
+      | Awaited<ReturnType<typeof createInvoiceForJob>>
+      | undefined;
+    if (args.generateInvoice) {
+      invoice = existingInvoice
+        ? {
+            invoiceId: existingInvoice._id,
+            invoiceNumber: existingInvoice.invoiceNumber,
+            created: false,
+            totalCents: existingInvoice.totalCents,
+            balanceCents: Math.max(0, existingInvoice.totalCents - existingInvoice.paidCents),
+          }
+        : await createInvoiceForJob(ctx, org, { ...job, status: "completed", endDate: now, updatedAt: now }, collections, now, { status: "sent" });
+    }
+
+    await ctx.db.insert("activities", {
+      organizationId: org._id,
+      actorUserId: args.organizationId ? userId : undefined,
+      entityType: "job",
+      entityId: job._id,
+      kind: "system",
+      summary: blockers.length > 0 ? `Job closed with exceptions: ${blockers.join("; ")}.` : "Job closeout completed cleanly.",
+      metadata: { blockers, invoiceId: invoice?.invoiceId, grossMarginPercent: summary.grossMarginPercent },
+      occurredAt: now,
+    });
+    await ctx.db.insert("auditEvents", {
+      organizationId: org._id,
+      actorUserId: args.organizationId ? userId : undefined,
+      action: "job.closeout",
+      entityType: "job",
+      entityId: job._id,
+      summary: `Closed ${job.title}`,
+      before: { status: job.status, endDate: job.endDate },
+      after: {
+        status: "completed",
+        endDate: now,
+        blockers,
+        forceWithExceptions: Boolean(args.forceWithExceptions),
+        invoiceId: invoice?.invoiceId,
+        invoiceCreated: invoice?.created ?? false,
+        grossMarginPercent: summary.grossMarginPercent,
+        reportingMirror: "job_closeout",
+      },
+      createdAt: now,
+    });
+    await recalculateJobCostSummaries(ctx, org._id);
+    return { jobId: job._id, status: "completed" as const, blockers, invoice };
+  },
+});
+
+export const generateComplianceRecord = mutation({
+  args: { organizationId: v.optional(v.id("organizations")), visitId: v.id("jobVisits") },
+  handler: async (ctx, args) => {
+    const { org, userId } = await requireOperatingOrg(ctx, args.organizationId, "completeFieldWork");
+    const visit = await ctx.db.get(args.visitId);
+    if (!visit || visit.organizationId !== org._id) throw new ConvexError({ code: "NOT_FOUND", message: "Visit not found." });
+    const [job, property, materialApplications, weather] = await Promise.all([
+      ctx.db.get(visit.jobId),
+      visit.propertyId ? ctx.db.get(visit.propertyId) : undefined,
+      ctx.db.query("materialApplications").withIndex("by_visit", (q) => q.eq("visitId", visit._id)).collect(),
+      ctx.db.query("weatherSnapshots").withIndex("by_visit", (q) => q.eq("visitId", visit._id)).first(),
+    ]);
+    const tenantApplications = materialApplications.filter((application) => application.organizationId === org._id);
+    if (tenantApplications.length === 0) throw new Error("No material applications exist for this visit.");
+    const materials = await Promise.all(tenantApplications.map((application) => ctx.db.get(application.materialId)));
+    const now = Date.now();
+    const missing = [
+      ...(property ? [] : ["property"]),
+      ...(weather ? [] : ["weather snapshot"]),
+      ...materials.flatMap((material, index) => material?.epaRegistrationNumber ? [] : [`EPA registration for application ${index + 1}`]),
+    ];
+    await ctx.db.insert("auditEvents", {
+      organizationId: org._id,
+      actorUserId: args.organizationId ? userId : undefined,
+      action: "compliance_record.generate",
+      entityType: "visit",
+      entityId: visit._id,
+      summary: `Generated compliance record for ${job?.title ?? "visit"}`,
+      after: {
+        visitId: visit._id,
+        jobId: visit.jobId,
+        propertyId: visit.propertyId,
+        weatherSnapshotId: weather?._id,
+        materialApplicationIds: tenantApplications.map((application) => application._id),
+        materialCount: tenantApplications.length,
+        missing,
+        ready: missing.length === 0,
+        reportingMirror: "compliance_record",
+      },
+      createdAt: now,
+    });
+    return { visitId: visit._id, recordCount: tenantApplications.length, ready: missing.length === 0, missing };
+  },
+});
+
 export const recalculateDemoJobCosts = mutation({
-  args: {},
-  handler: async (ctx) => {
-    const org = await requireDemoOrg(ctx);
+  args: { organizationId: v.optional(v.id("organizations")) },
+  handler: async (ctx, args) => {
+    const { org } = await requireOperatingOrg(ctx, args.organizationId, "manageFinance");
     const recalculated = await recalculateJobCostSummaries(ctx, org._id);
     return { recalculated };
   },
@@ -2017,6 +2445,7 @@ export const recalculateDemoJobCosts = mutation({
 
 export const priceDemoFertilizationProgram = mutation({
   args: {
+    organizationId: v.optional(v.id("organizations")),
     propertyId: v.id("properties"),
     propertyAreaId: v.optional(v.id("propertyAreas")),
     materialId: v.id("materials"),
@@ -2028,15 +2457,20 @@ export const priceDemoFertilizationProgram = mutation({
     equipmentCostCentsPerApplication: v.number(),
     overheadPercent: v.number(),
     targetMarginPercent: v.number(),
+    selectedScenarioKey: v.optional(v.union(v.literal("low"), v.literal("target"), v.literal("premium"))),
+    selectedScenarioLabel: v.optional(v.string()),
+    selectedScenarioTargetMarginPercent: v.optional(v.number()),
+    estimateLineItemName: v.optional(v.string()),
+    estimateLineItemUnit: v.optional(v.string()),
+    estimateLineItemUnitPriceCents: v.optional(v.number()),
   },
   handler: async (ctx, args) => {
-    const org = await requireDemoOrg(ctx);
-    const [property, propertyArea, material, requestedPriceBookItem, owner] = await Promise.all([
+    const { org, userId } = await requireOperatingOrg(ctx, args.organizationId, "createEstimate");
+    const [property, propertyArea, material, requestedPriceBookItem] = await Promise.all([
       ctx.db.get(args.propertyId),
       args.propertyAreaId ? ctx.db.get(args.propertyAreaId) : undefined,
       ctx.db.get(args.materialId),
       args.priceBookItemId ? ctx.db.get(args.priceBookItemId) : undefined,
-      ctx.db.query("memberships").withIndex("by_org", (q) => q.eq("organizationId", org._id)).first(),
     ]);
     if (!property || property.organizationId !== org._id) throw new Error("Property not found.");
     if (!material || material.organizationId !== org._id) throw new Error("Material not found.");
@@ -2078,6 +2512,19 @@ export const priceDemoFertilizationProgram = mutation({
       adjustments,
     });
     const now = Date.now();
+    const selectedScenario = args.selectedScenarioKey
+      ? {
+        key: args.selectedScenarioKey,
+        label: args.selectedScenarioLabel ?? args.selectedScenarioKey,
+        targetMarginPercent: args.selectedScenarioTargetMarginPercent ?? args.targetMarginPercent,
+      }
+      : undefined;
+    const estimateLineItemPreview = {
+      name: args.estimateLineItemName ?? `${args.applicationCount}-step fertilization program`,
+      quantity: 1,
+      unit: args.estimateLineItemUnit ?? "season",
+      unitPriceCents: args.estimateLineItemUnitPriceCents ?? output.recommendedPriceCents,
+    };
     const sessionId = await ctx.db.insert("pricingCalculatorSessions", {
       organizationId: org._id,
       propertyId: property._id,
@@ -2088,37 +2535,42 @@ export const priceDemoFertilizationProgram = mutation({
         materialName: material.name,
         resolvedPriceBookItemId: fallbackPriceBookItem?._id,
         priceBookItemName: fallbackPriceBookItem?.name,
+        selectedScenario,
       },
-      outputs: output,
-      createdByUserId: owner?.userId,
+      outputs: {
+        ...output,
+        selectedScenario,
+        estimateLineItemPreview,
+      },
+      createdByUserId: userId,
       createdAt: now,
     });
     await ctx.db.insert("auditEvents", {
       organizationId: org._id,
-      actorUserId: owner?.userId,
-      action: "demo.pricing.fertilization.calculate",
+      actorUserId: userId,
+      action: "pricing.fertilization.calculate",
       entityType: "property",
       entityId: property._id,
       summary: `Calculated fertilization program for ${property.label}`,
-      after: { sessionId, recommendedPriceCents: output.recommendedPriceCents, turfAreaSqFt },
+      after: { sessionId, recommendedPriceCents: output.recommendedPriceCents, turfAreaSqFt, selectedScenario, estimateLineItemPreview },
       createdAt: now,
     });
-    return { sessionId, output };
+    return { sessionId, output, selectedScenario, estimateLineItemPreview };
   },
 });
 
 export const refreshCostIntelligence = mutation({
-  args: {},
-  handler: async (ctx) => {
-    const org = await requireDemoOrg(ctx);
+  args: { organizationId: v.optional(v.id("organizations")) },
+  handler: async (ctx, args) => {
+    const { org } = await requireOperatingOrg(ctx, args.organizationId, "manageCatalog");
     return await refreshCostSnapshots(ctx, org._id);
   },
 });
 
 export const runStaleLeadCheck = mutation({
-  args: {},
-  handler: async (ctx) => {
-    const org = await requireDemoOrg(ctx);
+  args: { organizationId: v.optional(v.id("organizations")) },
+  handler: async (ctx, args) => {
+    const { org } = await requireOperatingOrg(ctx, args.organizationId, "managePipeline");
     const inserted = await flagStaleLeads(ctx, org._id);
     return { inserted };
   },

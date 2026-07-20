@@ -106,7 +106,7 @@ export const primeTimeGroups = [
       { title: "Churn and LTV analytics", priority: "P0", status: "done", owner: "data", detail: "Lifecycle snapshots surface churn risk, LTV, LTV:CAC, and segment health." },
       { title: "Timesheet cost entry", priority: "P1", status: "done", owner: "engineering", detail: "Timesheet entries can feed actual labor cost in Convex." },
       { title: "Invoice and payment records", priority: "P1", status: "done", owner: "engineering", detail: "Customer invoice and payment tables are modeled and surfaced in finance views." },
-      { title: "Stripe checkout", priority: "P0", status: "blocked", owner: "ops", detail: "Needs Stripe account, product, price, webhook signing secret, and production checkout flow." },
+      { title: "Paddle checkout", priority: "P0", status: "in_progress", owner: "ops", detail: "Checkout, portal, and webhook routes are built; production still needs Paddle account secrets, price ID, and webhook testing." },
       { title: "QuickBooks sync", priority: "P2", status: "next", owner: "engineering", detail: "Defer until internal invoice/payment and job-cost data contracts are stable." },
       { title: "Purchase order workflow", priority: "P2", status: "in_progress", owner: "ops", detail: "Purchase order objects exist; add approvals, receiving, and vendor billing state." },
       { title: "Forecasting and budgets", priority: "P2", status: "next", owner: "data", detail: "Add monthly budget, forecast, seasonality, backlog, and crew-capacity planning." },

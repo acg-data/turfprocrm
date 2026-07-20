@@ -75,6 +75,7 @@ export const createOrganization = mutation({
     industryFocus: v.optional(v.union(v.literal("landscaping"), v.literal("pest_control"), v.literal("both"))),
     clerkOrganizationId: v.optional(v.string()),
     billingPlan: v.optional(billingPlan),
+    seedSampleData: v.optional(v.boolean()),
   },
   handler: async (ctx, args) => {
     const identity = await requireIdentity(ctx);
@@ -106,6 +107,7 @@ export const createOrganization = mutation({
         mapProvider: "google_maps_links",
         reportingMirror: "auditEvents_export_boundary",
         onboardingVersion: "green_industry_mvp_v1",
+        sampleDataMode: args.seedSampleData ? "tenant_sample" : "blank",
         planLimits: planLimits(plan),
         planMarketing: planMarketing(plan),
       },
@@ -443,6 +445,107 @@ export const createOrganization = mutation({
       updatedAt: now,
     });
 
+    if (args.seedSampleData) {
+      const sampleCustomerId = await ctx.db.insert("customers", {
+        organizationId,
+        name: "Sample HOA Property",
+        type: "hoa",
+        status: "prospect",
+        source: "Tenant sample data",
+        ownerUserId: userId,
+        tags: ["hoa", "recurring", "fertilization"],
+        createdAt: now,
+        updatedAt: now,
+      });
+      const sampleContactId = await ctx.db.insert("contacts", {
+        organizationId,
+        customerId: sampleCustomerId,
+        name: "Morgan Property Manager",
+        email: "sample-manager@example.com",
+        phone: "(555) 010-0199",
+        roleTitle: "Property manager",
+        isPrimary: true,
+        createdAt: now,
+        updatedAt: now,
+      });
+      const samplePropertyId = await ctx.db.insert("properties", {
+        organizationId,
+        customerId: sampleCustomerId,
+        label: "Main entrance and common turf",
+        street: "100 Sample Green Way",
+        city: "Foxborough",
+        state: "MA",
+        postalCode: "02035",
+        notes: "Tenant-scoped sample account. Delete before importing live client data.",
+        lawnSizeSqFt: 42000,
+        createdAt: now,
+        updatedAt: now,
+      });
+      await ctx.db.insert("propertyAreas", {
+        organizationId,
+        propertyId: samplePropertyId,
+        name: "Common turf",
+        kind: "front_lawn",
+        size: 42000,
+        unit: "sq_ft",
+        notes: "Sample area for fertilization pricing and estimating.",
+        createdAt: now,
+        updatedAt: now,
+      });
+      const sampleLeadId = await ctx.db.insert("leads", {
+        organizationId,
+        customerId: sampleCustomerId,
+        contactId: sampleContactId,
+        propertyId: samplePropertyId,
+        title: "Sample six-step turf program",
+        source: "Tenant sample data",
+        leadType: "form",
+        accountType: "commercial",
+        email: "sample-manager@example.com",
+        mobilePhone: "(555) 010-0199",
+        normalizedPhone: "5550100199",
+        message: "Sample opportunity showing lead-to-estimate workflow.",
+        programRequests: ["lawn_care"],
+        lawnSizeSqFt: 42000,
+        grade: "a",
+        status: "new",
+        urgency: "normal",
+        ownerUserId: userId,
+        spamScore: 0,
+        spamReasons: [],
+        qualityScore: 92,
+        receivedAt: now,
+        rawPayload: { source: "tenant_sample" },
+        createdAt: now,
+        updatedAt: now,
+      });
+      const sampleOpportunityId = await ctx.db.insert("opportunities", {
+        organizationId,
+        leadId: sampleLeadId,
+        customerId: sampleCustomerId,
+        propertyId: samplePropertyId,
+        title: "Sample six-step turf program",
+        stage: "qualified",
+        valueCents: 185000,
+        closeProbability: 45,
+        expectedCloseDate: now + 14 * 24 * 60 * 60 * 1000,
+        ownerUserId: userId,
+        serviceLines: ["lawn_care"],
+        createdAt: now,
+        updatedAt: now,
+      });
+      await ctx.db.insert("activities", {
+        organizationId,
+        entityType: "customer",
+        entityId: sampleCustomerId,
+        kind: "system",
+        summary: "Loaded tenant-scoped sample customer and opportunity",
+        metadata: { sampleLeadId, sampleOpportunityId },
+        actorUserId: userId,
+        occurredAt: now,
+      });
+    }
+
     await ctx.db.insert("auditEvents", {
       organizationId,
       actorUserId: userId,
@@ -450,7 +553,7 @@ export const createOrganization = mutation({
       entityType: "organization",
       entityId: organizationId,
       summary: `Provisioned ${args.name} workspace`,
-      after: { slug, plan, checklistItems: 6, limits: planLimits(plan), marketing: planMarketing(plan) },
+      after: { slug, plan, checklistItems: 6, seedSampleData: Boolean(args.seedSampleData), limits: planLimits(plan), marketing: planMarketing(plan) },
       createdAt: now,
     });
 

@@ -1,4 +1,5 @@
 import type { WorkspaceSnapshot } from "@/domain/types";
+import type { DemoPersona } from "./demo-personas";
 
 const today = new Date();
 today.setHours(0, 0, 0, 0);
@@ -466,6 +467,13 @@ const baseDemoWorkspace: WorkspaceSnapshot = {
       recurrence: "weekly",
     },
   ],
+  jobPhases: [
+    { id: "phase-brookside-handoff", jobId: "job-brookside", name: "Sales handoff", status: "completed", sortOrder: 1, startDate: at(10, 20, -1), dueDate: at(8, 30), completedAt: at(10, 30, -1) },
+    { id: "phase-brookside-production", jobId: "job-brookside", name: "Production visit", status: "scheduled", sortOrder: 2, startDate: at(8, 30), dueDate: at(10, 30) },
+    { id: "phase-brookside-review", jobId: "job-brookside", name: "Completion review", status: "scheduled", sortOrder: 3, startDate: at(10, 30), dueDate: at(12, 0) },
+    { id: "phase-northgate-production", jobId: "job-northgate", name: "Weekly maintenance production", status: "in_progress", sortOrder: 1, startDate: at(7, 30), dueDate: at(14, 0) },
+    { id: "phase-northgate-review", jobId: "job-northgate", name: "Facilities review", status: "scheduled", sortOrder: 2, startDate: at(14, 0), dueDate: at(16, 0) },
+  ],
   visits: [
     {
       id: "visit-brookside-am",
@@ -708,8 +716,8 @@ const scaleRoles = ["sales", "dispatcher", "crew_lead", "technician", "manager"]
 const scaleStatuses = ["new", "contacted", "converted", "disqualified"] as const;
 const scaleStages = ["new", "qualified", "estimating", "proposal_sent", "won"] as const;
 
-function buildScaledDemoWorkspace(workspace: WorkspaceSnapshot): WorkspaceSnapshot {
-  const syntheticMembers: WorkspaceSnapshot["members"] = Array.from({ length: 100 }, (_, index) => {
+function buildScaledDemoWorkspace(workspace: WorkspaceSnapshot, scaleCount = 100): WorkspaceSnapshot {
+  const syntheticMembers: WorkspaceSnapshot["members"] = Array.from({ length: scaleCount }, (_, index) => {
     const number = index + 1;
     const firstName = scaleFirstNames[index % scaleFirstNames.length];
     const lastName = scaleLastNames[Math.floor(index / scaleFirstNames.length) % scaleLastNames.length];
@@ -736,7 +744,7 @@ function buildScaledDemoWorkspace(workspace: WorkspaceSnapshot): WorkspaceSnapsh
   const syntheticNotes: WorkspaceSnapshot["notes"] = [];
   const syntheticFiles: WorkspaceSnapshot["files"] = [];
 
-  for (let index = 0; index < 100; index += 1) {
+  for (let index = 0; index < scaleCount; index += 1) {
     const number = index + 1;
     const padded = String(number).padStart(3, "0");
     const firstName = scaleFirstNames[index % scaleFirstNames.length];
@@ -952,3 +960,103 @@ function buildScaledDemoWorkspace(workspace: WorkspaceSnapshot): WorkspaceSnapsh
 }
 
 export const demoWorkspace: WorkspaceSnapshot = buildScaledDemoWorkspace(baseDemoWorkspace);
+
+function filterWorkspaceToContacts(workspace: WorkspaceSnapshot, contactLimit: number): WorkspaceSnapshot {
+  const contacts = workspace.contacts.slice(0, contactLimit);
+  const customerIds = new Set(contacts.map((contact) => contact.customerId));
+  const properties = workspace.properties.filter((property) => customerIds.has(property.customerId));
+  const propertyIds = new Set(properties.map((property) => property.id));
+  const leads = workspace.leads.filter((lead) => customerIds.has(lead.customerId));
+  const leadIds = new Set(leads.map((lead) => lead.id));
+  const opportunities = workspace.opportunities.filter((opportunity) => customerIds.has(opportunity.customerId));
+  const opportunityIds = new Set(opportunities.map((opportunity) => opportunity.id));
+  const estimates = workspace.estimates.filter((estimate) => customerIds.has(estimate.customerId));
+  const estimateIds = new Set(estimates.map((estimate) => estimate.id));
+  const jobs = workspace.jobs.filter((job) => customerIds.has(job.customerId));
+  const jobIds = new Set(jobs.map((job) => job.id));
+  const visits = workspace.visits.filter((visit) => jobIds.has(visit.jobId));
+  const visitIds = new Set(visits.map((visit) => visit.id));
+  const invoiceIds = new Set(workspace.invoices.filter((invoice) => customerIds.has(invoice.customerId)).map((invoice) => invoice.id));
+
+  const entityIds = {
+    customer: customerIds,
+    property: propertyIds,
+    lead: leadIds,
+    opportunity: opportunityIds,
+    estimate: estimateIds,
+    job: jobIds,
+    visit: visitIds,
+    customer_invoice: invoiceIds,
+  };
+  const belongsToEntity = (entityType: string, entityId: string) => entityIds[entityType as keyof typeof entityIds]?.has(entityId) ?? false;
+
+  return {
+    ...workspace,
+    contacts,
+    customers: workspace.customers.filter((customer) => customerIds.has(customer.id)),
+    properties,
+    propertyAreas: workspace.propertyAreas.filter((area) => propertyIds.has(area.propertyId)),
+    leads,
+    opportunities,
+    estimates,
+    approvalRequests: workspace.approvalRequests.filter((request) => estimateIds.has(request.estimateId)),
+    invoices: workspace.invoices.filter((invoice) => invoiceIds.has(invoice.id)),
+    payments: workspace.payments.filter((payment) => Boolean(payment.invoiceId && invoiceIds.has(payment.invoiceId))),
+    jobs,
+    jobPhases: workspace.jobPhases.filter((phase) => jobIds.has(phase.jobId)),
+    visits,
+    recurringServicePlans: workspace.recurringServicePlans.filter((plan) => Boolean(plan.jobId && jobIds.has(plan.jobId)) || customerIds.has(plan.customerId)),
+    changeOrders: workspace.changeOrders.filter((changeOrder) => jobIds.has(changeOrder.jobId)),
+    tasks: workspace.tasks.filter((task) => belongsToEntity(task.entityType, task.entityId)),
+    activities: workspace.activities.filter((activity) => belongsToEntity(activity.entityType, activity.entityId)),
+    notes: workspace.notes.filter((note) => belongsToEntity(note.entityType, note.entityId)),
+    files: workspace.files.filter((file) => belongsToEntity(file.entityType, file.entityId)),
+  };
+}
+
+const newUserDemoWorkspace: WorkspaceSnapshot = {
+  ...baseDemoWorkspace,
+  organization: {
+    ...baseDemoWorkspace.organization,
+    id: "org-demo-new",
+    name: "Your New Turf Pro Workspace",
+  },
+  members: [baseDemoWorkspace.members[0]],
+  customers: [],
+  contacts: [],
+  properties: [],
+  propertyAreas: [],
+  leads: [],
+  opportunities: [],
+  estimates: [],
+  approvalRequests: [],
+  invoices: [],
+  payments: [],
+  crews: [],
+  jobs: [],
+  jobPhases: [],
+  visits: [],
+  recurringServicePlans: [],
+  changeOrders: [],
+  tasks: [],
+  activities: [],
+  notes: [],
+  files: [],
+};
+
+function withDemoPersonaIdentity(workspace: WorkspaceSnapshot, persona: Exclude<DemoPersona, "new">): WorkspaceSnapshot {
+  return {
+    ...workspace,
+    organization: {
+      ...workspace.organization,
+      id: `org-demo-${persona}`,
+      name: persona === "starter" ? "Growing Turf Pro Workspace" : "Established Turf Pro Operations",
+    },
+  };
+}
+
+export function getDemoWorkspaceForPersona(persona: DemoPersona): WorkspaceSnapshot {
+  if (persona === "new") return newUserDemoWorkspace;
+  if (persona === "starter") return withDemoPersonaIdentity(filterWorkspaceToContacts(buildScaledDemoWorkspace(baseDemoWorkspace, 5), 10), "starter");
+  return withDemoPersonaIdentity(filterWorkspaceToContacts(demoWorkspace, 100), "established");
+}

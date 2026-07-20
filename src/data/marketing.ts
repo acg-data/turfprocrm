@@ -327,8 +327,8 @@ export const marketingPages: MarketingPage[] = [
       },
       {
         title: "Billing boundary",
-        body: "Plan records, subscriptions, invoices, seats, feature flags, and account health are modeled. Live Stripe checkout is still the next integration to connect before collecting money.",
-        bullets: ["Stripe customer fields ready", "Subscription status and SaaS invoice tables ready", "Feature flags remain available for future packaging without changing the public $99 offer"],
+        body: "Plan records, subscriptions, invoices, seats, feature flags, and account health are modeled. Paddle checkout, portal, and webhook routes are now the primary paid-beta billing path.",
+        bullets: ["Paddle customer, subscription, and transaction fields ready", "Subscription status and SaaS invoice tables ready", "Feature flags remain available for future packaging without changing the public $99 offer"],
       },
     ],
   },

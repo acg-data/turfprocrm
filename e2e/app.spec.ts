@@ -1,19 +1,28 @@
 import { expect, test, type Page } from "@playwright/test";
 
+const convexWriteTimeout = 30_000;
+
 async function openAppView(page: Page, name: string) {
   await page.getByRole("button", { name: "Open navigation" }).click();
   await page.locator("aside").getByRole("button", { name, exact: true }).click();
-  await expect(page.getByRole("heading", { name, exact: true })).toBeVisible();
+  await expect(page.getByRole("heading", { level: 1, name, exact: true })).toBeVisible();
 }
 
 async function waitForWorkspaceReady(page: Page) {
-  await expect(page.locator("body")).toContainText(/Convex live|Local demo/, { timeout: 15000 });
+  const demoButton = page.getByRole("button", { name: "Open sample workspace" });
+  if (await demoButton.isVisible().catch(() => false)) {
+    await demoButton.click();
+  }
+  await expect(page.getByRole("heading", { name: "Dashboard", exact: true })).toBeVisible({ timeout: convexWriteTimeout });
 }
 
 test("marketing front page routes to product pages and the live app", async ({ page }) => {
+  test.slow();
   await page.goto("/");
   await expect(page.getByRole("heading", { name: /The All-in-One CRM Built for Outdoor Professionals/i })).toBeVisible();
   await expect(page.locator("header").getByRole("link", { name: "Get Started" })).toHaveAttribute("href", "/signin");
+  await expect(page.getByRole("heading", { name: "Follow a customer from first call to profitable renewal" })).toBeVisible();
+  await expect(page.getByRole("link", { name: "Explore Live Sample" })).toHaveAttribute("href", "/app?demo=established");
 
   await page.goto("/features");
   await expect(page.getByRole("heading", { name: /Powerful Features/i })).toBeVisible();
@@ -25,6 +34,33 @@ test("marketing front page routes to product pages and the live app", async ({ p
   await expect(page.getByText("Single sign-in + Convex onboarding")).toBeVisible();
   await expect(page.getByText("10 contacts included").first()).toBeVisible();
   await expect(page.getByText("All-In Pro").first()).toBeVisible();
+  await expect(page.getByRole("heading", { name: "Try a guided demo" })).toBeVisible();
+  await expect(page.getByRole("link", { name: "Try Start fresh demo", exact: true })).toHaveAttribute("href", "/app?demo=new");
+  await expect(page.getByRole("link", { name: "Try 10-contact starter demo", exact: true })).toHaveAttribute("href", "/app?demo=starter");
+  await expect(page.getByRole("link", { name: "Try 100-contact operation demo", exact: true })).toHaveAttribute("href", "/app?demo=established");
+
+  await page.goto("/app?demo=new");
+  await expect(page.getByRole("heading", { name: "Dashboard" })).toBeVisible();
+  await expect(page.getByLabel("Demo profile")).toHaveValue("new");
+  await expect(page.getByLabel("Demo guide")).toHaveCount(0);
+  await expect(page.getByRole("navigation", { name: "Primary navigation" }).getByRole("button", { name: "Prime Time" })).toHaveCount(0);
+
+  await page.goto("/app?demo=starter");
+  await expect(page.getByRole("heading", { name: "Dashboard" })).toBeVisible();
+  await expect(page.getByLabel("Demo profile")).toHaveValue("starter");
+  await expect(page.getByLabel("Demo profile")).toContainText("10-contact starter");
+  await openAppView(page, "Customers");
+  await expect(page.getByText("10/10 free contacts", { exact: true })).toBeVisible();
+  await expect(page.getByText("Free plan contact limit reached", { exact: true })).toBeVisible();
+
+  await page.goto("/app?demo=established");
+  await expect(page.getByRole("heading", { name: "Dashboard" })).toBeVisible();
+  await expect(page.getByLabel("Demo profile")).toHaveValue("established");
+  await expect(page.getByLabel("Demo profile")).toContainText("100-contact operation");
+  await openAppView(page, "Customers");
+  await expect(page.getByText("100 contacts", { exact: true })).toBeVisible();
+  await expect(page.getByText("All-In Pro", { exact: true })).toBeVisible();
+  await expect(page.getByRole("link", { name: "View plans" })).toHaveCount(0);
 
   await page.goto("/signup");
   await expect(page).toHaveURL("/signin");
@@ -43,7 +79,7 @@ test("loads the operating shell and creates a lead", async ({ page }, testInfo) 
   await page.getByLabel("Global search").fill("Brookside");
   await expect(page.getByText("Brookside HOA").first()).toBeVisible();
   await page.getByLabel("Global search").press("Enter");
-  await expect(page.getByRole("heading", { name: "CRM", exact: true })).toBeVisible();
+  await expect(page.getByRole("heading", { level: 1, name: "Customers", exact: true })).toBeVisible();
   await expect(page.getByRole("heading", { name: "Brookside HOA" })).toBeVisible();
   await expect(page.getByRole("heading", { name: "Customer Account Workspace" })).toBeVisible();
   await expect(page.getByRole("region", { name: "Contacts" })).toBeVisible();
@@ -69,24 +105,11 @@ test("loads the operating shell and creates a lead", async ({ page }, testInfo) 
   await page.getByLabel("Repeat service line").selectOption("irrigation");
   await page.getByLabel("Repeat value").fill("650");
   await page.getByRole("button", { name: "Add Customer Service Request" }).click();
-  await expect(page.getByText("Brookside HOA repeat service request added to Pipeline.")).toBeVisible({ timeout: 15000 });
-  await expect(page.getByText(repeatServiceRequest).first()).toBeVisible({ timeout: 15000 });
+  await expect(page.getByText("Brookside HOA repeat service request added to Pipeline.")).toBeVisible({ timeout: convexWriteTimeout });
+  await expect(page.getByText(repeatServiceRequest).first()).toBeVisible({ timeout: convexWriteTimeout });
 
-  await openAppView(page, "Prime Time");
-  await expect(page.getByRole("heading", { name: "Top 100 updates to make this sellable as a real SaaS" })).toBeVisible();
-  await expect(page.getByText("P0 Open Items")).toBeVisible();
-  await expect(page.getByText("Stripe checkout").first()).toBeVisible();
-
-  await openAppView(page, "Journeys");
-  await expect(page.getByRole("heading", { name: "100 Customer Journey Coverage" })).toBeVisible();
-  await expect(page.getByText("Total journeys")).toBeVisible();
-  await expect(page.getByText("100 journeys").first()).toBeVisible();
-  await expect(page.getByText("P0 Journey Work Queue")).toBeVisible();
-  await expect(page.getByText("Journey 1 - P0 - owner")).toBeVisible();
-
-  await openAppView(page, "CRM");
-  await expect(page.getByText(/Free plan usage|Pro-scale demo workspace|Free plan contact cap reached/)).toBeVisible();
-  await expect(page.getByRole("link", { name: "Upgrade" })).toHaveAttribute("href", "/pricing");
+  await openAppView(page, "Customers");
+  await expect(page.getByText(/Free plan|All-In Pro/)).toBeVisible();
   const createLeadForm = page.getByRole("form", { name: "Create new lead" });
   await createLeadForm.getByRole("textbox", { name: "Customer", exact: true }).fill(customerName);
   await createLeadForm.getByRole("textbox", { name: "Service request", exact: true }).fill(serviceRequest);
@@ -99,7 +122,7 @@ test("loads the operating shell and creates a lead", async ({ page }, testInfo) 
   await createLeadForm.getByLabel("Value").fill("1200");
   await createLeadForm.getByLabel("Value").press("Enter");
 
-  await expect(page.getByText(`${customerName} was added to CRM, Lead Ops, and Pipeline.`)).toBeVisible();
+  await expect(page.getByText(`${customerName} was added to Customers, Leads, and Pipeline.`)).toBeVisible({ timeout: convexWriteTimeout });
   await expect(page.getByRole("heading", { name: customerName })).toBeVisible();
   await expect(page.getByText("Phone intake: Needs callback")).toBeVisible();
   await expect(page.getByText(`Call follow-up: ${serviceRequest}`)).toBeVisible();
@@ -111,7 +134,7 @@ test("loads the operating shell and creates a lead", async ({ page }, testInfo) 
   await page.getByLabel(`Service package for ${serviceRequest}`).selectOption({ label: "Mosquito and tick protection package - $780" });
   await page.getByRole("button", { name: `Create quote for ${serviceRequest}` }).click();
   const quoteCreatedMessage = page.getByText(`created for ${serviceRequest} using Mosquito and tick protection package.`, { exact: false });
-  await expect(quoteCreatedMessage).toBeVisible({ timeout: 15000 });
+  await expect(quoteCreatedMessage).toBeVisible({ timeout: convexWriteTimeout });
   const quoteCreatedText = (await quoteCreatedMessage.textContent()) ?? "";
   const createdEstimateNumber = quoteCreatedText.match(/Draft quote (EST-[0-9-]+)/)?.[1];
   expect(createdEstimateNumber).toBeTruthy();
@@ -120,17 +143,23 @@ test("loads the operating shell and creates a lead", async ({ page }, testInfo) 
   await expect(quotePackage.getByText("14 days after send")).toBeVisible();
   await expect(quotePackage.getByText("Review scope, pricing, add-ons, and expiration before sending to the customer.")).toBeVisible();
   await quotePackage.getByRole("button", { name: `Send quote ${createdEstimateNumber}` }).click();
-  await expect(quotePackage.getByText(`Quote ${createdEstimateNumber} sent to customer with 14-day expiration.`)).toBeVisible({ timeout: 15000 });
+  await expect(quotePackage.getByText(`Quote ${createdEstimateNumber} sent to customer with 14-day expiration.`)).toBeVisible({ timeout: convexWriteTimeout });
   await expect(quotePackage.getByText("Customer-facing link ready")).toBeVisible();
   await quotePackage.getByRole("button", { name: `Capture approval ${createdEstimateNumber}` }).click();
-  await expect(quotePackage.getByText(`Quote ${createdEstimateNumber} accepted by customer.`)).toBeVisible({ timeout: 15000 });
+  await expect(quotePackage.getByText(`Quote ${createdEstimateNumber} accepted by customer.`)).toBeVisible({ timeout: convexWriteTimeout });
   await expect(quotePackage.getByText("Customer approved")).toBeVisible();
   await expect(quotePackage.getByText("Approved by", { exact: false })).toBeVisible();
   await quotePackage.getByRole("button", { name: `Convert estimate ${createdEstimateNumber} to job` }).click();
-  await expect(quotePackage.getByText(`Job ${serviceRequest} created from ${createdEstimateNumber}.`)).toBeVisible({ timeout: 15000 });
+  await expect(quotePackage.getByText(`Job ${serviceRequest} created from ${createdEstimateNumber}.`)).toBeVisible({ timeout: convexWriteTimeout });
   await expect(quotePackage.getByText("Operations handoff ready", { exact: false })).toBeVisible();
   await quotePackage.getByRole("button", { name: `Open job ${serviceRequest}` }).click();
   await expect(page.getByRole("heading", { name: serviceRequest })).toBeVisible();
+  await expect(page.getByRole("heading", { name: "Job Workspace" })).toBeVisible();
+  await expect(page.getByRole("group", { name: "Job phase Sales handoff" })).toContainText("Sales handoff");
+  await expect(page.getByRole("group", { name: "Job phase Production visit" })).toContainText("Production visit");
+  await expect(page.getByText("Files + Comments")).toBeVisible();
+  await expect(page.getByText("Workspace Timeline")).toBeVisible();
+  await expect(page.getByRole("group", { name: /Job timeline Phase:/ }).first()).toBeVisible();
   await expect(page.getByRole("button", { name: "Confirm schedule and crew" })).toBeVisible();
   await expect(page.getByText("Confirm approved estimate scope").first()).toBeVisible();
   await expect(page.getByText("Record product and EPA label").first()).toBeVisible();
@@ -153,10 +182,10 @@ test("loads the operating shell and creates a lead", async ({ page }, testInfo) 
   await page.getByLabel("Change order cost delta").fill("180");
   await page.getByLabel("Change order schedule impact days").fill("2");
   await page.getByRole("button", { name: "Create Change Order" }).click();
-  await expect(page.getByText(`Change order ${changeOrderTitle} created for customer approval.`)).toBeVisible({ timeout: 15000 });
+  await expect(page.getByText(`Change order ${changeOrderTitle} created for customer approval.`)).toBeVisible({ timeout: convexWriteTimeout });
   await expect(page.getByText(changeOrderTitle).first()).toBeVisible();
   await page.getByRole("button", { name: "Approve Change Order" }).first().click();
-  await expect(page.getByText(`Change order ${changeOrderTitle} approved and scheduling task created.`)).toBeVisible({ timeout: 15000 });
+  await expect(page.getByText(`Change order ${changeOrderTitle} approved and scheduling task created.`)).toBeVisible({ timeout: convexWriteTimeout });
   await expect(page.getByText(`Schedule approved change order: ${changeOrderTitle}`).first()).toBeVisible();
   await openAppView(page, "Pipeline");
   await page.getByRole("button", { name: "All Open" }).click();
@@ -171,7 +200,7 @@ test("loads the operating shell and creates a lead", async ({ page }, testInfo) 
   await page.getByRole("button", { name: "Hot Estimates" }).click();
   await expect(page.getByLabel("Pipeline probability filter")).toHaveValue("high");
 
-  await openAppView(page, "Lead Ops");
+  await openAppView(page, "Leads");
   await page.getByPlaceholder("Lead, customer, city, source").fill(customerName);
   await expect(page.getByText(serviceRequest).first()).toBeVisible();
   await expect(page.getByRole("heading", { name: "Lead Detail" })).toBeVisible();
@@ -181,7 +210,7 @@ test("loads the operating shell and creates a lead", async ({ page }, testInfo) 
   await expect(page.getByText("Source win rate")).toBeVisible();
   await expect(page.getByRole("heading", { name: "Stale Follow-Up Queue" })).toBeVisible();
   await page.getByRole("button", { name: "Run Stale Lead Check" }).click();
-  await expect(page.getByText("stale lead", { exact: false })).toBeVisible();
+  await expect(page.getByText(/\d+ stale leads? flagged for follow-up\./)).toBeVisible();
 
   await expect(page.getByText("Lead Import Center")).toBeVisible();
   await page.getByLabel("Upload Lead Ops import CSV").setInputFiles({
@@ -200,10 +229,10 @@ test("loads the operating shell and creates a lead", async ({ page }, testInfo) 
   await expect(page.getByText(`Row 2 - Lead Ops Import ${runId}`)).toBeVisible();
   await expect(page.getByText(`Row 4 - Lead Ops Blocked ${runId}`)).toBeVisible();
   await expect(page.getByText("Outside service territory")).toBeVisible();
-  await expect(page.getByText("Lead Ops import job saved", { exact: false })).toBeVisible();
+  await expect(page.getByText("Lead Ops import job saved", { exact: false })).toBeVisible({ timeout: convexWriteTimeout });
   await expect(page.getByRole("button", { name: "Commit Lead Ops Ready Rows" })).toBeEnabled();
   await page.getByRole("button", { name: "Commit Lead Ops Ready Rows" }).click();
-  await expect(page.getByText("1 rows imported, 1 skipped, 1 failed.")).toBeVisible();
+  await expect(page.getByText("1 rows imported, 1 skipped, 1 failed.")).toBeVisible({ timeout: convexWriteTimeout });
 
   const webLeadName = `Web Form Lead ${runId}`;
   await expect(page.getByText("Web Form Intake")).toBeVisible();
@@ -217,10 +246,10 @@ test("loads the operating shell and creates a lead", async ({ page }, testInfo) 
   await page.getByLabel("Web source detail").fill("Google Ads");
   await page.getByLabel("Web message").fill("We generate leads and you can unsubscribe from this business opportunity.");
   await page.getByRole("button", { name: "Submit Web Lead" }).click();
-  await expect(page.getByText(`${webLeadName} captured from web form`, { exact: false })).toBeVisible();
+  await expect(page.getByText(`${webLeadName} captured from web form`, { exact: false })).toBeVisible({ timeout: convexWriteTimeout });
   await expect(page.getByText("spam score", { exact: false })).toBeVisible();
   await page.getByPlaceholder("Lead, customer, city, source").fill(webLeadName);
-  await expect(page.getByText(`Lawn care request from ${webLeadName}`).first()).toBeVisible();
+  await expect(page.getByText(`Lawn care request from ${webLeadName}`).first()).toBeVisible({ timeout: convexWriteTimeout });
 });
 
 test("dispatch surfaces route confidence and crew risk", async ({ page }) => {
@@ -233,7 +262,7 @@ test("dispatch surfaces route confidence and crew risk", async ({ page }) => {
   const brooksideCrewSelect = page.getByLabel("Assign crew for Brookside six-step season");
   await expect(brooksideCrewSelect).toBeVisible();
   await brooksideCrewSelect.selectOption({ label: "Bravo Pest" });
-  await expect(brooksideCrewSelect.locator("option:checked")).toHaveText("Bravo Pest", { timeout: 15000 });
+  await expect(brooksideCrewSelect.locator("option:checked")).toHaveText("Bravo Pest", { timeout: convexWriteTimeout });
   await page.getByRole("button", { name: "Move route stop down for Brookside six-step season" }).click();
   await expect(page.getByText("Brookside six-step season moved later in route order.")).toBeVisible();
   await expect(page.getByRole("heading", { name: "Recurring Route Generator" })).toBeVisible();
@@ -243,11 +272,23 @@ test("dispatch surfaces route confidence and crew risk", async ({ page }) => {
   await page.getByLabel("Recurring visit duration minutes").fill("180");
   await page.getByLabel("Recurring crew").selectOption({ label: "Charlie Maintenance" });
   await page.getByRole("button", { name: "Generate Recurring Route" }).click();
-  await expect(page.getByText("Generated 3 Weekly visits for Northgate weekly maintenance.")).toBeVisible({ timeout: 15000 });
+  await expect(page.getByText("Generated 3 Weekly visits for Northgate weekly maintenance.")).toBeVisible({ timeout: convexWriteTimeout });
   await expect(page.getByText("Northgate weekly maintenance weekly route").first()).toBeVisible();
   await expect(page.getByText("3 generated").first()).toBeVisible();
 
-  await openAppView(page, "Costing");
+  await openAppView(page, "Calendar");
+  await expect(page.getByRole("heading", { name: "Daily routes" })).toBeVisible();
+  await expect(page.getByRole("form", { name: "Add service cadence" })).toBeVisible();
+  await page.getByLabel("Cadence client job").selectOption({ label: "Northgate Industrial Park - Northgate weekly maintenance" });
+  await page.getByLabel("Cadence frequency").selectOption("biweekly");
+  await page.getByLabel("Cadence visit count").selectOption("4");
+  await page.getByLabel("Cadence crew").selectOption({ label: "Charlie Maintenance" });
+  await page.getByRole("button", { name: "Add cadence to calendar" }).click();
+  await expect(page.getByText(/4 every 2 weeks visits added for Northgate weekly maintenance\./)).toBeVisible({ timeout: convexWriteTimeout });
+  await expect(page.getByRole("region", { name: "Charlie Maintenance route" })).toContainText("Northgate Industrial Park");
+  await expect(page.getByRole("region", { name: "Charlie Maintenance route" })).toContainText("Every 2 weeks");
+
+  await openAppView(page, "Job costing");
   await expect(page.getByRole("heading", { name: "Service Package Picker" })).toBeVisible();
   await expect(page.getByLabel("Service package")).toBeVisible();
   await page.getByLabel("Service package").selectOption({ label: "Mosquito and tick protection package" });
@@ -266,10 +307,17 @@ test("dispatch surfaces route confidence and crew risk", async ({ page }) => {
   await page.getByLabel("Fertilization material rate").fill("0.008");
   await page.getByLabel("Fertilization target margin").fill("42");
   await expect(page.getByText("Recommended price")).toBeVisible();
+  await expect(page.getByText("Margin Scenario Builder")).toBeVisible();
+  await expect(page.getByRole("button", { name: "Select Low close-rate scenario" })).toBeVisible();
+  await expect(page.getByRole("button", { name: "Select Target margin scenario" })).toBeVisible();
+  await expect(page.getByRole("button", { name: "Select Premium service scenario" })).toBeVisible();
+  await page.getByRole("button", { name: "Select Premium service scenario" }).click();
+  await expect(page.getByText("Estimate line-item preview")).toBeVisible();
+  await expect(page.getByText("6-step fertilization program").first()).toBeVisible();
   await expect(page.getByText("Price rules", { exact: true })).toBeVisible();
   await expect(page.getByText("Large turf production complexity")).toBeVisible();
-  await page.getByRole("button", { name: "Save Fertilization Price Session" }).click();
-  await expect(page.getByText("Fertilization price session saved", { exact: false })).toBeVisible({ timeout: 15000 });
+  await page.getByRole("button", { name: "Save Selected Scenario" }).click();
+  await expect(page.getByText("Fertilization price session saved", { exact: false })).toBeVisible({ timeout: convexWriteTimeout });
   await expect(page.getByRole("heading", { name: "Estimate Approval Queue" })).toBeVisible();
   await expect(page.getByText("Approval required").first()).toBeVisible();
   await expect(page.getByText("Risk reasons").first()).toBeVisible();
@@ -277,8 +325,8 @@ test("dispatch surfaces route confidence and crew risk", async ({ page }) => {
   const approveEstimateButton = page.getByRole("button", { name: "Approve estimate EST-1024" }).first();
   await expect(approveEstimateButton).toBeEnabled();
   await approveEstimateButton.click();
-  await expect(approveEstimateButton).toBeDisabled({ timeout: 15000 });
-  await expect(page.getByLabel("Pending approvals 0")).toBeVisible();
+  await expect(approveEstimateButton).toBeDisabled({ timeout: convexWriteTimeout });
+  await expect(page.getByLabel("Pending approvals 0")).toBeVisible({ timeout: convexWriteTimeout });
   await expect(page.getByRole("heading", { name: "Margin Guardrails" })).toBeVisible();
   await expect(page.getByText("Price lift needed")).toBeVisible();
   await expect(page.getByText("Guardrail").first()).toBeVisible();
@@ -295,7 +343,7 @@ test("profit and admin expose owner analytics", async ({ page }, testInfo) => {
   await page.goto("/app");
   await waitForWorkspaceReady(page);
 
-  await openAppView(page, "Profit");
+  await openAppView(page, "Financials");
   await expect(page.getByText("Owner Unit Economics")).toBeVisible();
   await expect(page.getByText("Churn Analysis").first()).toBeVisible();
   await expect(page.getByText("LTV by Segment").first()).toBeVisible();
@@ -305,8 +353,17 @@ test("profit and admin expose owner analytics", async ({ page }, testInfo) => {
   const serviceLineRow = page.getByRole("group", { name: /Service line profitability/ }).first();
   await expect(serviceLineRow).toContainText("Revenue");
   await expect(serviceLineRow).toContainText("Profit");
+  await expect(page.getByRole("heading", { name: "Invoice Builder" })).toBeVisible();
+  await expect(page.getByRole("heading", { name: "Payment Entry" })).toBeVisible();
+  await expect(page.getByRole("heading", { name: "AR Aging Review" })).toBeVisible();
+  await expect(page.getByRole("heading", { name: "Customer Profitability Profiles" })).toBeVisible();
+  await expect(page.getByRole("row", { name: /Customer profitability/ }).first()).toContainText(/Current|Open AR|Past due/);
+  await page.getByLabel("Payment amount").fill("5");
+  await page.getByLabel("Payment reference").fill(`PW-${testInfo.project.name}-${Date.now()}`);
+  await page.getByRole("button", { name: "Record Payment" }).click();
+  await expect(page.getByText("Payment queued for", { exact: false })).toBeVisible();
 
-  await openAppView(page, "Cost Intel");
+  await openAppView(page, "Market costs");
   await expect(page.getByRole("heading", { name: "Labor Override" })).toBeVisible();
   await page.getByLabel("Labor rate role").fill(laborRole);
   await page.getByLabel("Labor cost per hour").fill("42");
@@ -314,7 +371,7 @@ test("profit and admin expose owner analytics", async ({ page }, testInfo) => {
   await page.getByRole("button", { name: "Save Rate" }).click();
   await expect(page.getByText(`Labor rate ${laborRole} saved.`)).toBeVisible();
   const laborRateRow = page.getByRole("group", { name: `Labor rate ${laborRole}` });
-  await expect(laborRateRow).toContainText("$42 cost", { timeout: 15000 });
+  await expect(laborRateRow).toContainText("$42 cost", { timeout: convexWriteTimeout });
   await expect(laborRateRow).toContainText("$92 billable");
   await page.getByLabel("Vendor catalog supplier").fill(vendorName);
   await page.getByLabel("Vendor catalog item name").fill(vendorItem);
@@ -324,10 +381,10 @@ test("profit and admin expose owner analytics", async ({ page }, testInfo) => {
   await page.getByRole("button", { name: "Save Item" }).click();
   await expect(page.getByText(`Vendor item ${vendorItem} saved.`)).toBeVisible();
   const vendorRow = page.getByRole("group", { name: `Vendor catalog item ${vendorItem}` });
-  await expect(vendorRow).toContainText(vendorName, { timeout: 15000 });
+  await expect(vendorRow).toContainText(vendorName, { timeout: convexWriteTimeout });
   await expect(vendorRow).toContainText("$58 / bag");
 
-  await openAppView(page, "Admin");
+  await openAppView(page, "Settings");
   await expect(page.getByRole("heading", { name: "Owner chart pack for churn, LTV, P&L, and costs" })).toBeVisible();
   await expect(page.getByRole("heading", { name: "Tag Taxonomy" })).toBeVisible();
   await expect(page.getByRole("heading", { name: "Lead Quality Thresholds" })).toBeVisible();
@@ -343,33 +400,33 @@ test("profit and admin expose owner analytics", async ({ page }, testInfo) => {
   await page.getByLabel("Workflow status active").check();
   await page.getByRole("button", { name: "Save Workflow Status" }).click();
   await expect(page.getByText(`Workflow status ${workflowLabel} saved.`)).toBeVisible();
-  await expect(workflowStatusRow).toContainText(workflowLabel, { timeout: 15000 });
+  await expect(workflowStatusRow).toContainText(workflowLabel, { timeout: convexWriteTimeout });
   await expect(workflowStatusRow).toContainText("order 4");
   await page.getByLabel("Audit search").fill(workflowLabel);
   await page.getByLabel("Audit entity filter").selectOption("organization");
-  await expect(page.getByLabel("Audit action filter")).toContainText("workflow_status.update", { timeout: 15000 });
+  await expect(page.getByLabel("Audit action filter")).toContainText("workflow_status.update", { timeout: convexWriteTimeout });
   await page.getByLabel("Audit action filter").selectOption("workflow_status.update");
   const workflowAudit = page.getByRole("group", { name: `Audit event workflow_status.update Updated workflow status ${workflowLabel}` });
-  await expect(workflowAudit).toContainText("Admin");
-  await expect(workflowAudit).toContainText("Organization");
+  await expect(workflowAudit).toContainText("Admin", { timeout: convexWriteTimeout });
+  await expect(workflowAudit).toContainText("Organization", { timeout: convexWriteTimeout });
   await page.getByLabel("Catalog service name").fill(serviceName);
   await page.getByLabel("Catalog service category").selectOption("pest_control");
   await page.getByLabel("Catalog service unit").fill("quarter");
   await page.getByLabel("Catalog service price").fill("549");
   await page.getByLabel("Catalog service active").check();
   await page.getByRole("button", { name: "Create Service" }).click();
-  await expect(page.getByText(`Service ${serviceName} saved to catalog.`)).toBeVisible({ timeout: 15000 });
+  await expect(page.getByText(`Service ${serviceName} saved to catalog.`)).toBeVisible({ timeout: convexWriteTimeout });
   const serviceRow = page.getByRole("group", { name: `Service catalog item ${serviceName}` });
   await expect(serviceRow).toContainText("Pest control");
   await expect(serviceRow).toContainText("$549");
   await page.getByLabel("Audit search").fill(serviceName);
   await page.getByLabel("Audit entity filter").selectOption("service_catalog_item");
-  await expect(page.getByLabel("Audit action filter")).toContainText("demo.catalog.create", { timeout: 15000 });
+  await expect(page.getByLabel("Audit action filter")).toContainText("demo.catalog.create", { timeout: convexWriteTimeout });
   await page.getByLabel("Audit action filter").selectOption("demo.catalog.create");
   const serviceAudit = page.getByRole("group", { name: `Audit event demo.catalog.create Created service ${serviceName}` });
-  await expect(serviceAudit).toContainText("Demo/Admin");
-  await expect(serviceAudit).toContainText("Service Catalog Item");
-  await expect(serviceAudit).toContainText("System / automation");
+  await expect(serviceAudit).toContainText("Demo/Admin", { timeout: convexWriteTimeout });
+  await expect(serviceAudit).toContainText("Service Catalog Item", { timeout: convexWriteTimeout });
+  await expect(serviceAudit).toContainText("System / automation", { timeout: convexWriteTimeout });
   await page.getByLabel("Invite email").fill(inviteEmail);
   await page.getByLabel("Invite name").fill("E2E Dispatcher");
   await page.getByLabel("Invite role").selectOption("dispatcher");
@@ -381,11 +438,11 @@ test("profit and admin expose owner analytics", async ({ page }, testInfo) => {
   await expect(inviteCard).toContainText("invited");
   await page.getByLabel("Audit search").fill(inviteEmail);
   await page.getByLabel("Audit entity filter").selectOption("organization");
-  await expect(page.getByLabel("Audit action filter")).toContainText("member.invite", { timeout: 15000 });
+  await expect(page.getByLabel("Audit action filter")).toContainText("member.invite", { timeout: convexWriteTimeout });
   await page.getByLabel("Audit action filter").selectOption("member.invite");
   const inviteAudit = page.getByRole("group", { name: `Audit event member.invite Invited ${inviteEmail} as dispatcher` });
-  await expect(inviteAudit).toContainText("Admin");
-  await expect(inviteAudit).toContainText("Organization");
+  await expect(inviteAudit).toContainText("Admin", { timeout: convexWriteTimeout });
+  await expect(inviteAudit).toContainText("Organization", { timeout: convexWriteTimeout });
   await inviteCard.getByRole("button", { name: "Expire Invite" }).click();
   await expect(inviteCard).toContainText("expired");
   await inviteCard.getByRole("button", { name: "Revoke Invite" }).click();
@@ -397,9 +454,19 @@ test("mobile field screen can complete checklist items", async ({ page }, testIn
   await page.goto("/app");
   await waitForWorkspaceReady(page);
   await openAppView(page, "Field");
+  const fieldScope = page.getByLabel("Field login scope");
+  await expect(fieldScope).toContainText("Field technician login");
+  await expect(page.getByLabel("Field session role")).toHaveValue("technician");
+  await expect(fieldScope).toContainText("Assigned crew only");
+  await expect(fieldScope).toContainText(/Visible visits/);
+  await page.getByLabel("Field session role").selectOption("dispatcher");
+  await expect(fieldScope).toContainText("All visits");
+  await page.getByLabel("Field session role").selectOption("technician");
+  await expect(fieldScope).toContainText("Assigned crew only");
   await expect(page.getByText("Weather application rules")).toBeVisible();
   await expect(page.getByText("Material / chemical lot")).toBeVisible();
   await expect(page.getByText("Equipment checkout")).toBeVisible();
+  await expect(page.getByText("Compliance record", { exact: true })).toBeVisible();
   await expect(page.getByText("Issue capture")).toBeVisible();
   await expect(page.getByText(/Stop \d+/).first()).toBeVisible();
   await page.getByRole("button").filter({ hasText: /Scheduled|On site|En route/ }).first().click();
@@ -410,22 +477,27 @@ test("mobile field screen can complete checklist items", async ({ page }, testIn
   await expect(page.getByText("Customer contact")).toBeVisible();
   await expect(page.getByRole("button", { name: "Start Visit" })).toBeEnabled();
   await page.getByRole("button", { name: "Start Visit" }).click();
-  await expect(page.getByText("Visit started with manual time confirmation.")).toBeVisible({ timeout: 15000 });
+  await expect(page.getByText("Visit started with manual time confirmation.")).toBeVisible({ timeout: convexWriteTimeout });
   await expect(page.getByText("On site").first()).toBeVisible();
   await expect(page.getByLabel("Material product")).toBeVisible();
   await page.getByLabel("Material quantity").fill("1.5");
   await page.getByLabel("Material application notes").fill("Applied to target area from field workflow.");
   await page.getByRole("button", { name: "Add Material Use" }).click();
   await expect(page.getByText("material use queued", { exact: false })).toBeVisible();
-  await page.getByRole("button", { name: "Upsell opportunity" }).click();
+  const upsellPreset = page.getByRole("button", { name: "Upsell opportunity", exact: true });
+  await expect(upsellPreset).toBeVisible();
+  await upsellPreset.click();
   await expect(page.getByLabel("Issue category")).toHaveValue("upsell_opportunity");
   await page.getByLabel("Issue summary").fill(issueSummary);
   await page.getByLabel("Issue details").fill("Customer asked about a quarterly mosquito and tick program from the field visit.");
   await page.getByLabel("Issue estimated value").fill("675");
   await page.getByRole("button", { name: /^Checklist / }).first().click();
   await page.getByRole("button", { name: "Submit Visit" }).click();
-  await expect(page.getByText("Visit submitted with 1 material record and issue follow-up.")).toBeVisible({ timeout: 15000 });
+  await expect(page.getByText("Visit submitted with 1 material record and issue follow-up.")).toBeVisible({ timeout: convexWriteTimeout });
   await expect(page.getByText("Complete").first()).toBeVisible();
+  await page.getByRole("button", { name: "Generate Compliance Record" }).click();
+  await expect(page.getByText("Compliance record generated", { exact: false })).toBeVisible({ timeout: convexWriteTimeout });
+  await expect(page.getByRole("group", { name: /Compliance record CMP-/ }).first()).toContainText(/EPA|Missing/);
   await openAppView(page, "Pipeline");
   await expect(page.getByText(`Field upsell: ${issueSummary}`).first()).toBeVisible();
 });
@@ -434,7 +506,7 @@ test("client onboarding previews a new tenant provisioning flow", async ({ page 
   const runId = `${testInfo.project.name}-${Date.now()}`;
   await page.goto("/app");
   await waitForWorkspaceReady(page);
-  await openAppView(page, "Onboarding");
+  await openAppView(page, "Company setup");
 
   await page.getByLabel("Upload lead import CSV").setInputFiles({
     name: "sample-leads.csv",
@@ -452,7 +524,7 @@ test("client onboarding previews a new tenant provisioning flow", async ({ page 
   await expect(page.getByText(`Row 2 - Import Ready ${runId}`)).toBeVisible();
   await expect(page.getByText(`Row 4 - Import Blocked ${runId}`)).toBeVisible();
   await expect(page.getByText("Outside service territory")).toBeVisible();
-  await expect(page.getByText("Import job saved", { exact: false })).toBeVisible();
+  await expect(page.getByText("Import job saved", { exact: false })).toBeVisible({ timeout: convexWriteTimeout });
   await expect(page.getByRole("button", { name: "Commit Ready Rows" })).toBeEnabled();
   await page.getByRole("button", { name: "Commit Ready Rows" }).click();
   await expect(page.getByText("1 rows imported, 1 skipped, 1 failed.")).toBeVisible();

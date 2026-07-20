@@ -2,7 +2,10 @@ import { defineConfig, devices } from "@playwright/test";
 
 export default defineConfig({
   testDir: "./e2e",
-  timeout: 30_000,
+  // The operating-shell journey intentionally crosses CRM, quoting, jobs,
+  // change orders, field work, admin, and profitability. Keep the budget
+  // large enough for a real Convex realtime round-trip on a seeded workspace.
+  timeout: 90_000,
   workers: 1,
   use: {
     baseURL: "http://127.0.0.1:3100",

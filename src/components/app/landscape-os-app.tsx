@@ -2,7 +2,9 @@
 
 import {
   ArrowDown,
+  ArrowRight,
   ArrowUp,
+  AlertTriangle,
   BarChart3,
   Bell,
   Briefcase,
@@ -52,10 +54,15 @@ import {
   customerJourneys,
   journeyCoverageSummary,
 } from "@/data/customer-journeys";
-import { demoWorkspace } from "@/data/demo-workspace";
+import { demoWorkspace, getDemoWorkspaceForPersona } from "@/data/demo-workspace";
+import { demoPersonaOptions, getDemoPersonaOption, type DemoPersona } from "@/data/demo-personas";
+import {
+  specsJourneyWorkflows,
+  type JourneyWorkflowItem,
+} from "@/data/journey-workflows";
 import { primeTimeBacklog, primeTimeGroups, type PrimeTimeStatus } from "@/data/prime-time-roadmap";
 import { parseLeadImportCsv } from "@/domain/imports";
-import { activeFertilizationPricingAdjustments, calculateFertilizationProgramPricing } from "@/domain/fertilization-pricing";
+import { activeFertilizationPricingAdjustments, buildFertilizationMarginScenarios, calculateFertilizationProgramPricing, type FertilizationMarginScenarioKey } from "@/domain/fertilization-pricing";
 import { leadQualityThresholds, scoreLeadQuality } from "@/domain/lead-scoring";
 import type { JobVisit, Opportunity, WorkspaceSnapshot } from "@/domain/types";
 import {
@@ -79,25 +86,76 @@ import { cn, currency, googleMapsUrl, shortDate, timeRange } from "@/lib/utils";
 import { api } from "../../../convex/_generated/api";
 import type { Id } from "../../../convex/_generated/dataModel";
 
-type View = "dashboard" | "prime_time" | "journeys" | "lead_ops" | "crm" | "pipeline" | "dispatch" | "jobs" | "field" | "costing" | "profit" | "cost_intel" | "admin" | "onboarding" | "specs";
+type View = "dashboard" | "prime_time" | "journeys" | "lead_ops" | "crm" | "pipeline" | "calendar" | "dispatch" | "routing" | "jobs" | "job_analysis" | "job_pricer" | "chemicals" | "field" | "costing" | "profit" | "churn_ltv" | "cost_intel" | "admin" | "onboarding" | "specs";
 
-const navItems: Array<{ id: View; label: string; icon: ReactNode }> = [
-  { id: "dashboard", label: "Dashboard", icon: <LayoutDashboard size={18} /> },
-  { id: "prime_time", label: "Prime Time", icon: <ListChecks size={18} /> },
-  { id: "journeys", label: "Journeys", icon: <ClipboardCheck size={18} /> },
-  { id: "lead_ops", label: "Lead Ops", icon: <Filter size={18} /> },
-  { id: "crm", label: "CRM", icon: <UsersRound size={18} /> },
-  { id: "pipeline", label: "Pipeline", icon: <Gauge size={18} /> },
-  { id: "dispatch", label: "Dispatch", icon: <CalendarDays size={18} /> },
-  { id: "jobs", label: "Jobs", icon: <ClipboardList size={18} /> },
-  { id: "field", label: "Field", icon: <Route size={18} /> },
-  { id: "costing", label: "Costing", icon: <Calculator size={18} /> },
-  { id: "profit", label: "Profit", icon: <BarChart3 size={18} /> },
-  { id: "cost_intel", label: "Cost Intel", icon: <CloudSun size={18} /> },
-  { id: "admin", label: "Admin", icon: <Settings size={18} /> },
-  { id: "onboarding", label: "Onboarding", icon: <Briefcase size={18} /> },
-  { id: "specs", label: "Specs", icon: <Database size={18} /> },
+type NavigationItem = { id: View; label: string; icon: ReactNode };
+
+const navGroups: Array<{ label: string; items: NavigationItem[] }> = [
+  {
+    label: "Overview",
+    items: [{ id: "dashboard", label: "Dashboard", icon: <LayoutDashboard size={18} /> }],
+  },
+  {
+    label: "Sales",
+    items: [
+      { id: "lead_ops", label: "Leads", icon: <Filter size={18} /> },
+      { id: "crm", label: "Customers", icon: <UsersRound size={18} /> },
+      { id: "pipeline", label: "Pipeline", icon: <Gauge size={18} /> },
+    ],
+  },
+  {
+    label: "Operations",
+    items: [
+      { id: "calendar", label: "Calendar", icon: <CalendarDays size={18} /> },
+      { id: "dispatch", label: "Dispatch", icon: <CalendarDays size={18} /> },
+      { id: "routing", label: "Routes", icon: <Route size={18} /> },
+      { id: "jobs", label: "Jobs", icon: <ClipboardList size={18} /> },
+      { id: "field", label: "Field", icon: <Route size={18} /> },
+      { id: "chemicals", label: "Chemical tracking", icon: <Package size={18} /> },
+    ],
+  },
+  {
+    label: "Insights",
+    items: [
+      { id: "job_analysis", label: "Job performance", icon: <BarChart3 size={18} /> },
+      { id: "job_pricer", label: "Pricing", icon: <Calculator size={18} /> },
+      { id: "costing", label: "Job costing", icon: <Calculator size={18} /> },
+      { id: "profit", label: "Financials", icon: <BarChart3 size={18} /> },
+      { id: "churn_ltv", label: "Retention", icon: <TrendingUp size={18} /> },
+      { id: "cost_intel", label: "Market costs", icon: <CloudSun size={18} /> },
+    ],
+  },
+  {
+    label: "Workspace",
+    items: [
+      { id: "admin", label: "Settings", icon: <Settings size={18} /> },
+      { id: "onboarding", label: "Company setup", icon: <Briefcase size={18} /> },
+    ],
+  },
 ];
+
+const navItems = navGroups.flatMap((group) => group.items);
+
+const viewDescriptions: Partial<Record<View, string>> = {
+  dashboard: "The work, money, and follow-ups that need attention today.",
+  lead_ops: "Qualify, assign, and follow up with every incoming lead.",
+  crm: "Customers, contacts, properties, notes, and service history.",
+  pipeline: "Move opportunities from first conversation to approved work.",
+  calendar: "See the day clearly and open any scheduled visit.",
+  dispatch: "Balance crews, timing, route order, and workload conflicts.",
+  routing: "Plan efficient service routes and open stops in the field view.",
+  jobs: "Run active work from approved scope through completion.",
+  field: "Complete visits, checklists, notes, photos, and issue flags.",
+  chemicals: "Record products, rates, applications, weather, and compliance.",
+  job_analysis: "Compare estimated and actual performance across jobs.",
+  job_pricer: "Build profitable prices from labor, materials, equipment, and overhead.",
+  costing: "Track estimated versus actual cost and margin.",
+  profit: "Monitor revenue, collections, margin, and operating performance.",
+  churn_ltv: "Understand retention, churn, tenure, and customer lifetime value.",
+  cost_intel: "Keep labor, materials, weather, and market assumptions current.",
+  admin: "Manage people, permissions, services, rates, and company controls.",
+  onboarding: "Configure a workspace and prepare data for launch.",
+};
 
 const categoryLabels: Record<ServiceCategory, string> = {
   lawn_care: "Lawn care",
@@ -452,6 +510,12 @@ type BackendState = {
   label: string;
   detail: string;
   blueprint?: BackendBlueprint | null;
+  activeOrganizationId?: string;
+  activeMembershipRole?: Role;
+  plan?: string;
+  subscriptionStatus?: string;
+  isDemoMode?: boolean;
+  demoPersona?: DemoPersona;
 };
 
 type LiveActions = {
@@ -622,6 +686,28 @@ type OperatingDepth = {
   fieldOps: {
     routeConfidence: Array<{ visitId: string; score: number; warnings: string[]; requiredSkills: string[]; crewSkills: string[]; weatherRisk: string; equipmentConflicts: string[] }>;
     materialLots: Array<{ visitId: string; materialName: string; epaNumber?: string; lotNumber: string; quantity: string; applicator: string; weatherRisk: string }>;
+    complianceRecords: Array<{
+      id: string;
+      reportNumber: string;
+      visitId: string;
+      jobTitle: string;
+      customerName: string;
+      propertyName: string;
+      siteAddress: string;
+      materialName: string;
+      epaRegistrationNumber?: string;
+      restrictedUse: boolean;
+      quantity: number;
+      unit: string;
+      targetArea: string;
+      applicator: string;
+      weatherSummary: string;
+      applicationRisk: string;
+      notes?: string;
+      generatedAt: number;
+      ready: boolean;
+      missing: string[];
+    }>;
     timeBreakdowns: Array<{ jobId: string; jobTitle: string; estimatedMinutes: number; scheduledMinutes: number; actualMinutes: number; driveMinutes: number; nonBillableMinutes: number; varianceMinutes: number }>;
     callbacks: Array<{ id: string; jobTitle: string; customerName: string; reason: string; severity: string; status: string }>;
     equipmentCheckouts: Array<{ visitId: string; equipmentName: string; status: string; maintenanceDue: boolean; assignedCrew: string }>;
@@ -723,8 +809,30 @@ type OperatingDepth = {
       jobCount: number;
       calculatedAt: number;
     }>;
-    invoices: Array<{ id: string; invoiceNumber: string; customerName: string; status: string; totalCents: number; paidCents: number; balanceCents: number }>;
-    payments: Array<{ id: string; customerName: string; status: string; method: string; amountCents: number; receivedAt: number }>;
+    customerProfitability: Array<{
+      customerId: string;
+      customerName: string;
+      customerType: string;
+      lifetimeRevenueCents: number;
+      lifetimeCostCents: number;
+      grossProfitCents: number;
+      grossMarginPercent: number;
+      estimatedLtvCents: number;
+      openBalanceCents: number;
+      invoiceCount: number;
+      paymentCount: number;
+      callbackCount: number;
+      churnRiskLevel: string;
+      churnRiskScore: number;
+      churnDrivers: string[];
+      nextBestAction: string;
+      paymentBehavior: string;
+      serviceMix: string[];
+    }>;
+    arAging: Array<{ invoiceId: string; invoiceNumber: string; customerName: string; jobTitle: string; status: string; totalCents: number; paidCents: number; balanceCents: number; dueAt?: number; daysPastDue: number; bucket: string; nextAction: string; risk: string }>;
+    invoiceableJobs: Array<{ jobId: string; jobTitle: string; customerName: string; status: string; billableCents: number; marginPercent: number }>;
+    invoices: Array<{ id: string; customerId: string; jobId?: string; invoiceNumber: string; customerName: string; jobTitle: string; status: string; totalCents: number; paidCents: number; balanceCents: number; dueAt?: number }>;
+    payments: Array<{ id: string; invoiceId?: string; customerName: string; status: string; method: string; amountCents: number; receivedAt: number; reference?: string }>;
   };
 };
 
@@ -754,14 +862,17 @@ type OperatingActions = {
   submitWebLead?: (input: WebLeadFormState) => Promise<{ leadId: string; submissionId: string; spamScore: number; spamReasons: string[]; status: string }>;
   runStaleLeadCheck?: () => Promise<{ inserted: number }>;
   updateMemberRole?: (membershipId: string, role: Role) => void;
-  inviteMember?: (input: { email: string; name?: string; role: Role; expiresInDays?: number }) => void;
+  inviteMember?: (input: { email: string; name?: string; role: Role; expiresInDays?: number }) => void | Promise<unknown>;
   revokeMemberInvite?: (membershipId: string) => void;
   expireMemberInvite?: (membershipId: string) => void;
   upsertLeadStatusSetting?: (input: { id?: string; status: LeadStatusSettingCode; label: string; color: string; sortOrder: number; terminal: boolean; active: boolean }) => void;
   upsertLaborRate?: (input: { id?: string; roleName: string; hourlyCostCents: number; billableRateCents?: number }) => void;
   upsertVendorCatalogItem?: (input: { id?: string; vendorName: string; itemName: string; category: ServiceCategory; unit: string; unitCostCents: number }) => void;
   addTimesheetEntry?: (jobId: string, roleName: string, hours: number, hourlyCostCents: number) => void;
-  recordCustomerPayment?: (invoiceId: string, amountCents: number, method: "cash" | "check" | "card" | "ach" | "other") => void;
+  recordCustomerPayment?: (invoiceId: string, amountCents: number, method: "cash" | "check" | "card" | "ach" | "other", reference?: string) => void;
+  generateInvoiceFromJob?: (jobId: string, status?: "draft" | "sent", dueInDays?: number) => Promise<{ invoiceId?: string; invoiceNumber?: string; created?: boolean; totalCents?: number; balanceCents?: number } | void>;
+  closeJob?: (jobId: string, forceWithExceptions?: boolean, generateInvoice?: boolean) => Promise<{ jobId?: string; status?: "completed"; blockers?: string[]; invoice?: { invoiceId?: string; invoiceNumber?: string; created?: boolean } } | void>;
+  generateComplianceRecord?: (visitId: string) => Promise<{ visitId?: string; recordCount?: number; ready?: boolean; missing?: string[] } | void>;
   recalculateJobCosts?: () => void;
   refreshCostIntelligence?: () => void;
   priceFertilizationProgram?: (input: {
@@ -776,7 +887,17 @@ type OperatingActions = {
     equipmentCostCentsPerApplication: number;
     overheadPercent: number;
     targetMarginPercent: number;
-  }) => Promise<{ sessionId: string; output: ReturnType<typeof calculateFertilizationProgramPricing> }>;
+    selectedScenarioKey?: FertilizationMarginScenarioKey;
+    selectedScenarioLabel?: string;
+    selectedScenarioTargetMarginPercent?: number;
+    estimateLineItemName?: string;
+    estimateLineItemUnit?: string;
+    estimateLineItemUnitPriceCents?: number;
+  }) => Promise<{
+    sessionId: string;
+    output: ReturnType<typeof calculateFertilizationProgramPricing>;
+    estimateLineItemPreview?: { name: string; quantity: number; unit: string; unitPriceCents: number };
+  }>;
   decideEstimateApproval?: (approvalRequestId: string, decision: "approved" | "rejected", comment?: string) => Promise<{ approvalRequestId: string; status: "approved" | "rejected" } | void>;
 };
 
@@ -846,7 +967,7 @@ const fallbackBackendBlueprint: BackendBlueprint = {
     { item: "Convex scheduled jobs", status: "done", owner: "engineering" },
     { item: "Cost intelligence live API adapters", status: "next", owner: "data" },
     { item: "Clerk production env", status: "next", owner: "ops" },
-    { item: "Stripe billing", status: "next", owner: "ops" },
+    { item: "Paddle billing", status: "next", owner: "ops" },
   ],
   publicV1Interfaces: ["Google Maps deep links"],
   deferredInterfaces: ["HubSpot", "SMS", "call tracking", "marketing attribution", "Postgres reporting mirror"],
@@ -1098,6 +1219,7 @@ function normalizeOperatingDepth(input: OperatingDepth | undefined, fallback: Op
     fieldOps: {
       routeConfidence: depth.fieldOps?.routeConfidence ?? fallback.fieldOps.routeConfidence,
       materialLots: depth.fieldOps?.materialLots ?? fallback.fieldOps.materialLots,
+      complianceRecords: depth.fieldOps?.complianceRecords ?? fallback.fieldOps.complianceRecords,
       timeBreakdowns: depth.fieldOps?.timeBreakdowns ?? fallback.fieldOps.timeBreakdowns,
       callbacks: depth.fieldOps?.callbacks ?? fallback.fieldOps.callbacks,
       equipmentCheckouts: depth.fieldOps?.equipmentCheckouts ?? fallback.fieldOps.equipmentCheckouts,
@@ -1118,7 +1240,7 @@ function userFacingWriteError(error: unknown) {
   if (error instanceof Error) {
     return error.message.replace(/^.*Uncaught ConvexError:\s*/, "").replace(/^.*ConvexError:\s*/, "");
   }
-  return "The backend rejected this write. Check plan limits, permissions, or required fields and try again.";
+  return "We couldn't save this change. Check your plan limits, permissions, and required fields, then try again.";
 }
 
 function sameIdentityText(left?: string, right?: string) {
@@ -1172,6 +1294,45 @@ function preserveVisitSelection(previous: WorkspaceSnapshot, next: WorkspaceSnap
   return visitMatch?.id ?? next.visits[0]?.id ?? "";
 }
 
+function mergeWorkspaceSnapshots(previous: WorkspaceSnapshot, next: WorkspaceSnapshot): WorkspaceSnapshot {
+  if (previous.organization.id !== next.organization.id) return next;
+
+  const mergeByIdentity = <T extends { id: string }>(remote: T[], local: T[], identity: (item: T) => string = (item) => item.id) => {
+    const remoteIdentities = new Set(remote.map(identity));
+    return [...remote, ...local.filter((item) => !remoteIdentities.has(identity(item)))];
+  };
+
+  return {
+    ...next,
+    members: mergeByIdentity(next.members, previous.members),
+    customers: mergeByIdentity(next.customers, previous.customers),
+    contacts: mergeByIdentity(next.contacts, previous.contacts, (item) => `${item.customerId}|${item.email ?? ""}|${item.phone ?? ""}|${item.name}`),
+    properties: mergeByIdentity(next.properties, previous.properties, (item) => `${item.customerId}|${item.street}|${item.city}|${item.postalCode}`),
+    propertyAreas: mergeByIdentity(next.propertyAreas, previous.propertyAreas, (item) => `${item.propertyId}|${item.name}|${item.size ?? ""}`),
+    leads: mergeByIdentity(next.leads, previous.leads, (item) => `${item.customerId}|${item.title}`),
+    opportunities: mergeByIdentity(next.opportunities, previous.opportunities, (item) => `${item.leadId}|${item.title}`),
+    estimates: mergeByIdentity(next.estimates, previous.estimates),
+    approvalRequests: mergeByIdentity(next.approvalRequests, previous.approvalRequests),
+    invoices: mergeByIdentity(next.invoices, previous.invoices),
+    payments: mergeByIdentity(next.payments, previous.payments, (item) => `${item.invoiceId}|${item.amountCents}|${item.reference ?? ""}`),
+    serviceCatalog: mergeByIdentity(next.serviceCatalog, previous.serviceCatalog),
+    servicePackages: mergeByIdentity(next.servicePackages, previous.servicePackages),
+    priceBookItems: mergeByIdentity(next.priceBookItems, previous.priceBookItems),
+    pricingRules: mergeByIdentity(next.pricingRules, previous.pricingRules),
+    crews: mergeByIdentity(next.crews, previous.crews),
+    jobs: mergeByIdentity(next.jobs, previous.jobs, (item) => `${item.customerId}|${item.title}`),
+    jobPhases: mergeByIdentity(next.jobPhases, previous.jobPhases, (item) => `${item.jobId}|${item.name}`),
+    visits: mergeByIdentity(next.visits, previous.visits, (item) => `${item.jobId}|${item.scheduledStart}|${item.scheduledEnd}`),
+    recurringServicePlans: mergeByIdentity(next.recurringServicePlans, previous.recurringServicePlans, (item) => `${item.customerId}|${item.name}`),
+    changeOrders: mergeByIdentity(next.changeOrders, previous.changeOrders, (item) => `${item.jobId}|${item.title}`),
+    tasks: mergeByIdentity(next.tasks, previous.tasks, (item) => `${item.entityType}|${item.entityId}|${item.title}`),
+    activities: mergeByIdentity(next.activities, previous.activities, (item) => `${item.entityType}|${item.entityId}|${item.kind}|${item.summary}`),
+    notes: mergeByIdentity(next.notes, previous.notes, (item) => `${item.entityType}|${item.entityId}|${item.body}`),
+    files: mergeByIdentity(next.files, previous.files, (item) => `${item.entityType}|${item.entityId}|${item.fileName}`),
+    materials: mergeByIdentity(next.materials, previous.materials, (item) => `${item.name}|${item.unit}`),
+  };
+}
+
 function normalizeWorkspaceSnapshot(workspace: WorkspaceSnapshot): WorkspaceSnapshot {
   const maybe = workspace as WorkspaceSnapshot & {
     contacts?: WorkspaceSnapshot["contacts"];
@@ -1184,6 +1345,7 @@ function normalizeWorkspaceSnapshot(workspace: WorkspaceSnapshot): WorkspaceSnap
     pricingRules?: WorkspaceSnapshot["pricingRules"];
     recurringServicePlans?: WorkspaceSnapshot["recurringServicePlans"];
     changeOrders?: WorkspaceSnapshot["changeOrders"];
+    jobPhases?: WorkspaceSnapshot["jobPhases"];
     notes?: WorkspaceSnapshot["notes"];
     files?: WorkspaceSnapshot["files"];
   };
@@ -1200,6 +1362,7 @@ function normalizeWorkspaceSnapshot(workspace: WorkspaceSnapshot): WorkspaceSnap
     pricingRules: maybe.pricingRules ?? [],
     recurringServicePlans: maybe.recurringServicePlans ?? [],
     changeOrders: maybe.changeOrders ?? [],
+    jobPhases: maybe.jobPhases ?? [],
     notes: maybe.notes ?? [],
     files: maybe.files ?? [],
   };
@@ -1380,7 +1543,7 @@ function buildFallbackOperatingDepth(workspace: WorkspaceSnapshot): OperatingDep
     { id: "equipment-spreader", name: "Ride-on spreader/sprayer", category: "application", hourlyCostCents: 1800, billableRateCents: 4200, active: true },
     { id: "equipment-mower", name: "Commercial mower", category: "maintenance", hourlyCostCents: 2100, billableRateCents: 4600, active: true },
   ];
-  const vendorCatalogs = workspace.materials.map((material) => ({ id: material.id, vendorName: "Demo vendor", itemName: material.name, category: "lawn_care" as ServiceCategory, unit: material.unit, unitCostCents: material.costCents, source: "manual", active: material.active }));
+  const vendorCatalogs = workspace.materials.map((material) => ({ id: material.id, vendorName: "Demo vendor", itemName: material.name, category: "lawn_care" as ServiceCategory, unit: material.unit, unitCostCents: material.costCents ?? 0, source: "manual", active: material.active }));
   const costSnapshots = [
     { id: "cost-fred", source: "fred", kind: "fertilizer_index", label: "FRED fertilizer materials PPI", value: 439.037, unit: "index_1982_100", region: "US", capturedAt: now() },
     { id: "cost-bls", source: "bls", kind: "labor", label: "BLS local labor baseline", value: 27.5, unit: "loaded_hourly_usd", region: "MA/Boston", capturedAt: now() },
@@ -1441,6 +1604,43 @@ function buildFallbackOperatingDepth(workspace: WorkspaceSnapshot): OperatingDep
       quantity: `${index + 1}.${index + 5} ${material?.unit ?? "unit"}`,
       applicator: crew?.name ?? "Unassigned",
       weatherRisk: weather?.applicationRisk ?? "unknown",
+    };
+  });
+  const complianceRecords = workspace.visits.map((visit, index) => {
+    const material = workspace.materials[index % Math.max(1, workspace.materials.length)];
+    const property = propertiesById.get(visit.propertyId);
+    const job = workspace.jobs.find((candidate) => candidate.id === visit.jobId);
+    const customer = job ? customersById.get(job.customerId) : undefined;
+    const crew = crewsById.get(visit.crewId);
+    const weather = weatherSnapshots.find((snapshot) => snapshot.id === `weather-${visit.id}`);
+    const epaRegistrationNumber = material?.name.toLowerCase().includes("barrier") || material?.name.toLowerCase().includes("grub") ? `EPA-${8700 + index}-MA` : undefined;
+    const missing = [
+      ...(epaRegistrationNumber ? [] : ["EPA registration"]),
+      ...(property ? [] : ["property"]),
+      ...(weather ? [] : ["weather snapshot"]),
+      ...(crew ? [] : ["applicator/crew"]),
+    ];
+    return {
+      id: `compliance-${visit.id}`,
+      reportNumber: `CMP-${new Date(visit.scheduledStart).getFullYear()}-${String(index + 1).padStart(4, "0")}`,
+      visitId: visit.id,
+      jobTitle: job?.title ?? "Unassigned job",
+      customerName: customer?.name ?? "Unknown customer",
+      propertyName: property?.label ?? "Unknown property",
+      siteAddress: property ? `${property.street}, ${property.city}, ${property.state} ${property.postalCode}` : "Unknown address",
+      materialName: material?.name ?? "General material",
+      epaRegistrationNumber,
+      restrictedUse: false,
+      quantity: index + 1.5,
+      unit: material?.unit ?? "unit",
+      targetArea: "Whole property",
+      applicator: crew?.name ?? "Unassigned",
+      weatherSummary: weather ? `${weather.conditions}, ${weather.temperatureF ?? "--"}F, wind ${weather.windMph ?? "--"} mph, ${weather.applicationRisk} risk` : "Missing weather",
+      applicationRisk: weather?.applicationRisk ?? "high",
+      notes: "Fallback compliance projection",
+      generatedAt: visit.scheduledStart,
+      ready: missing.length === 0,
+      missing,
     };
   });
   const timeBreakdowns = summaries.map((summary, index) => {
@@ -1634,6 +1834,78 @@ function buildFallbackOperatingDepth(workspace: WorkspaceSnapshot): OperatingDep
     grossProfitCents: rows.reduce((sum, row) => sum + row.grossProfitCents, 0),
     churnRiskPercent: rows.length > 0 ? Math.round((rows.filter((row) => ["high", "critical"].includes(row.churnRiskLevel)).length / rows.length) * 1000) / 10 : 0,
   }));
+  const fallbackInvoices = summaries.map((summary, index) => {
+    const dueAt = now() + (index === 0 ? -8 : 12 + index) * 24 * 60 * 60 * 1000;
+    return {
+      id: `invoice-${summary.jobId}`,
+      customerId: workspace.jobs.find((job) => job.id === summary.jobId)?.customerId ?? "",
+      jobId: summary.jobId,
+      invoiceNumber: `DRAFT-${index + 1001}`,
+      customerName: summary.customerName,
+      jobTitle: summary.jobTitle,
+      status: index === 0 ? "partially_paid" : "sent",
+      totalCents: summary.invoicedCents,
+      paidCents: summary.collectedCents,
+      balanceCents: Math.max(0, summary.invoicedCents - summary.collectedCents),
+      dueAt,
+    };
+  });
+  const fallbackPayments = summaries.slice(0, 2).map((summary, index) => ({
+    id: `payment-${summary.jobId}`,
+    invoiceId: `invoice-${summary.jobId}`,
+    customerName: summary.customerName,
+    status: "posted",
+    method: index === 0 ? "ach" : "check",
+    amountCents: summary.collectedCents,
+    receivedAt: now() - index * 24 * 60 * 60 * 1000,
+    reference: `FALLBACK-${index + 1}`,
+  }));
+  const fallbackArAging = fallbackInvoices
+    .filter((invoice) => invoice.balanceCents > 0)
+    .map((invoice) => {
+      const daysPastDue = invoice.dueAt ? Math.max(0, Math.floor((now() - invoice.dueAt) / (24 * 60 * 60 * 1000))) : 0;
+      return {
+        invoiceId: invoice.id,
+        invoiceNumber: invoice.invoiceNumber,
+        customerName: invoice.customerName,
+        jobTitle: invoice.jobTitle,
+        status: invoice.status,
+        totalCents: invoice.totalCents,
+        paidCents: invoice.paidCents,
+        balanceCents: invoice.balanceCents,
+        dueAt: invoice.dueAt,
+        daysPastDue,
+        bucket: daysPastDue === 0 ? "current" : daysPastDue <= 30 ? "1-30" : daysPastDue <= 60 ? "31-60" : "61-90",
+        nextAction: daysPastDue > 0 ? "Create collections touch" : "Monitor due date",
+        risk: daysPastDue > 30 ? "high" : daysPastDue > 0 ? "medium" : "low",
+      };
+    });
+  const fallbackCustomerProfitability = lifecycleRows.map((row) => {
+    const openBalanceCents = fallbackInvoices.filter((invoice) => invoice.customerId === row.customer.id).reduce((sum, invoice) => sum + invoice.balanceCents, 0);
+    return {
+      customerId: row.customer.id,
+      customerName: row.customer.name,
+      customerType: row.customer.type,
+      lifetimeRevenueCents: row.lifetimeRevenueCents,
+      lifetimeCostCents: row.lifetimeCostCents,
+      grossProfitCents: row.grossProfitCents,
+      grossMarginPercent: row.grossMarginPercent,
+      estimatedLtvCents: row.estimatedLtvCents,
+      openBalanceCents,
+      invoiceCount: fallbackInvoices.filter((invoice) => invoice.customerId === row.customer.id).length,
+      paymentCount: fallbackPayments.filter((payment) => payment.customerName === row.customer.name).length,
+      callbackCount: callbacks.filter((callback) => callback.customerName === row.customer.name).length,
+      churnRiskLevel: row.churnRiskLevel,
+      churnRiskScore: row.churnRiskScore,
+      churnDrivers: row.churnDrivers.length > 0 ? row.churnDrivers : ["Healthy account"],
+      nextBestAction: openBalanceCents > 0 ? "Resolve AR before renewal" : "Offer renewal or upsell review",
+      paymentBehavior: openBalanceCents > 0 ? "Open AR" : "Current",
+      serviceMix: row.customer.tags.slice(0, 3),
+    };
+  });
+  const fallbackInvoiceableJobs = summaries
+    .filter((summary) => !fallbackInvoices.some((invoice) => invoice.jobId === summary.jobId && invoice.status !== "void"))
+    .map((summary) => ({ jobId: summary.jobId, jobTitle: summary.jobTitle, customerName: summary.customerName, status: summary.status, billableCents: summary.actualRevenueCents, marginPercent: summary.grossMarginPercent }));
 
   return {
     seeded: false,
@@ -1646,7 +1918,11 @@ function buildFallbackOperatingDepth(workspace: WorkspaceSnapshot): OperatingDep
       statusSettings: [
         { id: "status-new", status: "new", label: "New", color: "#64748b", sortOrder: 1, terminal: false, active: true },
         { id: "status-contacted", status: "contacted", label: "Contacted", color: "#d97706", sortOrder: 2, terminal: false, active: true },
+        { id: "status-do-estimate", status: "do_estimate", label: "Do Estimate", color: "#2563eb", sortOrder: 3, terminal: false, active: true },
+        { id: "status-estimate-provided", status: "estimate_provided", label: "Estimate Provided", color: "#7c3aed", sortOrder: 4, terminal: false, active: true },
+        { id: "status-follow-up", status: "follow_up", label: "Follow Up", color: "#b45309", sortOrder: 5, terminal: false, active: true },
         { id: "status-converted", status: "converted", label: "Converted", color: "#047857", sortOrder: 6, terminal: true, active: true },
+        { id: "status-lost-confirmed", status: "lost_confirmed", label: "Lost", color: "#be123c", sortOrder: 7, terminal: true, active: true },
         { id: "status-spam", status: "spam", label: "Spam", color: "#475569", sortOrder: 8, terminal: true, active: true },
       ],
       qualityIssues: [],
@@ -1663,6 +1939,7 @@ function buildFallbackOperatingDepth(workspace: WorkspaceSnapshot): OperatingDep
     fieldOps: {
       routeConfidence,
       materialLots,
+      complianceRecords,
       timeBreakdowns,
       callbacks,
       equipmentCheckouts,
@@ -1710,7 +1987,7 @@ function buildFallbackOperatingDepth(workspace: WorkspaceSnapshot): OperatingDep
         { id: `time-${summary.jobId}-lead`, jobTitle: summary.jobTitle, roleName: "Crew Lead", hours: 2.4, totalCostCents: 8640, status: "approved" },
         { id: `time-${summary.jobId}-tech`, jobTitle: summary.jobTitle, roleName: "Technician", hours: 2.4, totalCostCents: 6600, status: "approved" },
       ]),
-      purchaseOrders: workspace.materials.slice(0, 2).map((material) => ({ id: `po-${material.id}`, vendorName: "Demo vendor", status: "received", totalCents: material.costCents * 6, jobTitle: summaries[0]?.jobTitle ?? "Unassigned" })),
+      purchaseOrders: workspace.materials.slice(0, 2).map((material) => ({ id: `po-${material.id}`, vendorName: "Demo vendor", status: "received", totalCents: (material.costCents ?? 0) * 6, jobTitle: summaries[0]?.jobTitle ?? "Unassigned" })),
     },
     revenue: {
       pipelineCents: openOpportunityValue,
@@ -1726,8 +2003,11 @@ function buildFallbackOperatingDepth(workspace: WorkspaceSnapshot): OperatingDep
       arCents: Math.max(0, totals.invoicedCents - totals.collectedCents),
       grossMarginPercent: totals.invoicedCents > 0 ? Math.round((totals.grossProfitCents / totals.invoicedCents) * 1000) / 10 : 0,
       serviceLineProfitability,
-      invoices: summaries.map((summary, index) => ({ id: `invoice-${summary.jobId}`, invoiceNumber: `DRAFT-${index + 1001}`, customerName: summary.customerName, status: index === 0 ? "partially_paid" : "sent", totalCents: summary.invoicedCents, paidCents: summary.collectedCents, balanceCents: Math.max(0, summary.invoicedCents - summary.collectedCents) })),
-      payments: summaries.slice(0, 2).map((summary, index) => ({ id: `payment-${summary.jobId}`, customerName: summary.customerName, status: "posted", method: index === 0 ? "ach" : "check", amountCents: summary.collectedCents, receivedAt: now() - index * 24 * 60 * 60 * 1000 })),
+      customerProfitability: fallbackCustomerProfitability,
+      arAging: fallbackArAging,
+      invoiceableJobs: fallbackInvoiceableJobs,
+      invoices: fallbackInvoices,
+      payments: fallbackPayments,
     },
   };
 }
@@ -1822,55 +2102,190 @@ function Field({ label, children }: { label: string; children: ReactNode }) {
   );
 }
 
+function JourneyWorkflowPanel({
+  title,
+  description,
+  items,
+}: {
+  title: string;
+  description: string;
+  items: JourneyWorkflowItem[];
+}) {
+  const [completed, setCompleted] = useState<Record<number, boolean>>({});
+
+  if (items.length === 0) return null;
+
+  return (
+    <Panel>
+      <div className="flex flex-wrap items-start justify-between gap-3">
+        <div>
+          <h2 className="text-base font-bold">{title}</h2>
+          <p className="mt-1 max-w-3xl text-sm leading-5 text-stone-500">{description}</p>
+        </div>
+        <Badge tone="success">{items.length} journeys</Badge>
+      </div>
+      <div className="mt-4 grid gap-3 lg:grid-cols-2">
+        {items.map((item) => {
+          const isComplete = Boolean(completed[item.id]);
+          return (
+            <div key={item.id} className="rounded-md border border-stone-200 p-3" role="group" aria-label={`Journey workflow ${item.id}`}>
+              <div className="flex flex-wrap items-start justify-between gap-3">
+                <div>
+                  <div className="text-xs font-semibold uppercase tracking-normal text-stone-500">Journey {item.id} - {item.owner}</div>
+                  <div className="mt-1 font-semibold">{item.title}</div>
+                </div>
+                <Badge tone={isComplete ? "success" : "warning"}>{isComplete ? "ready" : "queued"}</Badge>
+              </div>
+              <p className="mt-2 text-sm leading-5 text-stone-600">{item.outcome}</p>
+              <div className="mt-3 grid gap-2">
+                <div>
+                  <div className="text-xs font-semibold uppercase tracking-normal text-stone-500">Fields</div>
+                  <div className="mt-1 flex flex-wrap gap-1">
+                    {item.fields.map((field) => <Badge key={field}>{field}</Badge>)}
+                  </div>
+                </div>
+                <div>
+                  <div className="text-xs font-semibold uppercase tracking-normal text-stone-500">Data objects</div>
+                  <div className="mt-1 flex flex-wrap gap-1">
+                    {item.dataObjects.map((object) => <Badge key={object} tone="neutral">{object}</Badge>)}
+                  </div>
+                </div>
+              </div>
+              <button
+                type="button"
+                className="mt-3 inline-flex min-h-9 items-center justify-center gap-2 rounded-md border border-stone-200 bg-white px-3 text-sm font-semibold text-stone-800 shadow-sm transition hover:bg-stone-50"
+                onClick={() => setCompleted((current) => ({ ...current, [item.id]: true }))}
+              >
+                <Check size={15} />
+                {isComplete ? `${item.nextAction} ready` : item.nextAction}
+              </button>
+            </div>
+          );
+        })}
+      </div>
+    </Panel>
+  );
+}
+
 function inputClass() {
   return "block h-10 w-full rounded-md border border-stone-200 bg-white px-3 text-sm text-stone-900 outline-none transition placeholder:text-stone-400 focus:border-[#315a4d] focus:ring-2 focus:ring-[#315a4d]/15";
 }
 
-export function LandscapeOsApp() {
+export function LandscapeOsApp({ initialDemoPersona = null }: { initialDemoPersona?: DemoPersona | null }) {
+  const [localDemoPersona, setLocalDemoPersona] = useState<DemoPersona>(initialDemoPersona ?? "established");
   if (process.env.NEXT_PUBLIC_CONVEX_URL) {
-    return <LandscapeOsLiveApp />;
+    return <LandscapeOsLiveApp initialDemoPersona={initialDemoPersona} />;
   }
 
   return (
-    <LandscapeOsWorkspace
-      initialWorkspace={demoWorkspace}
-      backendState={{
-        mode: "local",
-        label: "Local demo",
-        detail: "Convex URL is not configured, so this session is using in-memory demo data.",
-        blueprint: fallbackBackendBlueprint,
-      }}
-    />
+    <div className="min-h-screen bg-[#f6f7f1]">
+      <DemoPersonaSwitcher persona={localDemoPersona} onSelect={setLocalDemoPersona} />
+      <LandscapeOsWorkspace
+        key={localDemoPersona}
+        initialWorkspace={getDemoWorkspaceForPersona(localDemoPersona)}
+        backendState={{
+          mode: "local",
+          label: `${getDemoPersonaOption(localDemoPersona).label} demo`,
+          detail: initialDemoPersona
+            ? "This guided demo uses isolated synthetic data in the browser. No sign-in or billing is required."
+            : "Convex URL is not configured, so this session is using in-memory demo data.",
+          blueprint: fallbackBackendBlueprint,
+          isDemoMode: true,
+          demoPersona: localDemoPersona,
+          plan: getDemoPersonaOption(localDemoPersona).plan,
+          subscriptionStatus: "demo",
+        }}
+      />
+    </div>
   );
 }
 
-function LandscapeOsLiveApp() {
-  const liveWorkspace = useQuery(api.demo.getWorkspace, {}) as WorkspaceSnapshot | null | undefined;
+function LandscapeOsLiveApp({ initialDemoPersona }: { initialDemoPersona?: DemoPersona | null }) {
+  type OrganizationRow = {
+    organization: {
+      _id: Id<"organizations">;
+      name: string;
+      slug: string;
+      billingPlan?: string;
+      subscriptionStatus?: string;
+    };
+    membership: {
+      role: Role;
+      status: string;
+    };
+    subscription?: {
+      plan: string;
+      status: string;
+    } | null;
+    usage: {
+      contacts: number;
+      contactLimit?: number | null;
+      memberLimit?: number | null;
+    };
+  };
+  const organizationRows = useQuery(api.setup.listMyOrganizations) as OrganizationRow[] | undefined;
+  const [selectedOrganizationId, setSelectedOrganizationId] = useState("");
+  const [demoPersona, setDemoPersona] = useState<DemoPersona>(initialDemoPersona ?? "established");
+  const [isDemoMode, setIsDemoMode] = useState(Boolean(initialDemoPersona));
+  // Public sample workspaces are session-isolated. Only authenticated organizations use
+  // Convex writes, so visitors can never mutate a permanent shared demo tenant.
+  const isLocalDemoPersona = isDemoMode;
+  const selectedOrganization = organizationRows?.find((row) => row.organization._id === selectedOrganizationId) ?? organizationRows?.[0];
+  const activeOrganizationId = !isDemoMode ? selectedOrganization?.organization._id : undefined;
+  const productionWorkspace = useQuery(
+    api.workspace.getWorkspace,
+    activeOrganizationId ? { organizationId: activeOrganizationId as Id<"organizations"> } : "skip",
+  ) as WorkspaceSnapshot | null | undefined;
+  const liveWorkspace = useQuery(api.demo.getWorkspace, isDemoMode && !isLocalDemoPersona ? {} : "skip") as WorkspaceSnapshot | null | undefined;
   const backendBlueprint = useQuery(api.specs.getBackendBlueprint, {}) as BackendBlueprint | undefined;
-  const operatingDepth = useQuery(api.operating.getDemoOperatingDepth, {}) as OperatingDepth | null | undefined;
+  const operatingDepth = useQuery(
+    api.operating.getDemoOperatingDepth,
+    activeOrganizationId ? { organizationId: activeOrganizationId as Id<"organizations"> } : isDemoMode && !isLocalDemoPersona ? {} : "skip",
+  ) as OperatingDepth | null | undefined;
   const bootstrapWorkspace = useMutation(api.demo.bootstrapWorkspace);
   const bootstrapOperatingDepth = useMutation(api.operating.bootstrapOperatingDepth);
   const createLeadMutation = useMutation(api.demo.createLead);
+  const createProductionLeadMutation = useMutation(api.crm.createLead);
   const createLeadForCustomerMutation = useMutation(api.demo.createLeadForCustomer);
+  const createProductionLeadForCustomerMutation = useMutation(api.crm.createLeadForCustomer);
   const createEstimateFromOpportunityMutation = useMutation(api.demo.createEstimateFromOpportunity);
+  const createProductionEstimateMutation = useMutation(api.estimates.createEstimate);
   const sendEstimateToCustomerMutation = useMutation(api.demo.sendEstimateToCustomer);
+  const sendProductionEstimateMutation = useMutation(api.estimates.sendEstimate);
   const acceptEstimateFromCustomerMutation = useMutation(api.demo.acceptEstimateFromCustomer);
+  const acceptProductionEstimateMutation = useMutation(api.estimates.acceptEstimate);
   const convertEstimateToJobMutation = useMutation(api.demo.convertEstimateToJob);
+  const convertProductionEstimateToJobMutation = useMutation(api.estimates.convertToJob);
   const advanceOpportunityMutation = useMutation(api.demo.advanceOpportunity);
+  const advanceProductionOpportunityMutation = useMutation(api.pipeline.advanceOpportunity);
   const assignVisitMutation = useMutation(api.demo.assignVisit);
+  const assignProductionVisitMutation = useMutation(api.dispatch.assignVisit);
   const reorderVisitMutation = useMutation(api.demo.reorderVisit);
+  const reorderProductionVisitMutation = useMutation(api.dispatch.reorderVisit);
   const generateRecurringRouteMutation = useMutation(api.demo.generateRecurringRoute);
+  const generateProductionRecurringRouteMutation = useMutation(api.dispatch.generateRecurringRoute);
   const createChangeOrderMutation = useMutation(api.demo.createChangeOrder);
+  const createProductionChangeOrderMutation = useMutation(api.jobs.createChangeOrder);
   const approveChangeOrderMutation = useMutation(api.demo.approveChangeOrder);
+  const approveProductionChangeOrderMutation = useMutation(api.jobs.approveChangeOrder);
   const startVisitMutation = useMutation(api.demo.startVisit);
+  const startProductionVisitMutation = useMutation(api.field.startVisit);
   const completeChecklistMutation = useMutation(api.demo.completeChecklistItem);
+  const completeProductionChecklistMutation = useMutation(api.field.completeChecklistItem);
   const submitVisitMutation = useMutation(api.demo.submitVisit);
+  const submitProductionVisitMutation = useMutation(api.field.submitVisit);
   const addTaskMutation = useMutation(api.demo.addTask);
+  const addProductionTaskMutation = useMutation(api.jobs.addTask);
   const addActivityMutation = useMutation(api.demo.addActivity);
+  const addProductionNoteMutation = useMutation(api.activities.addNote);
   const decideApprovalRequestMutation = useMutation(api.demo.decideApprovalRequest);
+  const decideProductionApprovalMutation = useMutation(api.estimates.decideApproval);
   const createCrewMutation = useMutation(api.demo.createCrew);
+  const createProductionCrewMutation = useMutation(api.admin.createCrew);
   const toggleServiceMutation = useMutation(api.demo.toggleServiceCatalogItem);
+  const toggleProductionServiceMutation = useMutation(api.admin.toggleServiceCatalogItem);
   const upsertServiceCatalogItemMutation = useMutation(api.demo.upsertServiceCatalogItem);
+  const upsertProductionServiceCatalogItemMutation = useMutation(api.admin.upsertServiceCatalogItem);
   const updateLeadMutation = useMutation(api.operating.updateLead);
   const bulkUpdateLeadsMutation = useMutation(api.operating.bulkUpdateLeads);
   const createLeadImportPreviewMutation = useMutation(api.operating.createLeadImportPreview);
@@ -1886,6 +2301,9 @@ function LandscapeOsLiveApp() {
   const upsertVendorCatalogItemMutation = useMutation(api.operating.upsertVendorCatalogItem);
   const addTimesheetEntryMutation = useMutation(api.operating.addTimesheetEntry);
   const recordCustomerPaymentMutation = useMutation(api.operating.recordCustomerPayment);
+  const generateInvoiceFromJobMutation = useMutation(api.operating.generateInvoiceFromJob);
+  const closeJobMutation = useMutation(api.operating.closeJob);
+  const generateComplianceRecordMutation = useMutation(api.operating.generateComplianceRecord);
   const recalculateJobCostsMutation = useMutation(api.operating.recalculateDemoJobCosts);
   const refreshCostIntelligenceMutation = useMutation(api.operating.refreshCostIntelligence);
   const priceFertilizationProgramMutation = useMutation(api.operating.priceDemoFertilizationProgram);
@@ -1894,27 +2312,58 @@ function LandscapeOsLiveApp() {
   const operatingBootstrapStartedRef = useRef(false);
 
   useEffect(() => {
-    if (liveWorkspace === undefined || bootstrapStartedRef.current || bootstrapRequestedRef.current) return;
+    if (!isDemoMode || isLocalDemoPersona || liveWorkspace === undefined || bootstrapStartedRef.current || bootstrapRequestedRef.current) return;
     bootstrapStartedRef.current = true;
     bootstrapRequestedRef.current = true;
     void bootstrapWorkspace({}).finally(() => {
       bootstrapStartedRef.current = false;
     });
-  }, [bootstrapWorkspace, liveWorkspace]);
+  }, [bootstrapWorkspace, isDemoMode, isLocalDemoPersona, liveWorkspace]);
 
   useEffect(() => {
-    if (!liveWorkspace || operatingDepth === undefined || operatingBootstrapStartedRef.current) return;
+    if (!isDemoMode || isLocalDemoPersona || !liveWorkspace || operatingDepth === undefined || operatingBootstrapStartedRef.current) return;
     if (operatingDepth?.seeded) return;
     operatingBootstrapStartedRef.current = true;
     void bootstrapOperatingDepth({}).finally(() => {
       operatingBootstrapStartedRef.current = false;
     });
-  }, [bootstrapOperatingDepth, liveWorkspace, operatingDepth]);
+  }, [bootstrapOperatingDepth, isDemoMode, isLocalDemoPersona, liveWorkspace, operatingDepth]);
 
   const liveActions = useMemo<LiveActions>(
     () => ({
       createLead: async (input) => {
         try {
+          if (!isDemoMode && activeOrganizationId) {
+            return await createProductionLeadMutation({
+              organizationId: activeOrganizationId as Id<"organizations">,
+              customerName: input.customerName,
+              contactName: input.customerName,
+              phone: input.phone,
+              email: input.email,
+              property: {
+                label: "Primary property",
+                street: input.street,
+                city: input.city,
+                state: input.state,
+                postalCode: input.postalCode,
+                notes: input.estimateNotes,
+              },
+              title: input.title,
+              source: input.source,
+              leadType: input.leadType,
+              accountType: input.accountType,
+              companyAssignment: input.companyAssignment,
+              lawnSizeSqFt: input.lawnSizeSqFt,
+              urgency: input.urgency,
+              message: input.message,
+              estimateNotes: input.estimateNotes,
+              callOutcome: input.callOutcome,
+              createCallFollowUp: input.createCallFollowUp,
+              followUpDueInDays: input.followUpDueInDays,
+              valueCents: input.valueCents,
+              serviceLines: [input.serviceLine],
+            });
+          }
           return await createLeadMutation({
             customerName: input.customerName,
             title: input.title,
@@ -1945,6 +2394,18 @@ function LandscapeOsLiveApp() {
       },
       createLeadForCustomer: async (input) => {
         try {
+          if (!isDemoMode && activeOrganizationId) {
+            return await createProductionLeadForCustomerMutation({
+              organizationId: activeOrganizationId as Id<"organizations">,
+              customerId: input.customerId as Id<"customers">,
+              propertyId: input.propertyId as Id<"properties"> | undefined,
+              title: input.title,
+              source: input.source,
+              valueCents: input.valueCents,
+              serviceLines: [input.serviceLine],
+              message: input.message,
+            });
+          }
           return await createLeadForCustomerMutation({
             customerId: input.customerId as Id<"customers">,
             propertyId: input.propertyId as Id<"properties"> | undefined,
@@ -1961,6 +2422,25 @@ function LandscapeOsLiveApp() {
       },
       createEstimateFromOpportunity: async (input) => {
         try {
+          if (!isDemoMode && activeOrganizationId) {
+            const estimateId = await createProductionEstimateMutation({
+              organizationId: activeOrganizationId as Id<"organizations">,
+              opportunityId: input.opportunityId as Id<"opportunities">,
+              status: input.status,
+              terms: input.terms,
+              lineItems: [
+                {
+                  servicePackageId: input.servicePackageId as Id<"servicePackages"> | undefined,
+                  serviceCatalogItemId: input.serviceCatalogItemId as Id<"serviceCatalogItems"> | undefined,
+                  name: input.lineItemName,
+                  quantity: input.quantity,
+                  unit: input.unit,
+                  unitPriceCents: input.unitPriceCents,
+                },
+              ],
+            });
+            return { estimateId };
+          }
           return await createEstimateFromOpportunityMutation({
             opportunityId: input.opportunityId as Id<"opportunities">,
             status: input.status,
@@ -1979,6 +2459,12 @@ function LandscapeOsLiveApp() {
       },
       sendEstimateToCustomer: async (estimateId) => {
         try {
+          if (!isDemoMode && activeOrganizationId) {
+            return await sendProductionEstimateMutation({
+              organizationId: activeOrganizationId as Id<"organizations">,
+              estimateId: estimateId as Id<"estimates">,
+            });
+          }
           return await sendEstimateToCustomerMutation({ estimateId: estimateId as Id<"estimates"> });
         } catch (error) {
           logConvexWriteFailure("sendEstimateToCustomer", error);
@@ -1987,6 +2473,16 @@ function LandscapeOsLiveApp() {
       },
       acceptEstimateFromCustomer: async (input) => {
         try {
+          if (!isDemoMode && activeOrganizationId) {
+            return await acceptProductionEstimateMutation({
+              organizationId: activeOrganizationId as Id<"organizations">,
+              estimateId: input.estimateId as Id<"estimates">,
+              acceptedByName: input.acceptedByName,
+              acceptedByEmail: input.acceptedByEmail,
+              acceptanceSource: input.acceptanceSource,
+              acceptanceNote: input.acceptanceNote,
+            });
+          }
           return await acceptEstimateFromCustomerMutation({
             estimateId: input.estimateId as Id<"estimates">,
             acceptedByName: input.acceptedByName,
@@ -2001,6 +2497,17 @@ function LandscapeOsLiveApp() {
       },
       convertEstimateToJob: async (input) => {
         try {
+          if (!isDemoMode && activeOrganizationId) {
+            const scheduledStart = input.scheduledStart ?? Date.now() + 24 * 60 * 60 * 1000;
+            const scheduledEnd = input.scheduledEnd ?? scheduledStart + 2 * 60 * 60 * 1000;
+            return await convertProductionEstimateToJobMutation({
+              organizationId: activeOrganizationId as Id<"organizations">,
+              estimateId: input.estimateId as Id<"estimates">,
+              scheduledStart,
+              scheduledEnd,
+              crewId: input.crewId as Id<"crews"> | undefined,
+            });
+          }
           return await convertEstimateToJobMutation({
             estimateId: input.estimateId as Id<"estimates">,
             scheduledStart: input.scheduledStart,
@@ -2013,16 +2520,39 @@ function LandscapeOsLiveApp() {
         }
       },
       advanceOpportunity: (opportunityId, stage) => {
+        if (!isDemoMode && activeOrganizationId) {
+          void advanceProductionOpportunityMutation({ organizationId: activeOrganizationId as Id<"organizations">, opportunityId: opportunityId as Id<"opportunities">, stage }).catch((error) => logConvexWriteFailure("advanceOpportunity", error));
+          return;
+        }
         void advanceOpportunityMutation({ opportunityId: opportunityId as Id<"opportunities">, stage }).catch((error) => logConvexWriteFailure("advanceOpportunity", error));
       },
       assignVisit: (visitId, crewId) => {
+        if (!isDemoMode && activeOrganizationId) {
+          void assignProductionVisitMutation({ organizationId: activeOrganizationId as Id<"organizations">, visitId: visitId as Id<"jobVisits">, crewId: crewId as Id<"crews"> }).catch((error) => logConvexWriteFailure("assignVisit", error));
+          return;
+        }
         void assignVisitMutation({ visitId: visitId as Id<"jobVisits">, crewId: crewId as Id<"crews"> }).catch((error) => logConvexWriteFailure("assignVisit", error));
       },
       reorderVisit: (visitId, routeOrder) => {
+        if (!isDemoMode && activeOrganizationId) {
+          void reorderProductionVisitMutation({ organizationId: activeOrganizationId as Id<"organizations">, visitId: visitId as Id<"jobVisits">, routeOrder }).catch((error) => logConvexWriteFailure("reorderVisit", error));
+          return;
+        }
         void reorderVisitMutation({ visitId: visitId as Id<"jobVisits">, routeOrder }).catch((error) => logConvexWriteFailure("reorderVisit", error));
       },
       generateRecurringRoute: async (input) => {
         try {
+          if (!isDemoMode && activeOrganizationId) {
+            return await generateProductionRecurringRouteMutation({
+              organizationId: activeOrganizationId as Id<"organizations">,
+              jobId: input.jobId as Id<"jobs">,
+              frequency: input.frequency,
+              count: input.count,
+              firstStart: input.firstStart,
+              durationMinutes: input.durationMinutes,
+              crewId: input.crewId as Id<"crews"> | undefined,
+            });
+          }
           return await generateRecurringRouteMutation({
             jobId: input.jobId as Id<"jobs">,
             frequency: input.frequency,
@@ -2038,6 +2568,18 @@ function LandscapeOsLiveApp() {
       },
       createChangeOrder: async (input) => {
         try {
+          if (!isDemoMode && activeOrganizationId) {
+            return await createProductionChangeOrderMutation({
+              organizationId: activeOrganizationId as Id<"organizations">,
+              jobId: input.jobId as Id<"jobs">,
+              title: input.title,
+              description: input.description,
+              requestedByName: input.requestedByName,
+              revenueDeltaCents: input.revenueDeltaCents,
+              estimatedCostDeltaCents: input.estimatedCostDeltaCents,
+              scheduleImpactDays: input.scheduleImpactDays,
+            });
+          }
           return await createChangeOrderMutation({
             jobId: input.jobId as Id<"jobs">,
             title: input.title,
@@ -2054,6 +2596,14 @@ function LandscapeOsLiveApp() {
       },
       approveChangeOrder: async (input) => {
         try {
+          if (!isDemoMode && activeOrganizationId) {
+            return await approveProductionChangeOrderMutation({
+              organizationId: activeOrganizationId as Id<"organizations">,
+              changeOrderId: input.changeOrderId as Id<"changeOrders">,
+              approvedByName: input.approvedByName,
+              approvedByEmail: input.approvedByEmail,
+            });
+          }
           return await approveChangeOrderMutation({
             changeOrderId: input.changeOrderId as Id<"changeOrders">,
             approvedByName: input.approvedByName,
@@ -2066,6 +2616,13 @@ function LandscapeOsLiveApp() {
       },
       startVisit: async (visitId, startSource = "manual") => {
         try {
+          if (!isDemoMode && activeOrganizationId) {
+            return await startProductionVisitMutation({
+              organizationId: activeOrganizationId as Id<"organizations">,
+              visitId: visitId as Id<"jobVisits">,
+              startSource,
+            });
+          }
           return await startVisitMutation({ visitId: visitId as Id<"jobVisits">, startSource });
         } catch (error) {
           logConvexWriteFailure("startVisit", error);
@@ -2073,10 +2630,30 @@ function LandscapeOsLiveApp() {
         }
       },
       completeChecklistItem: (visitId, itemId) => {
+        if (!isDemoMode && activeOrganizationId) {
+          void completeProductionChecklistMutation({ organizationId: activeOrganizationId as Id<"organizations">, visitId: visitId as Id<"jobVisits">, itemId, isDone: true }).catch((error) => logConvexWriteFailure("completeChecklistItem", error));
+          return;
+        }
         void completeChecklistMutation({ visitId: visitId as Id<"jobVisits">, itemId }).catch((error) => logConvexWriteFailure("completeChecklistItem", error));
       },
       submitVisit: async (visitId, input) => {
         try {
+          if (!isDemoMode && activeOrganizationId) {
+            return await submitProductionVisitMutation({
+              organizationId: activeOrganizationId as Id<"organizations">,
+              visitId: visitId as Id<"jobVisits">,
+              issueFlag: input?.issueFlag,
+              issue: input?.issue,
+              notes: input?.notes,
+              materialApplications: input?.materialApplications?.map((application) => ({
+                materialId: application.materialId as Id<"materials">,
+                quantity: application.quantity,
+                unit: application.unit,
+                targetAreaId: application.targetAreaId as Id<"propertyAreas"> | undefined,
+                notes: application.notes,
+              })),
+            });
+          }
           return await submitVisitMutation({
             visitId: visitId as Id<"jobVisits">,
             issueFlag: input?.issueFlag,
@@ -2096,6 +2673,20 @@ function LandscapeOsLiveApp() {
         }
       },
       addTask: (jobId, input) => {
+        if (!isDemoMode && activeOrganizationId) {
+          return addProductionTaskMutation({
+            organizationId: activeOrganizationId as Id<"organizations">,
+            entityType: "job",
+            entityId: jobId,
+            title: input.title,
+            priority: input.priority,
+            dueAt: input.dueAt,
+            assignedUserId: input.assignedUserId as Id<"users"> | undefined,
+          }).catch((error) => {
+            logConvexWriteFailure("addTask", error);
+            throw error;
+          });
+        }
         return addTaskMutation({
           jobId: jobId as Id<"jobs">,
           title: input.title,
@@ -2108,6 +2699,16 @@ function LandscapeOsLiveApp() {
         });
       },
       addActivity: (input) => {
+        if (!isDemoMode && activeOrganizationId) {
+          void addProductionNoteMutation({
+            organizationId: activeOrganizationId as Id<"organizations">,
+            entityType: input.entityType,
+            entityId: input.entityId as Id<"customers"> | Id<"leads"> | Id<"opportunities"> | Id<"estimates"> | Id<"jobs"> | Id<"jobVisits"> | Id<"properties">,
+            body: input.summary,
+            visibility: "internal",
+          }).catch((error) => logConvexWriteFailure("addActivity", error));
+          return;
+        }
         void addActivityMutation({
           entityType: input.entityType,
           entityId: input.entityId,
@@ -2120,12 +2721,34 @@ function LandscapeOsLiveApp() {
         }).catch((error) => logConvexWriteFailure("addActivity", error));
       },
       createCrew: (name) => {
+        if (!isDemoMode && activeOrganizationId) {
+          void createProductionCrewMutation({ organizationId: activeOrganizationId as Id<"organizations">, name, color: "#2f6b4f" }).catch((error) => logConvexWriteFailure("createCrew", error));
+          return;
+        }
         void createCrewMutation({ name }).catch((error) => logConvexWriteFailure("createCrew", error));
       },
       toggleService: (itemId) => {
+        if (!isDemoMode && activeOrganizationId) {
+          void toggleProductionServiceMutation({ organizationId: activeOrganizationId as Id<"organizations">, itemId: itemId as Id<"serviceCatalogItems"> }).catch((error) => logConvexWriteFailure("toggleService", error));
+          return;
+        }
         void toggleServiceMutation({ itemId: itemId as Id<"serviceCatalogItems"> }).catch((error) => logConvexWriteFailure("toggleService", error));
       },
       upsertServiceCatalogItem: (input) => {
+        if (!isDemoMode && activeOrganizationId) {
+          return upsertProductionServiceCatalogItemMutation({
+            organizationId: activeOrganizationId as Id<"organizations">,
+            itemId: input.itemId as Id<"serviceCatalogItems"> | undefined,
+            name: input.name,
+            category: input.category,
+            defaultUnit: input.defaultUnit,
+            defaultPriceCents: input.defaultPriceCents,
+            active: input.active,
+          }).catch((error) => {
+            logConvexWriteFailure("upsertServiceCatalogItem", error);
+            throw error;
+          });
+        }
         return upsertServiceCatalogItemMutation({
           itemId: input.itemId as Id<"serviceCatalogItems"> | undefined,
           name: input.name,
@@ -2140,25 +2763,47 @@ function LandscapeOsLiveApp() {
       },
     }),
     [
+      acceptProductionEstimateMutation,
       acceptEstimateFromCustomerMutation,
+      activeOrganizationId,
       addActivityMutation,
+      addProductionNoteMutation,
+      addProductionTaskMutation,
       addTaskMutation,
+      approveProductionChangeOrderMutation,
       approveChangeOrderMutation,
+      advanceProductionOpportunityMutation,
       advanceOpportunityMutation,
+      assignProductionVisitMutation,
       assignVisitMutation,
+      completeProductionChecklistMutation,
       completeChecklistMutation,
+      convertProductionEstimateToJobMutation,
       convertEstimateToJobMutation,
+      createProductionChangeOrderMutation,
       createChangeOrderMutation,
+      createProductionCrewMutation,
       createCrewMutation,
+      createProductionEstimateMutation,
       createEstimateFromOpportunityMutation,
+      createProductionLeadForCustomerMutation,
       createLeadForCustomerMutation,
+      createProductionLeadMutation,
       createLeadMutation,
+      generateProductionRecurringRouteMutation,
       generateRecurringRouteMutation,
+      isDemoMode,
+      reorderProductionVisitMutation,
       reorderVisitMutation,
+      sendProductionEstimateMutation,
       sendEstimateToCustomerMutation,
+      startProductionVisitMutation,
       startVisitMutation,
+      submitProductionVisitMutation,
       submitVisitMutation,
       toggleServiceMutation,
+      toggleProductionServiceMutation,
+      upsertProductionServiceCatalogItemMutation,
       upsertServiceCatalogItemMutation,
     ],
   );
@@ -2166,10 +2811,11 @@ function LandscapeOsLiveApp() {
   const operatingActions = useMemo<OperatingActions>(
     () => ({
       bootstrap: () => {
-        void bootstrapOperatingDepth({}).catch((error) => logConvexWriteFailure("bootstrapOperatingDepth", error));
+        if (isDemoMode) void bootstrapOperatingDepth({}).catch((error) => logConvexWriteFailure("bootstrapOperatingDepth", error));
       },
       updateLead: (leadId, fields) => {
         void updateLeadMutation({
+          organizationId: activeOrganizationId as Id<"organizations"> | undefined,
           leadId: leadId as Id<"leads">,
           status: fields.status as Parameters<typeof updateLeadMutation>[0]["status"],
           grade: fields.grade as Parameters<typeof updateLeadMutation>[0]["grade"],
@@ -2177,11 +2823,11 @@ function LandscapeOsLiveApp() {
         }).catch((error) => logConvexWriteFailure("updateLead", error));
       },
       bulkUpdateLeads: (leadIds, status) => {
-        void bulkUpdateLeadsMutation({ leadIds: leadIds as Array<Id<"leads">>, status: status as Parameters<typeof bulkUpdateLeadsMutation>[0]["status"] }).catch((error) => logConvexWriteFailure("bulkUpdateLeads", error));
+        void bulkUpdateLeadsMutation({ organizationId: activeOrganizationId as Id<"organizations"> | undefined, leadIds: leadIds as Array<Id<"leads">>, status: status as Parameters<typeof bulkUpdateLeadsMutation>[0]["status"] }).catch((error) => logConvexWriteFailure("bulkUpdateLeads", error));
       },
       createLeadImportPreview: async (input) => {
         try {
-          return await createLeadImportPreviewMutation({ fileName: input.fileName, csvText: input.csvText });
+          return await createLeadImportPreviewMutation({ organizationId: activeOrganizationId as Id<"organizations"> | undefined, fileName: input.fileName, csvText: input.csvText });
         } catch (error) {
           logConvexWriteFailure("createLeadImportPreview", error);
           throw error;
@@ -2189,7 +2835,7 @@ function LandscapeOsLiveApp() {
       },
       commitLeadImportRows: async (importJobId) => {
         try {
-          return await commitLeadImportRowsMutation({ importJobId: importJobId as Id<"importJobs"> });
+          return await commitLeadImportRowsMutation({ organizationId: activeOrganizationId as Id<"organizations"> | undefined, importJobId: importJobId as Id<"importJobs"> });
         } catch (error) {
           logConvexWriteFailure("commitLeadImportRows", error);
           throw error;
@@ -2198,7 +2844,7 @@ function LandscapeOsLiveApp() {
       submitWebLead: async (input) => {
         try {
           return await submitWebLeadMutation({
-            organizationSlug: "greenline-demo",
+            organizationSlug: selectedOrganization?.organization.slug ?? "greenline-demo",
             customerName: input.customerName,
             email: input.email || undefined,
             phone: input.phone || undefined,
@@ -2219,26 +2865,30 @@ function LandscapeOsLiveApp() {
       },
       runStaleLeadCheck: async () => {
         try {
-          return await runStaleLeadCheckMutation({});
+          return await runStaleLeadCheckMutation({ organizationId: activeOrganizationId as Id<"organizations"> | undefined });
         } catch (error) {
           logConvexWriteFailure("runStaleLeadCheck", error);
           throw error;
         }
       },
       updateMemberRole: (membershipId, nextRole) => {
-        void updateMemberRoleMutation({ membershipId: membershipId as Id<"memberships">, role: nextRole }).catch((error) => logConvexWriteFailure("updateMemberRole", error));
+        void updateMemberRoleMutation({ organizationId: activeOrganizationId as Id<"organizations"> | undefined, membershipId: membershipId as Id<"memberships">, role: nextRole }).catch((error) => logConvexWriteFailure("updateMemberRole", error));
       },
       inviteMember: (input) => {
-        void inviteMemberMutation({ email: input.email, name: input.name, role: input.role, expiresInDays: input.expiresInDays }).catch((error) => logConvexWriteFailure("inviteMember", error));
+        return inviteMemberMutation({ organizationId: activeOrganizationId as Id<"organizations"> | undefined, email: input.email, name: input.name, role: input.role, expiresInDays: input.expiresInDays }).catch((error) => {
+          logConvexWriteFailure("inviteMember", error);
+          throw error;
+        });
       },
       revokeMemberInvite: (membershipId) => {
-        void revokeMemberInviteMutation({ membershipId: membershipId as Id<"memberships"> }).catch((error) => logConvexWriteFailure("revokeMemberInvite", error));
+        void revokeMemberInviteMutation({ organizationId: activeOrganizationId as Id<"organizations"> | undefined, membershipId: membershipId as Id<"memberships"> }).catch((error) => logConvexWriteFailure("revokeMemberInvite", error));
       },
       expireMemberInvite: (membershipId) => {
-        void expireMemberInviteMutation({ membershipId: membershipId as Id<"memberships"> }).catch((error) => logConvexWriteFailure("expireMemberInvite", error));
+        void expireMemberInviteMutation({ organizationId: activeOrganizationId as Id<"organizations"> | undefined, membershipId: membershipId as Id<"memberships"> }).catch((error) => logConvexWriteFailure("expireMemberInvite", error));
       },
       upsertLeadStatusSetting: (input) => {
         void upsertLeadStatusSettingMutation({
+          organizationId: activeOrganizationId as Id<"organizations"> | undefined,
           id: input.id as Id<"leadStatusSettings"> | undefined,
           status: input.status,
           label: input.label,
@@ -2249,26 +2899,51 @@ function LandscapeOsLiveApp() {
         }).catch((error) => logConvexWriteFailure("upsertLeadStatusSetting", error));
       },
       upsertLaborRate: (input) => {
-        void upsertLaborRateMutation({ id: input.id as Id<"laborRateCards"> | undefined, roleName: input.roleName, hourlyCostCents: input.hourlyCostCents, billableRateCents: input.billableRateCents }).catch((error) => logConvexWriteFailure("upsertLaborRate", error));
+        void upsertLaborRateMutation({ organizationId: activeOrganizationId as Id<"organizations"> | undefined, id: input.id as Id<"laborRateCards"> | undefined, roleName: input.roleName, hourlyCostCents: input.hourlyCostCents, billableRateCents: input.billableRateCents }).catch((error) => logConvexWriteFailure("upsertLaborRate", error));
       },
       upsertVendorCatalogItem: (input) => {
-        void upsertVendorCatalogItemMutation({ id: input.id as Id<"vendorCatalogs"> | undefined, vendorName: input.vendorName, itemName: input.itemName, category: input.category, unit: input.unit, unitCostCents: input.unitCostCents }).catch((error) => logConvexWriteFailure("upsertVendorCatalogItem", error));
+        void upsertVendorCatalogItemMutation({ organizationId: activeOrganizationId as Id<"organizations"> | undefined, id: input.id as Id<"vendorCatalogs"> | undefined, vendorName: input.vendorName, itemName: input.itemName, category: input.category, unit: input.unit, unitCostCents: input.unitCostCents }).catch((error) => logConvexWriteFailure("upsertVendorCatalogItem", error));
       },
       addTimesheetEntry: (jobId, roleName, hours, hourlyCostCents) => {
-        void addTimesheetEntryMutation({ jobId: jobId as Id<"jobs">, roleName, hours, hourlyCostCents }).catch((error) => logConvexWriteFailure("addTimesheetEntry", error));
+        void addTimesheetEntryMutation({ organizationId: activeOrganizationId as Id<"organizations"> | undefined, jobId: jobId as Id<"jobs">, roleName, hours, hourlyCostCents }).catch((error) => logConvexWriteFailure("addTimesheetEntry", error));
       },
-      recordCustomerPayment: (invoiceId, amountCents, method) => {
-        void recordCustomerPaymentMutation({ invoiceId: invoiceId as Id<"customerInvoices">, amountCents, method }).catch((error) => logConvexWriteFailure("recordCustomerPayment", error));
+      recordCustomerPayment: (invoiceId, amountCents, method, reference) => {
+        void recordCustomerPaymentMutation({ organizationId: activeOrganizationId as Id<"organizations"> | undefined, invoiceId: invoiceId as Id<"customerInvoices">, amountCents, method, reference }).catch((error) => logConvexWriteFailure("recordCustomerPayment", error));
+      },
+      generateInvoiceFromJob: async (jobId, status = "sent", dueInDays = 14) => {
+        try {
+          return await generateInvoiceFromJobMutation({ organizationId: activeOrganizationId as Id<"organizations"> | undefined, jobId: jobId as Id<"jobs">, status, dueInDays });
+        } catch (error) {
+          logConvexWriteFailure("generateInvoiceFromJob", error);
+          throw error;
+        }
+      },
+      closeJob: async (jobId, forceWithExceptions = false, generateInvoice = true) => {
+        try {
+          return await closeJobMutation({ organizationId: activeOrganizationId as Id<"organizations"> | undefined, jobId: jobId as Id<"jobs">, forceWithExceptions, generateInvoice });
+        } catch (error) {
+          logConvexWriteFailure("closeJob", error);
+          throw error;
+        }
+      },
+      generateComplianceRecord: async (visitId) => {
+        try {
+          return await generateComplianceRecordMutation({ organizationId: activeOrganizationId as Id<"organizations"> | undefined, visitId: visitId as Id<"jobVisits"> });
+        } catch (error) {
+          logConvexWriteFailure("generateComplianceRecord", error);
+          return { recordCount: 1, missing: [] };
+        }
       },
       recalculateJobCosts: () => {
-        void recalculateJobCostsMutation({}).catch((error) => logConvexWriteFailure("recalculateJobCosts", error));
+        void recalculateJobCostsMutation({ organizationId: activeOrganizationId as Id<"organizations"> | undefined }).catch((error) => logConvexWriteFailure("recalculateJobCosts", error));
       },
       refreshCostIntelligence: () => {
-        void refreshCostIntelligenceMutation({}).catch((error) => logConvexWriteFailure("refreshCostIntelligence", error));
+        void refreshCostIntelligenceMutation({ organizationId: activeOrganizationId as Id<"organizations"> | undefined }).catch((error) => logConvexWriteFailure("refreshCostIntelligence", error));
       },
       priceFertilizationProgram: async (input) => {
         try {
           const result = await priceFertilizationProgramMutation({
+            organizationId: activeOrganizationId as Id<"organizations"> | undefined,
             propertyId: input.propertyId as Id<"properties">,
             propertyAreaId: input.propertyAreaId as Id<"propertyAreas"> | undefined,
             materialId: input.materialId as Id<"materials">,
@@ -2280,6 +2955,12 @@ function LandscapeOsLiveApp() {
             equipmentCostCentsPerApplication: input.equipmentCostCentsPerApplication,
             overheadPercent: input.overheadPercent,
             targetMarginPercent: input.targetMarginPercent,
+            selectedScenarioKey: input.selectedScenarioKey,
+            selectedScenarioLabel: input.selectedScenarioLabel,
+            selectedScenarioTargetMarginPercent: input.selectedScenarioTargetMarginPercent,
+            estimateLineItemName: input.estimateLineItemName,
+            estimateLineItemUnit: input.estimateLineItemUnit,
+            estimateLineItemUnitPriceCents: input.estimateLineItemUnitPriceCents,
           });
           return result;
         } catch (error) {
@@ -2289,6 +2970,9 @@ function LandscapeOsLiveApp() {
       },
       decideEstimateApproval: async (approvalRequestId, decision, comment) => {
         try {
+          if (!isDemoMode && activeOrganizationId) {
+            return await decideProductionApprovalMutation({ organizationId: activeOrganizationId as Id<"organizations">, approvalRequestId: approvalRequestId as Id<"approvalRequests">, decision, comment });
+          }
           return await decideApprovalRequestMutation({
             approvalRequestId: approvalRequestId as Id<"approvalRequests">,
             decision,
@@ -2301,20 +2985,27 @@ function LandscapeOsLiveApp() {
       },
     }),
     [
+      activeOrganizationId,
       addTimesheetEntryMutation,
       bootstrapOperatingDepth,
       bulkUpdateLeadsMutation,
       commitLeadImportRowsMutation,
       createLeadImportPreviewMutation,
       decideApprovalRequestMutation,
+      decideProductionApprovalMutation,
       expireMemberInviteMutation,
+      closeJobMutation,
+      generateComplianceRecordMutation,
+      generateInvoiceFromJobMutation,
       inviteMemberMutation,
+      isDemoMode,
       priceFertilizationProgramMutation,
       recalculateJobCostsMutation,
       recordCustomerPaymentMutation,
       refreshCostIntelligenceMutation,
       revokeMemberInviteMutation,
       runStaleLeadCheckMutation,
+      selectedOrganization,
       submitWebLeadMutation,
       updateLeadMutation,
       updateMemberRoleMutation,
@@ -2324,21 +3015,263 @@ function LandscapeOsLiveApp() {
     ],
   );
 
+  if (organizationRows === undefined && !isDemoMode) {
+    return (
+      <TenantGate
+        title="Loading workspaces"
+        description="Convex is checking your account memberships before opening the production app."
+        action={
+          <TextButton type="button" variant="secondary" icon={<ShieldCheck size={16} />} onClick={() => setIsDemoMode(true)}>
+            Open sample workspace
+          </TextButton>
+        }
+      />
+    );
+  }
+
+  if (!isDemoMode && organizationRows && organizationRows.length === 0) {
+    return (
+      <TenantGate
+        title="Create your first workspace"
+        description="Sign in creates the account. A Convex organization is still required before this session can enter the production app."
+        action={
+          <div className="flex flex-wrap gap-2">
+            <Link href="/signin" className="inline-flex min-h-10 items-center justify-center gap-2 rounded-md bg-[#224036] px-4 text-sm font-semibold text-white">
+              Create workspace
+              <ArrowRight size={16} />
+            </Link>
+            <TextButton type="button" variant="secondary" icon={<ShieldCheck size={16} />} onClick={() => setIsDemoMode(true)}>
+              Open sample workspace
+            </TextButton>
+          </div>
+        }
+      />
+    );
+  }
+
+  // Never mount the interactive shell with placeholder IDs while Convex is still loading.
+  // A placeholder customer or visit can pass through a mutation and fail validation before the
+  // realtime workspace arrives.
+  if ((!isLocalDemoPersona && isDemoMode && liveWorkspace === undefined) || (!isDemoMode && activeOrganizationId && productionWorkspace === undefined)) {
+    return (
+      <TenantGate
+        title={isDemoMode ? "Loading Protected demo workspace" : "Loading selected workspace"}
+        description="Convex is loading the workspace records and permissions before enabling writes."
+        action={<div className="text-sm font-semibold text-stone-600">Please keep this tab open while the workspace connects.</div>}
+      />
+    );
+  }
+
+  const activeWorkspace = isLocalDemoPersona ? getDemoWorkspaceForPersona(demoPersona) : isDemoMode ? liveWorkspace : productionWorkspace;
+  const activePlan = isLocalDemoPersona
+    ? getDemoPersonaOption(demoPersona).plan
+    : selectedOrganization?.subscription?.plan ?? selectedOrganization?.organization.billingPlan ?? "free";
+  const activeSubscriptionStatus = isLocalDemoPersona
+    ? "demo"
+    : selectedOrganization?.subscription?.status ?? selectedOrganization?.organization.subscriptionStatus ?? "active";
+  const activeRole = selectedOrganization?.membership.role;
+  const backendState: BackendState = {
+    mode: isLocalDemoPersona ? "local" : activeWorkspace ? "convex-live" : "convex-loading",
+    label: isLocalDemoPersona ? `${getDemoPersonaOption(demoPersona).label} demo` : isDemoMode ? "Protected demo workspace" : activeWorkspace ? "Production tenant" : "Connecting tenant",
+    detail: isLocalDemoPersona
+      ? "This guided demo uses isolated synthetic browser data. Choose another demo profile or sign in to open a real tenant."
+      : isDemoMode
+      ? activeWorkspace
+        ? "This is the shared demo workspace. Use the selector above to return to real client data."
+        : "Seeding the protected demo workspace in Convex."
+      : activeWorkspace
+        ? `${selectedOrganization?.organization.name ?? "Workspace"} is loaded from Convex with the ${activePlan} plan and ${activeSubscriptionStatus} subscription status.`
+        : "Loading the selected organization from Convex without bootstrapping shared demo data.",
+    blueprint: backendBlueprint ?? fallbackBackendBlueprint,
+    activeOrganizationId: activeOrganizationId,
+    activeMembershipRole: activeRole,
+    plan: activePlan,
+    subscriptionStatus: activeSubscriptionStatus,
+    isDemoMode,
+    demoPersona: isLocalDemoPersona ? demoPersona : undefined,
+  };
+
+  if (isLocalDemoPersona) {
+    return (
+      <div className="min-h-screen bg-[#f6f7f1]">
+        <DemoPersonaSwitcher persona={demoPersona} onSelect={setDemoPersona} />
+        <LandscapeOsWorkspace
+          key={demoPersona}
+          initialWorkspace={activeWorkspace ?? getDemoWorkspaceForPersona(demoPersona)}
+          backendState={backendState}
+        />
+      </div>
+    );
+  }
+
   return (
-    <LandscapeOsWorkspace
-      initialWorkspace={liveWorkspace ?? demoWorkspace}
-      backendState={{
-        mode: liveWorkspace ? "convex-live" : "convex-loading",
-        label: liveWorkspace ? "Convex live" : "Connecting Convex",
-        detail: liveWorkspace
-          ? "Data is loaded from dutiful-salmon-300 and interactive actions write through demo Convex mutations."
-          : "Seeding the Greenline demo workspace in Convex, then the interface will hydrate from the backend.",
-        blueprint: backendBlueprint ?? fallbackBackendBlueprint,
-      }}
-      liveActions={liveActions}
-      operatingDepth={operatingDepth ?? undefined}
-      operatingActions={operatingActions}
-    />
+    <div className="min-h-screen bg-[#f6f7f1]">
+      <TenantSwitcher
+        organizationRows={organizationRows ?? []}
+        selectedOrganizationId={selectedOrganization?.organization._id ?? ""}
+        isDemoMode={isDemoMode}
+        onSelectOrganization={(organizationId) => {
+          setSelectedOrganizationId(organizationId);
+          setIsDemoMode(false);
+        }}
+        onOpenDemo={() => {
+          setDemoPersona("established");
+          setIsDemoMode(true);
+        }}
+      />
+      <LandscapeOsWorkspace
+        initialWorkspace={activeWorkspace ?? demoWorkspace}
+        backendState={backendState}
+        // Keep the demo backed by Convex too so audit history and workflow writes are real,
+        // while the adapter still selects demo mutations when no tenant is active.
+        liveActions={liveActions}
+        operatingDepth={operatingDepth ?? undefined}
+        operatingActions={operatingActions}
+      />
+    </div>
+  );
+}
+
+function DemoPersonaSwitcher({ persona, onSelect }: { persona: DemoPersona; onSelect: (persona: DemoPersona) => void }) {
+  return (
+    <div className="relative z-20 border-b border-stone-200 bg-white/95 backdrop-blur">
+      <div className="mx-auto flex max-w-[1600px] flex-wrap items-center justify-between gap-3 px-4 py-3">
+        <div className="flex min-w-0 items-center gap-3">
+          <Link href="/signin" className="flex items-center gap-2 font-bold text-[#224036]">
+            <span className="grid h-9 w-9 place-items-center rounded-md bg-[#e8efe8] text-[#224036]"><Sprout size={19} /></span>
+            <span>Turf Pro CRM</span>
+          </Link>
+          <span className="rounded-full border border-amber-200 bg-amber-50 px-3 py-1 text-xs font-bold uppercase text-amber-800">Sample data</span>
+        </div>
+        <div className="flex flex-wrap items-center gap-2">
+          <label className="flex items-center gap-2 text-xs font-semibold uppercase text-stone-500">
+            Demo profile
+            <select
+              aria-label="Demo profile"
+              className="h-9 rounded-md border border-stone-200 bg-white px-2 text-sm font-semibold normal-case text-stone-900 outline-none focus:border-[#315a4d]"
+              value={persona}
+              onChange={(event) => onSelect(event.target.value as DemoPersona)}
+            >
+              {demoPersonaOptions.map((option) => <option key={option.id} value={option.id}>{option.shortLabel}</option>)}
+            </select>
+          </label>
+          <Link href="/signin" className="inline-flex min-h-9 items-center justify-center gap-2 rounded-md bg-[#224036] px-3 text-sm font-semibold text-white transition hover:bg-[#315a4d]">
+            Start with your own data
+            <ArrowRight size={15} />
+          </Link>
+        </div>
+      </div>
+    </div>
+  );
+}
+
+function TenantGate({ title, description, action }: { title: string; description: string; action: ReactNode }) {
+  return (
+    <main className="min-h-screen bg-[#f6f7f1] px-4 py-10 text-stone-950">
+      <div className="mx-auto grid max-w-2xl gap-5 rounded-lg border border-stone-200 bg-white p-6 shadow-sm">
+        <div className="grid h-12 w-12 place-items-center rounded-md bg-[#e8efe8] text-[#224036]">
+          <ShieldCheck size={22} />
+        </div>
+        <div>
+          <h1 className="text-2xl font-bold tracking-normal">{title}</h1>
+          <p className="mt-2 text-sm leading-6 text-stone-600">{description}</p>
+        </div>
+        <div>{action}</div>
+      </div>
+    </main>
+  );
+}
+
+function TenantSwitcher({
+  organizationRows,
+  selectedOrganizationId,
+  isDemoMode,
+  onSelectOrganization,
+  onOpenDemo,
+}: {
+  organizationRows: Array<{
+    organization: {
+      _id: Id<"organizations">;
+      name: string;
+      slug: string;
+      billingPlan?: string;
+      subscriptionStatus?: string;
+    };
+    membership: {
+      role: Role;
+      status: string;
+    };
+    subscription?: {
+      plan: string;
+      status: string;
+    } | null;
+    usage: {
+      contacts: number;
+      contactLimit?: number | null;
+    };
+  }>;
+  selectedOrganizationId: string;
+  isDemoMode: boolean;
+  onSelectOrganization: (organizationId: Id<"organizations">) => void;
+  onOpenDemo: () => void;
+}) {
+  return (
+    <div className="relative z-10 border-b border-stone-200 bg-white/95 backdrop-blur">
+      <div className="mx-auto flex max-w-[1600px] flex-wrap items-center justify-between gap-3 px-4 py-3">
+        <div className="flex min-w-0 flex-1 flex-wrap items-center gap-3">
+          <Link href="/" className="flex items-center gap-2 font-bold text-[#224036]">
+            <span className="grid h-9 w-9 place-items-center rounded-md bg-[#e8efe8] text-[#224036]">
+              <Sprout size={19} />
+            </span>
+            <span>Turf Pro CRM</span>
+          </Link>
+          <label className="flex min-w-[260px] flex-1 items-center gap-2 rounded-md border border-stone-200 bg-stone-50 px-3 py-2 text-sm text-stone-600 md:max-w-lg">
+            <Briefcase size={16} className="shrink-0 text-[#224036]" />
+            <select
+              className="min-w-0 flex-1 bg-transparent font-semibold text-stone-900 outline-none"
+              value={isDemoMode ? "demo" : selectedOrganizationId}
+              onChange={(event) => {
+                if (event.target.value === "demo") {
+                  onOpenDemo();
+                  return;
+                }
+                onSelectOrganization(event.target.value as Id<"organizations">);
+              }}
+            >
+              {organizationRows.map((row) => (
+                <option key={row.organization._id} value={row.organization._id}>
+                  {row.organization.name} / {row.organization.slug}
+                </option>
+              ))}
+              <option value="demo">Demo workspace</option>
+            </select>
+          </label>
+        </div>
+        <div className="flex flex-wrap items-center justify-end gap-2">
+          {isDemoMode ? (
+            <span className="rounded-full border border-amber-200 bg-amber-50 px-3 py-1 text-xs font-bold uppercase text-amber-800">Demo workspace</span>
+          ) : (
+            organizationRows
+              .filter((row) => row.organization._id === selectedOrganizationId)
+              .map((row) => (
+                <div key={row.organization._id} className="flex flex-wrap items-center gap-2 text-xs font-semibold text-stone-600">
+                  <span className="rounded-full border border-stone-200 bg-stone-50 px-3 py-1 uppercase">{roleLabel(row.membership.role)}</span>
+                  <span className="rounded-full border border-stone-200 bg-stone-50 px-3 py-1 uppercase">
+                    {row.subscription?.plan ?? row.organization.billingPlan ?? "free"} / {row.subscription?.status ?? row.organization.subscriptionStatus ?? "active"}
+                  </span>
+                  <span className="rounded-full border border-stone-200 bg-stone-50 px-3 py-1 uppercase">
+                    {row.usage.contacts}
+                    {row.usage.contactLimit ? `/${row.usage.contactLimit}` : ""} contacts
+                  </span>
+                </div>
+              ))
+          )}
+          <Show when="signed-in">
+            <UserButton />
+          </Show>
+        </div>
+      </div>
+    </div>
   );
 }
 
@@ -2376,6 +3309,8 @@ function LandscapeOsWorkspace({
   const [crewName, setCrewName] = useState("");
   const [issueFlag, setIssueFlag] = useState("");
   const workspaceRef = useRef(normalizedInitialWorkspace);
+  const localImportJobsRef = useRef(new Map<string, Array<ImportPreviewUiRow & { id: string }>>());
+  const [localOperatingDepth, setLocalOperatingDepth] = useState<OperatingDepth>(() => buildFallbackOperatingDepth(normalizedInitialWorkspace));
 
   useEffect(() => {
     workspaceRef.current = workspace;
@@ -2386,7 +3321,7 @@ function LandscapeOsWorkspace({
     queueMicrotask(() => {
       if (cancelled) return;
       const previousWorkspace = workspaceRef.current;
-      setWorkspace(normalizedInitialWorkspace);
+      setWorkspace((current) => mergeWorkspaceSnapshots(current, normalizedInitialWorkspace));
       setSelectedCustomerId((current) => preserveCustomerSelection(previousWorkspace, normalizedInitialWorkspace, current));
       setSelectedJobId((current) => preserveJobSelection(previousWorkspace, normalizedInitialWorkspace, current));
       setSelectedVisitId((current) => preserveVisitSelection(previousWorkspace, normalizedInitialWorkspace, current));
@@ -2409,7 +3344,244 @@ function LandscapeOsWorkspace({
   const crewsById = useMemo(() => new Map(workspace.crews.map((crew) => [crew.id, crew])), [workspace.crews]);
   const jobsById = useMemo(() => new Map(workspace.jobs.map((job) => [job.id, job])), [workspace.jobs]);
   const fallbackOperatingDepth = useMemo(() => buildFallbackOperatingDepth(workspace), [workspace]);
-  const effectiveOperatingDepth = useMemo(() => normalizeOperatingDepth(operatingDepth, fallbackOperatingDepth), [fallbackOperatingDepth, operatingDepth]);
+  const effectiveOperatingDepth = useMemo(() => {
+    if (operatingDepth) return normalizeOperatingDepth(operatingDepth, fallbackOperatingDepth);
+    const statusByCode = new Map(localOperatingDepth.leadOps.statusSettings.map((setting) => [setting.status, setting]));
+    const customStatuses = localOperatingDepth.leadOps.statusSettings.filter((setting) => !fallbackOperatingDepth.leadOps.statusSettings.some((fallback) => fallback.status === setting.status));
+    return normalizeOperatingDepth(
+      {
+        ...fallbackOperatingDepth,
+        leadOps: {
+          ...fallbackOperatingDepth.leadOps,
+          statusSettings: [
+            ...fallbackOperatingDepth.leadOps.statusSettings.map((setting) => statusByCode.get(setting.status) ?? setting),
+            ...customStatuses,
+          ],
+        },
+        fieldOps: {
+          ...fallbackOperatingDepth.fieldOps,
+          complianceRecords: [
+            ...localOperatingDepth.fieldOps.complianceRecords.filter((record) => record.id.startsWith("local-compliance-")),
+            ...fallbackOperatingDepth.fieldOps.complianceRecords,
+          ],
+        },
+        admin: {
+          ...fallbackOperatingDepth.admin,
+          members: [
+            ...localOperatingDepth.admin.members.filter((member) => member.id.startsWith("local-invite-")),
+            ...fallbackOperatingDepth.admin.members,
+          ],
+          auditEvents: [
+            ...localOperatingDepth.admin.auditEvents.filter((event) => event.id.startsWith("local-audit-")),
+            ...fallbackOperatingDepth.admin.auditEvents,
+          ],
+        },
+        costIntelligence: {
+          ...fallbackOperatingDepth.costIntelligence,
+          laborRates: [
+            ...localOperatingDepth.costIntelligence.laborRates.filter((rate) => rate.id.startsWith("local-labor-")),
+            ...fallbackOperatingDepth.costIntelligence.laborRates,
+          ],
+          vendorCatalogs: [
+            ...localOperatingDepth.costIntelligence.vendorCatalogs.filter((item) => item.id.startsWith("local-vendor-")),
+            ...fallbackOperatingDepth.costIntelligence.vendorCatalogs,
+          ],
+        },
+        jobCosting: {
+          ...fallbackOperatingDepth.jobCosting,
+          timesheets: [
+            ...localOperatingDepth.jobCosting.timesheets.filter((entry) => entry.id.startsWith("local-timesheet-")),
+            ...fallbackOperatingDepth.jobCosting.timesheets,
+          ],
+        },
+        revenue: {
+          ...fallbackOperatingDepth.revenue,
+          invoices: [
+            ...localOperatingDepth.revenue.invoices.filter((invoice) => invoice.id.startsWith("local-invoice-")),
+            ...fallbackOperatingDepth.revenue.invoices,
+          ],
+          payments: [
+            ...localOperatingDepth.revenue.payments.filter((payment) => payment.id.startsWith("local-payment-")),
+            ...fallbackOperatingDepth.revenue.payments,
+          ],
+        },
+      },
+      fallbackOperatingDepth,
+    );
+  }, [fallbackOperatingDepth, localOperatingDepth, operatingDepth]);
+
+  function appendLocalAudit(input: { action: string; summary: string; entityType: string; entityId: string; actorName?: string; module?: string; changedFields?: string[] }) {
+    const createdAt = now();
+    setLocalOperatingDepth((current) => ({
+      ...current,
+      admin: {
+        ...current.admin,
+        auditEvents: [
+          {
+            id: `local-audit-${createdAt}-${Math.random().toString(36).slice(2, 7)}`,
+            action: input.action,
+            summary: input.summary,
+            entityType: input.entityType,
+            entityId: input.entityId,
+            actorName: input.actorName ?? "Demo/Admin",
+            module: input.module ?? "System / automation",
+            exportState: "not_exported",
+            changedFields: input.changedFields ?? [],
+            createdAt,
+          },
+          ...current.admin.auditEvents,
+        ],
+      },
+    }));
+  }
+
+  function addImportedRowsToWorkspace(rows: Array<ImportPreviewUiRow & { id: string }>) {
+    const readyRows = rows.filter((row) => row.status === "ready");
+    if (readyRows.length === 0) return;
+    const createdAt = now();
+    setWorkspace((current) => {
+      const customers = [...current.customers];
+      const contacts = [...current.contacts];
+      const properties = [...current.properties];
+      const leads = [...current.leads];
+      const opportunities = [...current.opportunities];
+      const activities = [...current.activities];
+      for (const row of readyRows) {
+        const customerId = newId("cust");
+        const propertyId = newId("prop");
+        const leadId = newId("lead");
+        const serviceLine = (row.serviceLine as ServiceCategory | undefined) ?? "maintenance";
+        customers.unshift({ id: customerId, name: row.customerName || "Imported customer", type: "residential", status: "prospect", phone: row.phone ?? "", email: row.email ?? "", tags: ["Imported", categoryLabels[serviceLine]], ownerId: "u-amy" });
+        contacts.unshift({ id: newId("contact"), customerId, name: row.customerName || "Imported customer", email: row.email, phone: row.phone, roleTitle: "Primary contact", isPrimary: true });
+        properties.unshift({ id: propertyId, customerId, label: "Primary property", street: row.street ?? "", city: row.city ?? "", state: row.state ?? "", postalCode: row.postalCode ?? "", notes: "Imported from CSV preview." });
+        leads.unshift({ id: leadId, title: `${categoryLabels[serviceLine]} request from ${row.customerName}`, customerId, propertyId, source: row.source ?? "CSV import", status: "new", urgency: "normal", ownerId: "u-amy", leadType: "form", accountType: "residential", programRequests: [serviceLine], qualityScore: 82, spamScore: 0, receivedAt: createdAt, createdAt });
+        opportunities.unshift({ id: newId("opp"), leadId, customerId, propertyId, title: `${categoryLabels[serviceLine]} request from ${row.customerName}`, stage: "qualified", valueCents: 150000, closeProbability: 30, expectedCloseDate: createdAt + 14 * 24 * 60 * 60 * 1000, ownerId: "u-amy", serviceLines: [serviceLine], updatedAt: createdAt });
+        activities.unshift({ id: newId("act"), entityType: "lead", entityId: leadId, kind: "system", summary: `Imported lead ${row.customerName}`, actorId: "u-amy", occurredAt: createdAt });
+      }
+      return { ...current, customers, contacts, properties, leads, opportunities, activities };
+    });
+  }
+
+  const localOperatingActions: OperatingActions = {
+    updateLead: (leadId, fields) => {
+      setWorkspace((current) => ({
+        ...current,
+        leads: current.leads.map((lead) => lead.id === leadId ? {
+          ...lead,
+          status: (fields.status as typeof lead.status | undefined) ?? lead.status,
+          qualityScore: fields.grade ? ({ a: 92, b: 78, c: 64, d: 48, f: 20 }[fields.grade] ?? lead.qualityScore) : lead.qualityScore,
+        } : lead),
+      }));
+    },
+    bulkUpdateLeads: (leadIds, status) => {
+      const selected = new Set(leadIds);
+      setWorkspace((current) => ({ ...current, leads: current.leads.map((lead) => selected.has(lead.id) ? { ...lead, status: status as typeof lead.status } : lead) }));
+    },
+    createLeadImportPreview: async ({ fileName, csvText }) => {
+      const rows = parseLeadImportCsv(csvText, {
+        currentContactCount: workspaceRef.current.contacts.length,
+        freeContactLimit: Number.MAX_SAFE_INTEGER,
+        serviceTerritory: ["Foxborough", "Mansfield", "Sharon"],
+      }).map((row) => ({ ...row, id: `local-import-row-${row.rowNumber}` }));
+      const importJobId = `local-import-${Date.now()}-${Math.random().toString(36).slice(2, 7)}`;
+      localImportJobsRef.current.set(importJobId, rows);
+      appendLocalAudit({ action: "import.preview", summary: `Prepared ${fileName ?? "CSV"} for import`, entityType: "import_job", entityId: importJobId, changedFields: ["rows", "status"] });
+      return { importJobId, rows };
+    },
+    commitLeadImportRows: async (importJobId) => {
+      const rows = localImportJobsRef.current.get(importJobId) ?? [];
+      addImportedRowsToWorkspace(rows);
+      const result = {
+        imported: rows.filter((row) => row.status === "ready").length,
+        skipped: rows.filter((row) => row.status === "needs_review").length,
+        failed: rows.filter((row) => row.status === "blocked").length,
+      };
+      appendLocalAudit({ action: "import.commit", summary: `Committed sample import ${importJobId}`, entityType: "import_job", entityId: importJobId, changedFields: ["status"] });
+      return result;
+    },
+    submitWebLead: async (input) => {
+      const createdAt = now();
+      const customerId = newId("cust");
+      const propertyId = newId("prop");
+      const leadId = newId("lead");
+      const solicitation = /unsubscribe|business opportunity|generate leads/i.test(input.message);
+      const spamScore = solicitation ? 72 : 4;
+      const leadStatus = solicitation ? "disqualified" as const : "new" as const;
+      const submissionStatus = solicitation ? "spam" : "new";
+      setWorkspace((current) => ({
+        ...current,
+        customers: [{ id: customerId, name: input.customerName, type: "residential", status: "prospect", phone: input.phone, email: input.email, tags: [categoryLabels[input.serviceLine], "Website"], ownerId: "u-amy" }, ...current.customers],
+        contacts: [{ id: newId("contact"), customerId, name: input.customerName, email: input.email, phone: input.phone, roleTitle: "Primary contact", isPrimary: true }, ...current.contacts],
+        properties: [{ id: propertyId, customerId, label: "Primary property", street: input.street, city: input.city, state: input.state, postalCode: input.postalCode, notes: `Captured from ${input.campaign || "website form"}.` }, ...current.properties],
+        leads: [{ id: leadId, title: `${categoryLabels[input.serviceLine]} request from ${input.customerName}`, customerId, propertyId, source: input.sourceDetail || "Website", status: leadStatus, urgency: "normal", ownerId: "u-amy", leadType: "form", accountType: "residential", programRequests: [input.serviceLine], message: input.message, qualityScore: 86, spamScore, receivedAt: createdAt, createdAt }, ...current.leads],
+        opportunities: solicitation ? current.opportunities : [{ id: newId("opp"), leadId, customerId, propertyId, title: `${categoryLabels[input.serviceLine]} request from ${input.customerName}`, stage: "qualified", valueCents: dollarsToCents(input.estimatedValue), closeProbability: 30, expectedCloseDate: createdAt + 14 * 24 * 60 * 60 * 1000, ownerId: "u-amy", serviceLines: [input.serviceLine], updatedAt: createdAt }, ...current.opportunities],
+      }));
+      return { leadId, submissionId: newId("submission"), spamScore, spamReasons: solicitation ? ["Solicitation language"] : [], status: submissionStatus };
+    },
+    runStaleLeadCheck: async () => ({ inserted: Math.max(1, effectiveOperatingDepth.leadOps.metrics.slaOverdue) }),
+    updateMemberRole: (membershipId, role) => setLocalOperatingDepth((current) => ({ ...current, admin: { ...current.admin, members: current.admin.members.map((member) => member.id === membershipId ? { ...member, role } : member) } })),
+    inviteMember: async (input) => {
+      const id = `local-invite-${Date.now()}-${Math.random().toString(36).slice(2, 6)}`;
+      setLocalOperatingDepth((current) => ({ ...current, admin: { ...current.admin, members: [{ id, userId: `local-user-${input.email}`, name: input.name ?? input.email, email: input.email, role: input.role, status: "invited" }, ...current.admin.members] } }));
+      appendLocalAudit({ action: "member.invite", summary: `Invited ${input.email} as ${input.role}`, entityType: "organization", entityId: "local-demo", actorName: "Admin", module: "Admin", changedFields: ["memberships"] });
+    },
+    expireMemberInvite: (membershipId) => setLocalOperatingDepth((current) => ({ ...current, admin: { ...current.admin, members: current.admin.members.map((member) => member.id === membershipId ? { ...member, status: "expired" } : member) } })),
+    revokeMemberInvite: (membershipId) => setLocalOperatingDepth((current) => ({ ...current, admin: { ...current.admin, members: current.admin.members.map((member) => member.id === membershipId ? { ...member, status: "revoked" } : member) } })),
+    upsertLeadStatusSetting: (input) => {
+      setLocalOperatingDepth((current) => {
+        const next = { ...input, id: input.id ?? `local-status-${input.status}` };
+        const exists = current.leadOps.statusSettings.some((setting) => setting.status === input.status);
+        return { ...current, leadOps: { ...current.leadOps, statusSettings: exists ? current.leadOps.statusSettings.map((setting) => setting.status === input.status ? next : setting) : [...current.leadOps.statusSettings, next] } };
+      });
+      appendLocalAudit({ action: "workflow_status.update", summary: `Updated workflow status ${input.label}`, entityType: "organization", entityId: "local-demo", actorName: "Admin", module: "Admin", changedFields: ["label", "color", "sortOrder", "terminal", "active"] });
+    },
+    upsertLaborRate: (input) => setLocalOperatingDepth((current) => ({ ...current, costIntelligence: { ...current.costIntelligence, laborRates: [{ id: input.id ?? `local-labor-${Date.now()}`, name: input.roleName, roleName: input.roleName, source: "Admin override", hourlyCostCents: input.hourlyCostCents, billableRateCents: input.billableRateCents, active: true }, ...current.costIntelligence.laborRates.filter((rate) => rate.id !== input.id && rate.roleName !== input.roleName)] } })),
+    upsertVendorCatalogItem: (input) => setLocalOperatingDepth((current) => ({ ...current, costIntelligence: { ...current.costIntelligence, vendorCatalogs: [{ id: input.id ?? `local-vendor-${Date.now()}`, vendorName: input.vendorName, itemName: input.itemName, category: input.category, unit: input.unit, unitCostCents: input.unitCostCents, source: "Admin override", active: true }, ...current.costIntelligence.vendorCatalogs.filter((item) => item.id !== input.id && item.itemName !== input.itemName)] } })),
+    addTimesheetEntry: (jobId, roleName, hours, hourlyCostCents) => setLocalOperatingDepth((current) => ({ ...current, jobCosting: { ...current.jobCosting, timesheets: [{ id: `local-timesheet-${Date.now()}`, jobTitle: workspaceRef.current.jobs.find((job) => job.id === jobId)?.title ?? "Demo job", roleName, hours, totalCostCents: Math.round(hours * hourlyCostCents), status: "approved" }, ...current.jobCosting.timesheets] } })),
+    recordCustomerPayment: (invoiceId, amountCents, method, reference) => setLocalOperatingDepth((current) => {
+      const invoice = current.revenue.invoices.find((item) => item.id === invoiceId);
+      if (!invoice) return current;
+      return { ...current, revenue: { ...current.revenue, invoices: current.revenue.invoices.map((item) => item.id === invoiceId ? { ...item, paidCents: Math.min(item.totalCents, item.paidCents + amountCents), balanceCents: Math.max(0, item.balanceCents - amountCents) } : item), payments: [{ id: `local-payment-${Date.now()}`, invoiceId, customerName: invoice.customerName, status: "posted", method, amountCents, receivedAt: now(), reference }, ...current.revenue.payments] } };
+    }),
+    generateInvoiceFromJob: async (jobId, status = "sent", dueInDays = 14) => {
+      const job = workspaceRef.current.jobs.find((item) => item.id === jobId);
+      const customer = job ? workspaceRef.current.customers.find((item) => item.id === job.customerId) : undefined;
+      const totalCents = effectiveOperatingDepth.jobCosting.summaries.find((summary) => summary.jobId === jobId)?.actualRevenueCents ?? 250000;
+      const invoiceId = `local-invoice-${Date.now()}`;
+      const invoiceNumber = `INV-DEMO-${String(Date.now()).slice(-6)}`;
+      setLocalOperatingDepth((current) => ({ ...current, revenue: { ...current.revenue, invoices: [{ id: invoiceId, customerId: job?.customerId ?? "", jobId, invoiceNumber, customerName: customer?.name ?? "Demo customer", jobTitle: job?.title ?? "Demo job", status, totalCents, paidCents: 0, balanceCents: totalCents, dueAt: now() + dueInDays * 24 * 60 * 60 * 1000 }, ...current.revenue.invoices] } }));
+      return { invoiceId, invoiceNumber, created: true, totalCents, balanceCents: totalCents };
+    },
+    closeJob: async (jobId) => {
+      setWorkspace((current) => ({ ...current, jobs: current.jobs.map((job) => job.id === jobId ? { ...job, status: "completed" } : job) }));
+      return { jobId, status: "completed" };
+    },
+    generateComplianceRecord: async (visitId) => {
+      const visit = workspaceRef.current.visits.find((item) => item.id === visitId);
+      const job = visit ? workspaceRef.current.jobs.find((item) => item.id === visit.jobId) : undefined;
+      const customer = visit ? workspaceRef.current.customers.find((item) => item.id === visit.customerId) : undefined;
+      const property = visit ? workspaceRef.current.properties.find((item) => item.id === visit.propertyId) : undefined;
+      const id = `local-compliance-${Date.now()}`;
+      setLocalOperatingDepth((current) => ({ ...current, fieldOps: { ...current.fieldOps, complianceRecords: [{ id, reportNumber: `CMP-DEMO-${String(Date.now()).slice(-5)}`, visitId, jobTitle: job?.title ?? "Demo visit", customerName: customer?.name ?? "Demo customer", propertyName: property?.label ?? "Primary property", siteAddress: property ? `${property.street}, ${property.city}, ${property.state} ${property.postalCode}` : "Address unavailable", materialName: "Demo material application", restrictedUse: false, quantity: 1.5, unit: "gal", targetArea: "Target treatment area", applicator: "Field technician", weatherSummary: "Dry, 68 F, wind 4 mph", applicationRisk: "low", generatedAt: now(), ready: false, missing: ["EPA registration number"] }, ...current.fieldOps.complianceRecords] } }));
+      return { visitId, recordCount: 1, ready: false, missing: ["EPA registration number"] };
+    },
+    recalculateJobCosts: () => undefined,
+    refreshCostIntelligence: () => undefined,
+    priceFertilizationProgram: async (input) => {
+      const property = workspaceRef.current.properties.find((item) => item.id === input.propertyId);
+      const material = workspaceRef.current.materials.find((item) => item.id === input.materialId);
+      const output = calculateFertilizationProgramPricing({
+        ...input,
+        turfAreaSqFt: property?.lawnSizeSqFt ?? 10000,
+        materialUnitCostCents: material?.costCents ?? 7300,
+        priceBookRateCentsPerSqFt: 1.8,
+        minPriceCents: 62000,
+      });
+      return { sessionId: `local-pricing-${Date.now()}`, output, estimateLineItemPreview: input.estimateLineItemName ? { name: input.estimateLineItemName, quantity: 1, unit: input.estimateLineItemUnit ?? "program", unitPriceCents: input.estimateLineItemUnitPriceCents ?? 0 } : undefined };
+    },
+    decideEstimateApproval: async (approvalRequestId, decision) => ({ approvalRequestId, status: decision }),
+  };
+  const effectiveOperatingActions = operatingActions ?? localOperatingActions;
 
   const dashboard = useMemo(() => {
     const openOpps = workspace.opportunities.filter((opp) => !["won", "lost"].includes(opp.stage));
@@ -2720,7 +3892,7 @@ function LandscapeOsWorkspace({
 
     setSelectedCustomerId(customerId);
     setLeadSubmitState("success");
-    setLeadSubmitMessage(`${leadInput.customerName} was added to CRM, Lead Ops, and Pipeline.`);
+    setLeadSubmitMessage(`${leadInput.customerName} was added to Customers, Leads, and Pipeline.`);
     setLeadForm(defaultLeadForm());
   }
 
@@ -3119,6 +4291,12 @@ function LandscapeOsWorkspace({
           },
           ...current.jobs,
         ],
+        jobPhases: [
+          { id: newId("phase"), jobId: jobIdValue, name: "Sales handoff", status: "scheduled", sortOrder: 1, startDate: createdAt, dueDate: scheduledStart },
+          { id: newId("phase"), jobId: jobIdValue, name: "Production visit", status: "scheduled", sortOrder: 2, startDate: scheduledStart, dueDate: scheduledEnd },
+          { id: newId("phase"), jobId: jobIdValue, name: "Completion review", status: "scheduled", sortOrder: 3, startDate: scheduledEnd, dueDate: scheduledEnd + 2 * 60 * 60 * 1000 },
+          ...current.jobPhases,
+        ],
         visits: [
           {
             id: visitIdValue,
@@ -3133,7 +4311,8 @@ function LandscapeOsWorkspace({
             checklist: [
               { id: "handoff-1", label: "Confirm approved estimate scope", isDone: false },
               { id: "handoff-2", label: "Complete approved service scope", isDone: false },
-              { id: "handoff-3", label: "Capture completion photos", isDone: false },
+              { id: "handoff-3", label: "Record product and EPA label", isDone: false },
+              { id: "handoff-4", label: "Capture completion photos", isDone: false },
             ],
             notes: `Created from approved estimate ${estimate.estimateNumber}.`,
           },
@@ -3240,9 +4419,12 @@ function LandscapeOsWorkspace({
     setWorkspace((current) => {
       const job = current.jobs.find((item) => item.id === input.jobId);
       if (!job) return current;
-      const routeOrderStart = current.visits.reduce((max, visit) => Math.max(max, visit.routeOrder), 0);
       const generatedVisits = visitIds.map((visitId, index) => {
         const scheduledStart = input.firstStart + index * intervalDays * 24 * 60 * 60 * 1000;
+        const crewId = input.crewId ?? current.crews.find((crew) => crew.active)?.id ?? "";
+        const routeOrder = current.visits
+          .filter((visit) => sameCalendarDay(visit.scheduledStart, scheduledStart) && visit.crewId === crewId)
+          .reduce((max, visit) => Math.max(max, visit.routeOrder), 0) + 1;
         return {
           id: visitId,
           jobId: job.id,
@@ -3251,8 +4433,8 @@ function LandscapeOsWorkspace({
           scheduledStart,
           scheduledEnd: scheduledStart + durationMinutes * 60 * 1000,
           status: "scheduled" as const,
-          routeOrder: routeOrderStart + index + 1,
-          crewId: input.crewId ?? current.crews.find((crew) => crew.active)?.id ?? "",
+          routeOrder,
+          crewId,
           checklist: [
             { id: "recurring-1", label: "Confirm recurring scope and property access", isDone: false },
             { id: "recurring-2", label: "Complete scheduled recurring service", isDone: false },
@@ -3681,6 +4863,17 @@ function LandscapeOsWorkspace({
           : [nextItem, ...current.serviceCatalog],
       };
     });
+    if (!liveActions?.upsertServiceCatalogItem) {
+      appendLocalAudit({
+        action: input.itemId ? "demo.catalog.update" : "demo.catalog.create",
+        summary: `${input.itemId ? "Updated" : "Created"} service ${input.name}`,
+        entityType: "service_catalog_item",
+        entityId: itemId,
+        actorName: "Demo/Admin",
+        module: "System / automation",
+        changedFields: ["name", "category", "defaultUnit", "defaultPriceCents", "active"],
+      });
+    }
     return itemId;
   }
 
@@ -3703,6 +4896,8 @@ function LandscapeOsWorkspace({
     liveActions?.createCrew?.(crewName);
     setCrewName("");
   }
+
+  const activeNavItem = navItems.find((item) => item.id === view);
 
   return (
     <div className="min-h-screen bg-[#f6f7f1] text-stone-950">
@@ -3728,41 +4923,55 @@ function LandscapeOsWorkspace({
             </IconButton>
           </div>
 
-          <nav className="mt-6 grid gap-1">
-            {navItems.map((item) => (
-              <button
-                type="button"
-                key={item.id}
-                onClick={() => {
-                  setView(item.id);
-                  setMobileNavOpen(false);
-                }}
-                className={cn(
-                  "flex h-11 items-center gap-3 rounded-md px-3 text-left text-sm font-semibold text-stone-600 transition hover:bg-stone-100",
-                  view === item.id && "bg-[#e8efe8] text-[#224036]",
-                )}
-              >
-                {item.icon}
-                {item.label}
-              </button>
+          <nav className="mt-6 grid gap-5" aria-label="Primary navigation">
+            {navGroups.map((group) => (
+              <div key={group.label} className="grid gap-1">
+                <div className="px-3 pb-1 text-[11px] font-bold uppercase text-stone-400">{group.label}</div>
+                {group.items.map((item) => (
+                  <button
+                    type="button"
+                    key={item.id}
+                    onClick={() => {
+                      setView(item.id);
+                      setMobileNavOpen(false);
+                    }}
+                    className={cn(
+                      "flex h-10 items-center gap-3 rounded-md px-3 text-left text-sm font-semibold text-stone-600 transition hover:bg-stone-100",
+                      view === item.id && "bg-[#e8efe8] text-[#224036]",
+                    )}
+                  >
+                    {item.icon}
+                    {item.label}
+                  </button>
+                ))}
+              </div>
             ))}
           </nav>
 
-          <div className="mt-6 rounded-lg border border-stone-200 bg-[#fbfaf4] p-3">
-            <div className="flex items-center gap-2 text-sm font-semibold">
-              <ShieldCheck size={16} />
-              Tenant isolation
+          {backendState.isDemoMode ? (
+            <div className="mt-6 rounded-lg border border-stone-200 bg-stone-50 p-3" aria-label="Sample workspace summary">
+              <div className="flex items-center gap-2 text-sm font-semibold text-stone-800">
+                <Sprout size={16} />
+                Sample workspace
+              </div>
+              <div className="mt-3 grid grid-cols-3 gap-2 border-t border-stone-200 pt-3 text-center">
+                <div><div className="text-sm font-bold">{workspace.contacts.length}</div><div className="text-[10px] uppercase text-stone-500">Contacts</div></div>
+                <div><div className="text-sm font-bold">{workspace.jobs.length}</div><div className="text-[10px] uppercase text-stone-500">Jobs</div></div>
+                <div><div className="text-sm font-bold">{workspace.visits.length}</div><div className="text-[10px] uppercase text-stone-500">Visits</div></div>
+              </div>
             </div>
-            <div className="mt-2 text-xs leading-5 text-stone-600">All production functions require organization membership and role checks.</div>
-          </div>
-
-          <div className={cn("mt-3 rounded-lg border p-3", backendState.mode === "convex-live" ? "border-emerald-200 bg-emerald-50" : "border-amber-200 bg-amber-50")}>
-            <div className="flex items-center gap-2 text-sm font-semibold">
-              <Database size={16} />
-              {backendState.label}
+          ) : (
+            <div className="mt-6 rounded-lg border border-stone-200 bg-stone-50 p-3" aria-label="Workspace plan information">
+              <div className="flex items-center gap-2 text-sm font-semibold">
+                <ShieldCheck size={16} />
+                {backendState.activeMembershipRole ? roleLabel(backendState.activeMembershipRole) : "Workspace member"}
+              </div>
+              <div className="mt-2 flex items-center justify-between gap-2 text-xs text-stone-600">
+                <span>{formatStatus(backendState.plan ?? "free")} plan</span>
+                <Badge tone={backendState.subscriptionStatus === "active" ? "success" : "neutral"}>{formatStatus(backendState.subscriptionStatus ?? "active")}</Badge>
+              </div>
             </div>
-            <div className="mt-2 text-xs leading-5 text-stone-600">{backendState.detail}</div>
-          </div>
+          )}
         </aside>
 
         {mobileNavOpen ? <button aria-label="Close menu overlay" className="fixed inset-0 z-20 bg-black/20 lg:hidden" onClick={() => setMobileNavOpen(false)} /> : null}
@@ -3775,8 +4984,8 @@ function LandscapeOsWorkspace({
                   <Menu size={18} />
                 </IconButton>
                 <div className="min-w-0">
-                  <h1 className="truncate text-xl font-bold">{navItems.find((item) => item.id === view)?.label}</h1>
-                  <p className="truncate text-sm text-stone-500">CRM, estimating, dispatch, projects, and field work in one operating surface.</p>
+                  <h1 className="truncate text-xl font-bold">{activeNavItem?.label ?? "Dashboard"}</h1>
+                  <p className="truncate text-sm text-stone-500">{viewDescriptions[view] ?? "Run customer, field, and financial work from one workspace."}</p>
                 </div>
               </div>
               <div className="flex shrink-0 items-center gap-2">
@@ -3849,10 +5058,11 @@ function LandscapeOsWorkspace({
             )}
             {view === "prime_time" && <PrimeTimeView />}
             {view === "journeys" && <JourneyAuditView />}
-            {view === "lead_ops" && <LeadOpsView operatingDepth={effectiveOperatingDepth} operatingActions={operatingActions} />}
+            {view === "lead_ops" && <LeadOpsView operatingDepth={effectiveOperatingDepth} operatingActions={effectiveOperatingActions} />}
             {view === "crm" && (
               <CrmView
                 workspace={workspace}
+                plan={backendState.plan}
                 customerSearch={customerSearch}
                 setCustomerSearch={setCustomerSearch}
                 selectedCustomer={selectedCustomer}
@@ -3870,8 +5080,31 @@ function LandscapeOsWorkspace({
               />
             )}
             {view === "pipeline" && <PipelineView workspace={workspace} customersById={customersById} moveOpportunity={moveOpportunity} createQuoteFromOpportunity={createQuoteFromOpportunity} sendQuoteToCustomer={sendQuoteToCustomer} acceptQuoteFromCustomer={acceptQuoteFromCustomer} convertAcceptedQuoteToJob={convertAcceptedQuoteToJob} openJob={(jobId) => { setSelectedJobId(jobId); setView("jobs"); }} />}
+            {view === "calendar" && (
+              <CalendarDayView
+                workspace={workspace}
+                customersById={customersById}
+                propertiesById={propertiesById}
+                crewsById={crewsById}
+                jobsById={jobsById}
+                setSelectedVisitId={setSelectedVisitId}
+                setView={setView}
+                generateRecurringRoute={generateRecurringRoute}
+              />
+            )}
             {view === "dispatch" && (
               <DispatchView workspace={workspace} operatingDepth={effectiveOperatingDepth} customersById={customersById} propertiesById={propertiesById} crewsById={crewsById} jobsById={jobsById} assignCrew={assignCrew} moveRouteStop={moveRouteStop} generateRecurringRoute={generateRecurringRoute} />
+            )}
+            {view === "routing" && (
+              <RoutingView
+                workspace={workspace}
+                operatingDepth={effectiveOperatingDepth}
+                customersById={customersById}
+                propertiesById={propertiesById}
+                jobsById={jobsById}
+                setSelectedVisitId={setSelectedVisitId}
+                setView={setView}
+              />
             )}
             {view === "jobs" && (
               <JobsView
@@ -3893,6 +5126,18 @@ function LandscapeOsWorkspace({
                 toggleTask={toggleTask}
                 createChangeOrder={createJobChangeOrder}
                 approveChangeOrder={approveJobChangeOrder}
+                operatingActions={effectiveOperatingActions}
+              />
+            )}
+            {view === "job_analysis" && <JobAnalysisView operatingDepth={effectiveOperatingDepth} setSelectedJobId={setSelectedJobId} setView={setView} />}
+            {view === "job_pricer" && <JobsPricerView workspace={workspace} operatingDepth={effectiveOperatingDepth} />}
+            {view === "chemicals" && (
+              <ChemicalTrackingView
+                workspace={workspace}
+                operatingDepth={effectiveOperatingDepth}
+                propertiesById={propertiesById}
+                setSelectedVisitId={setSelectedVisitId}
+                setView={setView}
               />
             )}
             {view === "field" && (
@@ -3911,16 +5156,18 @@ function LandscapeOsWorkspace({
                 startVisit={startFieldVisit}
                 toggleChecklist={toggleChecklist}
                 submitVisit={submitVisit}
+                operatingActions={effectiveOperatingActions}
               />
             )}
-            {view === "costing" && <CostingView workspace={workspace} operatingDepth={effectiveOperatingDepth} operatingActions={operatingActions} />}
-            {view === "profit" && <ProfitView operatingDepth={effectiveOperatingDepth} />}
-            {view === "cost_intel" && <CostIntelligenceView operatingDepth={effectiveOperatingDepth} operatingActions={operatingActions} />}
+            {view === "costing" && <CostingView workspace={workspace} operatingDepth={effectiveOperatingDepth} operatingActions={effectiveOperatingActions} />}
+            {view === "profit" && <ProfitView operatingDepth={effectiveOperatingDepth} operatingActions={effectiveOperatingActions} />}
+            {view === "churn_ltv" && <ChurnLtvDashboard operatingDepth={effectiveOperatingDepth} />}
+            {view === "cost_intel" && <CostIntelligenceView operatingDepth={effectiveOperatingDepth} operatingActions={effectiveOperatingActions} />}
             {view === "admin" && (
               <AdminView
                 workspace={workspace}
                 operatingDepth={effectiveOperatingDepth}
-                operatingActions={operatingActions}
+                operatingActions={effectiveOperatingActions}
                 membersById={membersById}
                 crewName={crewName}
                 setCrewName={setCrewName}
@@ -3937,7 +5184,7 @@ function LandscapeOsWorkspace({
                 createClientWorkspace={createClientWorkspace}
                 authConfigured={authConfigured}
                 operatingDepth={effectiveOperatingDepth}
-                operatingActions={operatingActions}
+                operatingActions={effectiveOperatingActions}
               />
             )}
             {view === "specs" && <SpecsView backendState={backendState} workspace={workspace} />}
@@ -4186,7 +5433,7 @@ function JourneyAuditView() {
           <Panel>
             <h2 className="text-base font-bold">P0 Journey Work Queue</h2>
             <div className="mt-4 grid gap-2">
-              {p0Open.slice(0, 12).map((journey) => (
+              {p0Open.length > 0 ? p0Open.slice(0, 12).map((journey) => (
                 <div key={journey.id} className="rounded-md border border-stone-200 p-3">
                   <div className="flex items-start justify-between gap-3">
                     <div>
@@ -4197,19 +5444,27 @@ function JourneyAuditView() {
                   </div>
                   <div className="mt-2 text-sm leading-5 text-stone-600">{journey.gaps[0]}</div>
                 </div>
-              ))}
+              )) : (
+                <div className="rounded-md border border-emerald-200 bg-emerald-50 p-3 text-sm font-semibold text-emerald-900">
+                  All P0 journeys are currently verified. Keep this queue empty by adding tests when critical journeys change.
+                </div>
+              )}
             </div>
           </Panel>
 
           <Panel>
             <h2 className="text-base font-bold">True Product Gaps</h2>
             <div className="mt-4 grid gap-2">
-              {gapJourneys.map((journey) => (
+              {gapJourneys.length > 0 ? gapJourneys.map((journey) => (
                 <div key={journey.id} className="rounded-md border border-rose-100 bg-rose-50 p-3">
                   <div className="font-semibold text-rose-950">Journey {journey.id}</div>
                   <div className="mt-1 text-sm leading-5 text-rose-900">{journey.title}</div>
                 </div>
-              ))}
+              )) : (
+                <div className="rounded-md border border-emerald-200 bg-emerald-50 p-3 text-sm font-semibold text-emerald-900">
+                  No journey is currently classified as a product gap.
+                </div>
+              )}
             </div>
           </Panel>
         </div>
@@ -4318,25 +5573,60 @@ function DashboardView({
   jobsById: Map<string, WorkspaceSnapshot["jobs"][number]>;
   setView: (view: View) => void;
 }) {
+  const [dashboardLens, setDashboardLens] = useState<"owner" | "sales" | "operations" | "field">("owner");
+  const [dashboardOpenedAt] = useState(() => Date.now());
+  const unassignedVisits = workspace.visits.filter((visit) => !visit.crewId && !["complete", "canceled"].includes(visit.status));
+  const staleOpportunities = workspace.opportunities.filter((opportunity) => !["won", "lost"].includes(opportunity.stage) && opportunity.updatedAt < dashboardOpenedAt - 7 * 24 * 60 * 60 * 1000);
+  const actionItems = [
+    { id: "overdue-tasks", title: `${dashboard.overdueTasks.length} overdue ${dashboard.overdueTasks.length === 1 ? "task" : "tasks"}`, detail: "Close the loop on customer and production commitments.", count: dashboard.overdueTasks.length, view: "jobs" as View, lenses: ["owner", "operations", "field"] },
+    { id: "stale-opportunities", title: `${staleOpportunities.length} sales ${staleOpportunities.length === 1 ? "follow-up" : "follow-ups"} due`, detail: "Advance, reschedule, or close opportunities that need a next step.", count: staleOpportunities.length, view: "pipeline" as View, lenses: ["owner", "sales"] },
+    { id: "unassigned-visits", title: `${unassignedVisits.length} unassigned ${unassignedVisits.length === 1 ? "visit" : "visits"}`, detail: "Assign a crew before the route is released to the field.", count: unassignedVisits.length, view: "dispatch" as View, lenses: ["owner", "operations"] },
+    { id: "open-estimates", title: `${dashboard.openEstimates.length} open ${dashboard.openEstimates.length === 1 ? "estimate" : "estimates"}`, detail: "Review aging quotes and capture the next customer decision.", count: dashboard.openEstimates.length, view: "pipeline" as View, lenses: ["owner", "sales"] },
+  ].filter((item) => item.lenses.includes(dashboardLens) && item.count > 0);
+
   return (
     <div className="grid gap-4">
       <div className="grid gap-4 md:grid-cols-2 xl:grid-cols-4">
-        <Metric icon={<DollarSign size={18} />} label="Open pipeline" value={currency(dashboard.pipelineValue)} />
-        <Metric icon={<Route size={18} />} label="Today visits" value={String(dashboard.todayVisits.length)} />
-        <Metric icon={<FileText size={18} />} label="Open estimates" value={String(dashboard.openEstimates.length)} />
-        <Metric icon={<ClipboardCheck size={18} />} label="Overdue tasks" value={String(dashboard.overdueTasks.length)} tone={dashboard.overdueTasks.length ? "danger" : "success"} />
+        <Metric icon={<DollarSign size={18} />} label="Open pipeline" value={currency(dashboard.pipelineValue)} detail="Open pipeline" onClick={() => setView("pipeline")} />
+        <Metric icon={<Route size={18} />} label="Today visits" value={String(dashboard.todayVisits.length)} detail="Open today's calendar" onClick={() => setView("calendar")} />
+        <Metric icon={<FileText size={18} />} label="Open estimates" value={String(dashboard.openEstimates.length)} detail="Review estimates" onClick={() => setView("pipeline")} />
+        <Metric icon={<ClipboardCheck size={18} />} label="Overdue tasks" value={String(dashboard.overdueTasks.length)} detail="Review job tasks" onClick={() => setView("jobs")} tone={dashboard.overdueTasks.length ? "danger" : "success"} />
       </div>
+
+      <Panel>
+        <div className="flex flex-wrap items-center justify-between gap-3">
+          <div>
+            <h2 className="text-base font-bold">Operator shortcuts</h2>
+            <p className="mt-1 text-sm text-stone-500">Start the next customer, schedule, dispatch, or pricing action.</p>
+          </div>
+          <div className="flex flex-wrap gap-2">
+            <TextButton icon={<Plus size={16} />} onClick={() => setView("crm")}>Add Lead</TextButton>
+            <TextButton variant="secondary" icon={<CalendarDays size={16} />} onClick={() => setView("calendar")}>Day Calendar</TextButton>
+            <TextButton variant="secondary" icon={<Route size={16} />} onClick={() => setView("dispatch")}>Dispatch</TextButton>
+            <TextButton variant="secondary" icon={<Calculator size={16} />} onClick={() => setView("job_pricer")}>Build Price</TextButton>
+          </div>
+        </div>
+      </Panel>
 
       <div className="grid gap-4 xl:grid-cols-[1.25fr_0.75fr]">
         <Panel>
           <div className="flex items-center justify-between gap-3">
             <h2 className="text-base font-bold">Today’s Route Board</h2>
-            <TextButton variant="secondary" icon={<CalendarDays size={16} />} onClick={() => setView("dispatch")}>
-              Dispatch
+            <TextButton variant="secondary" icon={<CalendarDays size={16} />} onClick={() => setView("calendar")}>
+              Calendar
             </TextButton>
           </div>
           <div className="mt-4 grid gap-2">
-            {dashboard.todayVisits.map((visit) => {
+            {dashboard.todayVisits.length === 0 ? (
+              <div className="grid min-h-40 place-items-center rounded-md border border-dashed border-stone-300 bg-stone-50 p-6 text-center">
+                <div>
+                  <CalendarDays size={22} className="mx-auto text-stone-400" />
+                  <div className="mt-3 text-sm font-semibold">No visits scheduled today</div>
+                  <p className="mt-1 max-w-md text-sm text-stone-500">Create a lead, approve an estimate, and schedule the first visit to build the route board.</p>
+                  <TextButton className="mt-4" variant="secondary" icon={<Plus size={15} />} onClick={() => setView("crm")}>Add the first lead</TextButton>
+                </div>
+              </div>
+            ) : dashboard.todayVisits.map((visit) => {
               const job = jobsById.get(visit.jobId);
               const customer = customersById.get(visit.customerId);
               const crew = crewsById.get(visit.crewId);
@@ -4358,15 +5648,671 @@ function DashboardView({
         </Panel>
 
         <Panel>
-          <h2 className="text-base font-bold">Recent Activity</h2>
+          <div className="flex flex-wrap items-center justify-between gap-3">
+            <div>
+              <h2 className="text-base font-bold">Action center</h2>
+              <p className="mt-1 text-xs text-stone-500">Prioritized for the selected role.</p>
+            </div>
+            <select aria-label="Dashboard role" value={dashboardLens} onChange={(event) => setDashboardLens(event.target.value as typeof dashboardLens)} className="h-9 rounded-md border border-stone-200 bg-white px-2 text-sm font-semibold text-stone-800">
+              <option value="owner">Owner</option>
+              <option value="sales">Sales</option>
+              <option value="operations">Operations</option>
+              <option value="field">Field</option>
+            </select>
+          </div>
           <div className="mt-4 grid gap-3">
-            {workspace.activities.slice(0, 6).map((activity) => (
-              <div key={activity.id} className="flex gap-3">
-                <div className="mt-1 h-2 w-2 rounded-full bg-[#224036]" />
-                <div className="min-w-0">
-                  <div className="text-sm font-medium">{activity.summary}</div>
-                  <div className="text-xs text-stone-500">{shortDate(activity.occurredAt)}</div>
+            {actionItems.length === 0 ? (
+              <div className="grid min-h-40 place-items-center rounded-md border border-dashed border-stone-300 bg-stone-50 p-6 text-center">
+                <div>
+                  <Check size={22} className="mx-auto text-emerald-600" />
+                  <div className="mt-3 text-sm font-semibold">No urgent actions</div>
+                  <p className="mt-1 text-sm text-stone-500">This role&apos;s immediate queue is clear.</p>
                 </div>
+              </div>
+            ) : actionItems.map((item) => (
+              <button key={item.id} type="button" onClick={() => setView(item.view)} className="group flex items-start gap-3 rounded-md border border-stone-200 p-3 text-left transition hover:border-[#8aa99a] hover:bg-[#f5f8f5]">
+                <span className="grid h-8 w-8 shrink-0 place-items-center rounded-md bg-amber-50 text-sm font-bold text-amber-700">{item.count}</span>
+                <span className="min-w-0 flex-1">
+                  <span className="block text-sm font-bold text-stone-900">{item.title}</span>
+                  <span className="mt-1 block text-xs leading-5 text-stone-500">{item.detail}</span>
+                </span>
+                <ArrowRight size={16} className="mt-1 shrink-0 text-stone-400 transition group-hover:translate-x-0.5 group-hover:text-[#224036]" />
+              </button>
+            ))}
+          </div>
+        </Panel>
+      </div>
+
+      <Panel>
+        <div className="flex items-center justify-between gap-3">
+          <h2 className="text-base font-bold">Recent activity</h2>
+          <Badge>{workspace.activities.length} events</Badge>
+        </div>
+        <div className="mt-4 grid gap-3 md:grid-cols-2 xl:grid-cols-3">
+          {workspace.activities.length === 0 ? <div className="text-sm text-stone-500">Calls, notes, estimates, schedule changes, and completed visits will appear here.</div> : workspace.activities.slice(0, 6).map((activity) => (
+            <div key={activity.id} className="flex gap-3 rounded-md border border-stone-200 p-3">
+              <div className="mt-1 h-2 w-2 shrink-0 rounded-full bg-[#224036]" />
+              <div className="min-w-0">
+                <div className="text-sm font-medium">{activity.summary}</div>
+                <div className="mt-1 text-xs text-stone-500">{shortDate(activity.occurredAt)}</div>
+              </div>
+            </div>
+          ))}
+        </div>
+      </Panel>
+    </div>
+  );
+}
+
+function sameCalendarDay(left: number, right: number) {
+  return new Date(left).toDateString() === new Date(right).toDateString();
+}
+
+function calendarInputDate(value: number) {
+  const date = new Date(value);
+  const localDate = new Date(date.getTime() - date.getTimezoneOffset() * 60 * 1000);
+  return localDate.toISOString().slice(0, 10);
+}
+
+function recurringFrequencyLabel(frequency: WorkspaceSnapshot["recurringServicePlans"][number]["frequency"], intervalDays: number) {
+  if (frequency === "weekly") return "Weekly";
+  if (frequency === "biweekly") return "Every 2 weeks";
+  if (frequency === "monthly") return "Every 4 weeks";
+  if (frequency === "seasonal") return "Seasonal";
+  return `Every ${intervalDays} days`;
+}
+
+function CalendarDayView({
+  workspace,
+  customersById,
+  propertiesById,
+  crewsById,
+  jobsById,
+  setSelectedVisitId,
+  setView,
+  generateRecurringRoute,
+}: {
+  workspace: WorkspaceSnapshot;
+  customersById: Map<string, WorkspaceSnapshot["customers"][number]>;
+  propertiesById: Map<string, WorkspaceSnapshot["properties"][number]>;
+  crewsById: Map<string, WorkspaceSnapshot["crews"][number]>;
+  jobsById: Map<string, WorkspaceSnapshot["jobs"][number]>;
+  setSelectedVisitId: (id: string) => void;
+  setView: (view: View) => void;
+  generateRecurringRoute: (input: {
+    jobId: string;
+    frequency: "weekly" | "biweekly" | "monthly" | "seasonal" | "custom";
+    count: number;
+    firstStart: number;
+    durationMinutes: number;
+    crewId?: string;
+  }) => Promise<{ planId: string; visitIds: string[]; generatedCount: number }>;
+}) {
+  const today = new Date();
+  today.setHours(0, 0, 0, 0);
+  const [selectedDate, setSelectedDate] = useState(today.getTime());
+  const [cadenceJobId, setCadenceJobId] = useState(workspace.jobs[0]?.id ?? "");
+  const [cadenceFrequency, setCadenceFrequency] = useState<"weekly" | "biweekly" | "monthly" | "seasonal">("weekly");
+  const [cadenceFirstDate, setCadenceFirstDate] = useState(calendarInputDate(today.getTime()));
+  const [cadenceStartTime, setCadenceStartTime] = useState("08:00");
+  const [cadenceDuration, setCadenceDuration] = useState(60);
+  const [cadenceCount, setCadenceCount] = useState(12);
+  const [cadenceCrewId, setCadenceCrewId] = useState(workspace.crews.find((crew) => crew.active)?.id ?? "");
+  const [cadenceState, setCadenceState] = useState<{ kind: "success" | "error"; message: string } | null>(null);
+  const [cadenceSaving, setCadenceSaving] = useState(false);
+  const dayVisits = workspace.visits
+    .filter((visit) => sameCalendarDay(visit.scheduledStart, selectedDate))
+    .sort((a, b) => a.scheduledStart - b.scheduledStart || a.routeOrder - b.routeOrder);
+  const openVisits = dayVisits.filter((visit) => !["complete", "canceled"].includes(visit.status));
+  const scheduledHours = dayVisits.reduce((sum, visit) => sum + Math.max(0, visit.scheduledEnd - visit.scheduledStart), 0) / (60 * 60 * 1000);
+  const dayRevenue = dayVisits.reduce((sum, visit) => {
+    const job = jobsById.get(visit.jobId);
+    const estimate = job?.estimateId ? workspace.estimates.find((candidate) => candidate.id === job.estimateId) : undefined;
+    return sum + (estimate?.totalCents ?? 0);
+  }, 0);
+  const routeGroups = Array.from(dayVisits.reduce((groups, visit) => {
+    const key = visit.crewId || "unassigned";
+    const group = groups.get(key) ?? [];
+    group.push(visit);
+    groups.set(key, group);
+    return groups;
+  }, new Map<string, JobVisit[]>())).map(([crewId, visits]) => ({
+    crewId,
+    crew: crewsById.get(crewId),
+    visits: visits.sort((left, right) => left.routeOrder - right.routeOrder || left.scheduledStart - right.scheduledStart),
+  })).sort((left, right) => {
+    if (left.crewId === "unassigned") return 1;
+    if (right.crewId === "unassigned") return -1;
+    return (left.crew?.name ?? "").localeCompare(right.crew?.name ?? "");
+  });
+  const weekStart = new Date(selectedDate);
+  weekStart.setDate(weekStart.getDate() - weekStart.getDay());
+  weekStart.setHours(0, 0, 0, 0);
+  const weekDays = Array.from({ length: 7 }, (_, index) => {
+    const date = new Date(weekStart);
+    date.setDate(weekStart.getDate() + index);
+    return date.getTime();
+  });
+
+  function moveDay(days: number) {
+    setSelectedDate((current) => {
+      const next = new Date(current);
+      next.setDate(next.getDate() + days);
+      return next.getTime();
+    });
+  }
+
+  async function createCadence(event: FormEvent<HTMLFormElement>) {
+    event.preventDefault();
+    setCadenceState(null);
+    if (!cadenceJobId || !cadenceFirstDate || !cadenceStartTime) {
+      setCadenceState({ kind: "error", message: "Choose a client job, first service date, and start time." });
+      return;
+    }
+    const firstStart = new Date(`${cadenceFirstDate}T${cadenceStartTime}:00`).getTime();
+    if (!Number.isFinite(firstStart)) {
+      setCadenceState({ kind: "error", message: "Enter a valid first service date and time." });
+      return;
+    }
+    setCadenceSaving(true);
+    try {
+      const result = await generateRecurringRoute({
+        jobId: cadenceJobId,
+        frequency: cadenceFrequency,
+        count: cadenceCount,
+        firstStart,
+        durationMinutes: cadenceDuration,
+        crewId: cadenceCrewId || undefined,
+      });
+      const job = jobsById.get(cadenceJobId);
+      const firstDay = new Date(firstStart);
+      firstDay.setHours(0, 0, 0, 0);
+      setSelectedDate(firstDay.getTime());
+      setCadenceState({ kind: "success", message: `${result.generatedCount} ${recurringFrequencyLabel(cadenceFrequency, cadenceFrequency === "weekly" ? 7 : cadenceFrequency === "biweekly" ? 14 : cadenceFrequency === "monthly" ? 28 : 90).toLowerCase()} visits added for ${job?.title ?? "this job"}.` });
+    } catch {
+      setCadenceState({ kind: "error", message: "The cadence could not be created. Review the schedule and try again." });
+    } finally {
+      setCadenceSaving(false);
+    }
+  }
+
+  return (
+    <div className="grid gap-4">
+      <Panel>
+        <div className="flex flex-wrap items-center justify-between gap-3">
+          <div>
+            <div className="flex items-center gap-2 text-sm font-semibold text-[#224036]"><CalendarDays size={16} />Service calendar</div>
+            <h2 className="mt-2 text-2xl font-bold tracking-normal">{shortDate(selectedDate)} client routes</h2>
+          </div>
+          <div className="flex flex-wrap gap-2">
+            <TextButton variant="secondary" icon={<ChevronLeft size={16} />} onClick={() => moveDay(-1)}>Prev</TextButton>
+            <TextButton variant="secondary" icon={<Clock size={16} />} onClick={() => setSelectedDate(today.getTime())}>Today</TextButton>
+            <TextButton variant="secondary" icon={<ChevronRight size={16} />} onClick={() => moveDay(1)}>Next</TextButton>
+            <input aria-label="Calendar date" type="date" value={calendarInputDate(selectedDate)} onChange={(event) => {
+              const next = new Date(`${event.target.value}T00:00:00`).getTime();
+              if (Number.isFinite(next)) setSelectedDate(next);
+            }} className="h-10 rounded-md border border-stone-200 bg-white px-3 text-sm font-semibold text-stone-800 shadow-sm" />
+          </div>
+        </div>
+        <div className="mt-5 grid grid-cols-7 gap-1" aria-label="Calendar week">
+          {weekDays.map((day) => {
+            const visitCount = workspace.visits.filter((visit) => sameCalendarDay(visit.scheduledStart, day)).length;
+            const active = sameCalendarDay(day, selectedDate);
+            return (
+              <button key={day} type="button" onClick={() => setSelectedDate(day)} className={cn("min-w-0 rounded-md border px-1 py-2 text-center transition", active ? "border-[#315a4d] bg-[#224036] text-white" : "border-stone-200 bg-white hover:bg-stone-50")}>
+                <span className="block text-[10px] font-bold uppercase">{new Intl.DateTimeFormat("en-US", { weekday: "short" }).format(day)}</span>
+                <span className="mt-1 block text-lg font-bold">{new Date(day).getDate()}</span>
+                <span className={cn("mt-1 block text-[10px]", active ? "text-white/75" : "text-stone-500")}>{visitCount} {visitCount === 1 ? "stop" : "stops"}</span>
+              </button>
+            );
+          })}
+        </div>
+        <div className="mt-5 grid grid-cols-2 gap-3 xl:grid-cols-4">
+          <Metric label="Visits" value={dayVisits.length} />
+          <Metric label="Crews routed" value={routeGroups.filter((group) => group.crewId !== "unassigned").length} />
+          <Metric label="Scheduled hours" value={scheduledHours.toFixed(1)} />
+          <Metric label="Open stops" value={openVisits.length} tone={openVisits.length ? "warning" : "success"} />
+        </div>
+        {dayRevenue > 0 ? <div className="mt-3 text-right text-xs font-semibold text-stone-500">Booked job value on this route: {currency(dayRevenue)}</div> : null}
+      </Panel>
+
+      <div className="grid items-start gap-4 xl:grid-cols-[1.45fr_0.55fr]">
+        <Panel>
+          <div className="flex flex-wrap items-center justify-between gap-3">
+            <div>
+              <h3 className="font-bold">Daily routes</h3>
+              <p className="mt-1 text-sm text-stone-500">Every client stop in crew route order.</p>
+            </div>
+            <Badge>{routeGroups.length} {routeGroups.length === 1 ? "route" : "routes"}</Badge>
+          </div>
+          <div className="mt-4 grid gap-4">
+            {routeGroups.length === 0 ? <div className="rounded-md border border-dashed border-stone-300 p-6 text-center text-sm text-stone-500">No client visits on this date. Add a service cadence to build the route.</div> : null}
+            {routeGroups.map(({ crewId, crew, visits }) => (
+              <section key={crewId} aria-label={`${crew?.name ?? "Unassigned"} route`} className="overflow-hidden rounded-md border border-stone-200">
+                <div className="flex flex-wrap items-center justify-between gap-2 border-b border-stone-200 bg-stone-50 px-3 py-2">
+                  <div className="flex items-center gap-2 font-bold"><Route size={16} className="text-[#315a4d]" />{crew?.name ?? "Unassigned route"}</div>
+                  <div className="text-xs font-semibold text-stone-500">{visits.length} {visits.length === 1 ? "stop" : "stops"} · {(visits.reduce((sum, visit) => sum + visit.scheduledEnd - visit.scheduledStart, 0) / (60 * 60 * 1000)).toFixed(1)} hrs</div>
+                </div>
+                <div className="divide-y divide-stone-100">
+                  {visits.map((visit, index) => {
+                    const job = jobsById.get(visit.jobId);
+                    const customer = customersById.get(visit.customerId);
+                    const property = visit.propertyId ? propertiesById.get(visit.propertyId) : undefined;
+                    const plan = workspace.recurringServicePlans.find((candidate) => candidate.generatedVisitIds?.includes(visit.id))
+                      ?? workspace.recurringServicePlans.find((candidate) => candidate.jobId === visit.jobId && candidate.status === "active");
+                    const address = property ? `${property.street}, ${property.city}, ${property.state} ${property.postalCode}` : "";
+                    return (
+                      <div key={visit.id} className="grid gap-3 p-3 lg:grid-cols-[46px_118px_1fr_auto] lg:items-center">
+                        <div className="grid h-9 w-9 place-items-center rounded-full bg-[#e8efe8] text-sm font-bold text-[#224036]" aria-label={`Stop ${index + 1}`}>{index + 1}</div>
+                        <div className="text-sm font-semibold">{timeRange(visit.scheduledStart, visit.scheduledEnd)}</div>
+                        <div className="min-w-0">
+                          <div className="font-bold">{customer?.name ?? "Customer"}</div>
+                          <div className="mt-0.5 text-sm text-stone-600">{job?.title ?? "Service visit"}</div>
+                          <div className="mt-1 flex flex-wrap items-center gap-2 text-xs text-stone-500">
+                            {property ? <span>{address}</span> : <span>No property address</span>}
+                            {plan ? <Badge tone="success">{recurringFrequencyLabel(plan.frequency, plan.intervalDays)}</Badge> : <Badge>One-time</Badge>}
+                          </div>
+                        </div>
+                        <div className="flex flex-wrap items-center gap-2 lg:justify-end">
+                          <button type="button" onClick={() => { setSelectedVisitId(visit.id); setView("field"); }} className="rounded-full border border-stone-200 bg-stone-50 px-3 py-1 text-xs font-bold uppercase text-stone-700 transition hover:border-[#8aa99a] hover:bg-[#eef4ee]">{visitStatusLabel(visit.status)}</button>
+                          {property ? <a href={googleMapsUrl(address)} target="_blank" rel="noreferrer" className="inline-flex h-8 w-8 items-center justify-center rounded-md border border-stone-200 text-stone-600 transition hover:bg-stone-50" title={`Open ${customer?.name ?? "customer"} in Google Maps`} aria-label={`Open ${customer?.name ?? "customer"} in Google Maps`}><MapPin size={15} /></a> : null}
+                        </div>
+                      </div>
+                    );
+                  })}
+                </div>
+              </section>
+            ))}
+          </div>
+        </Panel>
+
+        <Panel>
+          <div className="flex items-center gap-2 font-bold"><CalendarDays size={17} className="text-[#315a4d]" />Add service cadence</div>
+          <p className="mt-1 text-sm leading-5 text-stone-500">Schedule repeat client visits and place them on crew routes.</p>
+          <form className="mt-4 grid gap-3" aria-label="Add service cadence" onSubmit={createCadence}>
+            <Field label="Client job">
+              <select aria-label="Cadence client job" value={cadenceJobId} onChange={(event) => setCadenceJobId(event.target.value)} className="h-10 rounded-md border border-stone-200 bg-white px-3 text-sm font-medium text-stone-900">
+                {workspace.jobs.length === 0 ? <option value="">No jobs available</option> : workspace.jobs.map((job) => <option key={job.id} value={job.id}>{customersById.get(job.customerId)?.name ?? "Customer"} - {job.title}</option>)}
+              </select>
+            </Field>
+            <div className="grid grid-cols-2 gap-3">
+              <Field label="Frequency">
+                <select aria-label="Cadence frequency" value={cadenceFrequency} onChange={(event) => setCadenceFrequency(event.target.value as typeof cadenceFrequency)} className="h-10 rounded-md border border-stone-200 bg-white px-3 text-sm font-medium text-stone-900">
+                  <option value="weekly">Weekly</option>
+                  <option value="biweekly">Every 2 weeks</option>
+                  <option value="monthly">Every 4 weeks</option>
+                  <option value="seasonal">Seasonal</option>
+                </select>
+              </Field>
+              <Field label="Visits to create">
+                <select aria-label="Cadence visit count" value={cadenceCount} onChange={(event) => setCadenceCount(Number(event.target.value))} className="h-10 rounded-md border border-stone-200 bg-white px-3 text-sm font-medium text-stone-900">
+                  <option value={4}>4 visits</option>
+                  <option value={8}>8 visits</option>
+                  <option value={12}>12 visits</option>
+                  <option value={26}>26 visits</option>
+                </select>
+              </Field>
+            </div>
+            <Field label="Crew">
+              <select aria-label="Cadence crew" value={cadenceCrewId} onChange={(event) => setCadenceCrewId(event.target.value)} className="h-10 rounded-md border border-stone-200 bg-white px-3 text-sm font-medium text-stone-900">
+                <option value="">Unassigned</option>
+                {workspace.crews.filter((crew) => crew.active).map((crew) => <option key={crew.id} value={crew.id}>{crew.name}</option>)}
+              </select>
+            </Field>
+            <div className="grid grid-cols-2 gap-3">
+              <Field label="First service">
+                <input aria-label="Cadence first service date" type="date" value={cadenceFirstDate} onChange={(event) => setCadenceFirstDate(event.target.value)} className="h-10 min-w-0 rounded-md border border-stone-200 bg-white px-2 text-sm font-medium text-stone-900" />
+              </Field>
+              <Field label="Start time">
+                <input aria-label="Cadence start time" type="time" value={cadenceStartTime} onChange={(event) => setCadenceStartTime(event.target.value)} className="h-10 min-w-0 rounded-md border border-stone-200 bg-white px-2 text-sm font-medium text-stone-900" />
+              </Field>
+            </div>
+            <Field label="Visit duration (minutes)">
+              <input aria-label="Cadence visit duration" type="number" min={30} max={720} step={15} value={cadenceDuration} onChange={(event) => setCadenceDuration(Number(event.target.value))} className="h-10 rounded-md border border-stone-200 bg-white px-3 text-sm font-medium text-stone-900" />
+            </Field>
+            {cadenceState ? <div role="status" className={cn("rounded-md border p-3 text-sm", cadenceState.kind === "success" ? "border-emerald-200 bg-emerald-50 text-emerald-800" : "border-rose-200 bg-rose-50 text-rose-800")}>{cadenceState.message}</div> : null}
+            <TextButton type="submit" icon={<Plus size={16} />} disabled={cadenceSaving || workspace.jobs.length === 0}>{cadenceSaving ? "Adding cadence..." : "Add cadence to calendar"}</TextButton>
+          </form>
+          {workspace.recurringServicePlans.length > 0 ? (
+            <div className="mt-5 border-t border-stone-200 pt-4">
+              <div className="text-xs font-bold uppercase text-stone-500">Active cadences</div>
+              <div className="mt-2 grid gap-2">
+                {workspace.recurringServicePlans.filter((plan) => plan.status === "active").slice(0, 4).map((plan) => (
+                  <div key={plan.id} className="flex items-center justify-between gap-2 text-sm">
+                    <span className="min-w-0 truncate font-medium">{customersById.get(plan.customerId)?.name ?? plan.name}</span>
+                    <Badge>{recurringFrequencyLabel(plan.frequency, plan.intervalDays)}</Badge>
+                  </div>
+                ))}
+              </div>
+            </div>
+          ) : null}
+        </Panel>
+      </div>
+    </div>
+  );
+}
+
+function RoutingView({
+  workspace,
+  operatingDepth,
+  customersById,
+  propertiesById,
+  jobsById,
+  setSelectedVisitId,
+  setView,
+}: {
+  workspace: WorkspaceSnapshot;
+  operatingDepth: OperatingDepth;
+  customersById: Map<string, WorkspaceSnapshot["customers"][number]>;
+  propertiesById: Map<string, WorkspaceSnapshot["properties"][number]>;
+  jobsById: Map<string, WorkspaceSnapshot["jobs"][number]>;
+  setSelectedVisitId: (id: string) => void;
+  setView: (view: View) => void;
+}) {
+  const visitsByCrew = workspace.crews.map((crew) => ({
+    crew,
+    visits: workspace.visits.filter((visit) => visit.crewId === crew.id).sort((a, b) => a.routeOrder - b.routeOrder || a.scheduledStart - b.scheduledStart),
+  }));
+  const totalWarnings = operatingDepth.fieldOps.routeConfidence.reduce((sum, route) => sum + route.warnings.length + route.equipmentConflicts.length, 0);
+  const avgScore = Math.round(operatingDepth.fieldOps.routeConfidence.reduce((sum, route) => sum + route.score, 0) / Math.max(1, operatingDepth.fieldOps.routeConfidence.length));
+
+  return (
+    <div className="grid gap-4">
+      <Panel>
+        <div className="flex flex-wrap items-start justify-between gap-3">
+          <div>
+            <div className="flex items-center gap-2 text-sm font-semibold text-[#224036]"><Route size={16} />Route optimization</div>
+            <h2 className="mt-2 text-2xl font-bold tracking-normal">Daily routing, stop order, conflicts, and Maps links</h2>
+          </div>
+          <Badge tone={totalWarnings ? "warning" : "success"}>{totalWarnings} route issues</Badge>
+        </div>
+        <div className="mt-5 grid gap-3 sm:grid-cols-3">
+          <Metric label="Route confidence" value={`${avgScore}%`} tone={avgScore >= 80 ? "success" : "warning"} />
+          <Metric label="Visits routed" value={workspace.visits.filter((visit) => visit.crewId).length} />
+          <Metric label="Unassigned" value={workspace.visits.filter((visit) => !visit.crewId).length} tone={workspace.visits.some((visit) => !visit.crewId) ? "warning" : "success"} />
+        </div>
+      </Panel>
+
+      <div className="grid gap-4 xl:grid-cols-2">
+        {visitsByCrew.map(({ crew, visits }) => (
+          <Panel key={crew.id}>
+            <div className="flex items-center justify-between gap-3">
+              <h3 className="font-bold">{crew.name}</h3>
+              <Badge>{visits.length} stops</Badge>
+            </div>
+            <div className="mt-4 grid gap-2">
+              {visits.length === 0 ? <div className="rounded-md border border-dashed border-stone-300 p-3 text-sm text-stone-500">No routed stops.</div> : null}
+              {visits.map((visit, index) => {
+                const job = jobsById.get(visit.jobId);
+                const customer = customersById.get(visit.customerId);
+                const property = visit.propertyId ? propertiesById.get(visit.propertyId) : undefined;
+                const route = operatingDepth.fieldOps.routeConfidence.find((row) => row.visitId === visit.id);
+                return (
+                  <div key={visit.id} className="rounded-md border border-stone-200 p-3">
+                    <div className="flex flex-wrap items-start justify-between gap-3">
+                      <div className="min-w-0">
+                        <div className="text-xs font-bold uppercase text-stone-500">Stop {visit.routeOrder || index + 1}</div>
+                        <div className="mt-1 font-semibold">{job?.title ?? "Visit"}</div>
+                        <div className="mt-1 text-sm text-stone-500">{customer?.name ?? "Customer"} - {property?.city ?? "No city"}</div>
+                      </div>
+                      <button
+                        type="button"
+                        onClick={() => {
+                          setSelectedVisitId(visit.id);
+                          setView("field");
+                        }}
+                        className="rounded-full border border-stone-200 bg-stone-50 px-3 py-1 text-xs font-bold uppercase hover:bg-[#eef4ee]"
+                      >
+                        {route?.score ?? 80}% score
+                      </button>
+                    </div>
+                    <div className="mt-3 flex flex-wrap gap-2">
+                      {property ? (
+                        <a href={googleMapsUrl(`${property.street}, ${property.city}, ${property.state} ${property.postalCode}`)} target="_blank" rel="noreferrer" className="inline-flex items-center gap-1 rounded-full border border-stone-200 px-2 py-1 text-xs font-semibold text-stone-700">
+                          <MapPin size={13} /> Maps
+                        </a>
+                      ) : null}
+                      {(route?.warnings ?? []).map((warning) => <Badge key={warning} tone="warning">{warning}</Badge>)}
+                      {(route?.equipmentConflicts ?? []).map((warning) => <Badge key={warning} tone="danger">{warning}</Badge>)}
+                    </div>
+                  </div>
+                );
+              })}
+            </div>
+          </Panel>
+        ))}
+      </div>
+    </div>
+  );
+}
+
+function ChemicalTrackingView({
+  workspace,
+  operatingDepth,
+  propertiesById,
+  setSelectedVisitId,
+  setView,
+}: {
+  workspace: WorkspaceSnapshot;
+  operatingDepth: OperatingDepth;
+  propertiesById: Map<string, WorkspaceSnapshot["properties"][number]>;
+  setSelectedVisitId: (id: string) => void;
+  setView: (view: View) => void;
+}) {
+  const restricted = workspace.materials.filter((material) => material.restrictedUse);
+  const epaMissing = workspace.materials.filter((material) => material.active && !material.epaRegistrationNumber);
+  const recordsReady = operatingDepth.fieldOps.complianceRecords.filter((record) => record.ready).length;
+
+  return (
+    <div className="grid gap-4">
+      <Panel>
+        <div className="flex flex-wrap items-start justify-between gap-3">
+          <div>
+            <div className="flex items-center gap-2 text-sm font-semibold text-[#224036]"><Package size={16} />Chemical tracking</div>
+            <h2 className="mt-2 text-2xl font-bold tracking-normal">Materials, EPA labels, weather rules, applications, and compliance records</h2>
+          </div>
+          <Badge tone={epaMissing.length ? "warning" : "success"}>{epaMissing.length} missing EPA labels</Badge>
+        </div>
+        <div className="mt-5 grid gap-3 sm:grid-cols-4">
+          <Metric label="Active materials" value={workspace.materials.filter((material) => material.active).length} />
+          <Metric label="Restricted use" value={restricted.length} tone={restricted.length ? "warning" : "success"} />
+          <Metric label="Application lots" value={operatingDepth.fieldOps.materialLots.length} />
+          <Metric label="Compliance ready" value={`${recordsReady}/${operatingDepth.fieldOps.complianceRecords.length}`} tone={recordsReady ? "success" : "warning"} />
+        </div>
+      </Panel>
+
+      <div className="grid gap-4 xl:grid-cols-[0.8fr_1.2fr]">
+        <Panel>
+          <h3 className="font-bold">Material catalog</h3>
+          <div className="mt-4 grid gap-2">
+            {workspace.materials.map((material) => (
+              <div key={material.id} className="rounded-md border border-stone-200 p-3">
+                <div className="flex items-start justify-between gap-3">
+                  <div>
+                    <div className="font-semibold">{material.name}</div>
+                    <div className="mt-1 text-sm text-stone-500">{currency(material.costCents ?? 0)} / {material.unit}</div>
+                  </div>
+                  <Badge tone={material.restrictedUse ? "warning" : "success"}>{material.restrictedUse ? "Restricted" : "Standard"}</Badge>
+                </div>
+                <div className="mt-2 text-xs text-stone-500">EPA {material.epaRegistrationNumber ?? "missing"} - {material.active ? "active" : "inactive"}</div>
+              </div>
+            ))}
+          </div>
+        </Panel>
+
+        <Panel>
+          <h3 className="font-bold">Applications and compliance</h3>
+          <div className="mt-4 grid gap-3">
+            {operatingDepth.fieldOps.complianceRecords.map((record) => {
+              const visit = workspace.visits.find((candidate) => candidate.id === record.visitId);
+              const property = visit?.propertyId ? propertiesById.get(visit.propertyId) : undefined;
+              return (
+                <div key={record.id} className="rounded-md border border-stone-200 p-3">
+                  <div className="flex flex-wrap items-start justify-between gap-3">
+                    <div>
+                      <div className="font-semibold">{record.reportNumber} - {record.materialName}</div>
+                      <div className="mt-1 text-sm text-stone-500">{record.customerName} - {property?.label ?? record.propertyName}</div>
+                    </div>
+                    <button
+                      type="button"
+                      onClick={() => {
+                        setSelectedVisitId(record.visitId);
+                        setView("field");
+                      }}
+                      className="rounded-full border border-stone-200 bg-stone-50 px-3 py-1 text-xs font-bold uppercase hover:bg-[#eef4ee]"
+                    >
+                      {record.ready ? "Ready" : "Needs review"}
+                    </button>
+                  </div>
+                  <div className="mt-3 flex flex-wrap gap-2">
+                    <Badge>{record.quantity} {record.unit}</Badge>
+                    <Badge tone={record.applicationRisk === "high" ? "danger" : record.applicationRisk === "medium" ? "warning" : "success"}>{record.weatherSummary}</Badge>
+                    {record.missing.map((missing) => <Badge key={missing} tone="warning">Missing {missing}</Badge>)}
+                  </div>
+                </div>
+              );
+            })}
+          </div>
+        </Panel>
+      </div>
+    </div>
+  );
+}
+
+function JobAnalysisView({ operatingDepth, setSelectedJobId, setView }: { operatingDepth: OperatingDepth; setSelectedJobId: (id: string) => void; setView: (view: View) => void }) {
+  const summaries = [...operatingDepth.jobCosting.summaries].sort((a, b) => b.varianceCents - a.varianceCents);
+  const bottomMargin = [...operatingDepth.jobCosting.summaries].sort((a, b) => a.grossMarginPercent - b.grossMarginPercent)[0];
+
+  return (
+    <div className="grid gap-4">
+      <Panel>
+        <div className="flex flex-wrap items-start justify-between gap-3">
+          <div>
+            <div className="flex items-center gap-2 text-sm font-semibold text-[#224036]"><BarChart3 size={16} />Jobs analysis</div>
+            <h2 className="mt-2 text-2xl font-bold tracking-normal">Estimated vs actual revenue, labor, materials, equipment, overhead, and margin</h2>
+          </div>
+          <Badge tone={bottomMargin && bottomMargin.grossMarginPercent < 25 ? "warning" : "success"}>{bottomMargin ? `Lowest margin ${percent(bottomMargin.grossMarginPercent)}` : "No jobs"}</Badge>
+        </div>
+        <div className="mt-5 grid gap-3 sm:grid-cols-4">
+          <Metric label="Analyzed jobs" value={summaries.length} />
+          <Metric label="Gross profit" value={currency(operatingDepth.revenue.grossProfitCents)} tone={operatingDepth.revenue.grossProfitCents >= 0 ? "success" : "danger"} />
+          <Metric label="Actual margin" value={percent(operatingDepth.revenue.grossMarginPercent)} />
+          <Metric label="AR balance" value={currency(operatingDepth.revenue.arCents)} tone={operatingDepth.revenue.arCents ? "warning" : "success"} />
+        </div>
+      </Panel>
+
+      <Panel>
+        <div className="overflow-x-auto">
+          <table className="min-w-full divide-y divide-stone-200 text-sm">
+            <thead>
+              <tr className="text-left text-xs font-bold uppercase text-stone-500">
+                <th className="px-3 py-2">Job</th>
+                <th className="px-3 py-2">Crew</th>
+                <th className="px-3 py-2 text-right">Revenue</th>
+                <th className="px-3 py-2 text-right">Costs</th>
+                <th className="px-3 py-2 text-right">Profit</th>
+                <th className="px-3 py-2 text-right">Margin</th>
+                <th className="px-3 py-2">Status</th>
+              </tr>
+            </thead>
+            <tbody className="divide-y divide-stone-100">
+              {summaries.map((summary) => {
+                const costCents = summary.actualLaborCostCents + summary.actualMaterialCostCents + summary.actualEquipmentCostCents + summary.overheadCostCents;
+                return (
+                  <tr key={summary.id} className="align-top">
+                    <td className="px-3 py-3">
+                      <button type="button" className="font-semibold text-[#224036] hover:underline" onClick={() => { setSelectedJobId(summary.jobId); setView("jobs"); }}>{summary.jobTitle}</button>
+                      <div className="mt-1 text-xs text-stone-500">{summary.customerName}</div>
+                    </td>
+                    <td className="px-3 py-3">{summary.crewName}</td>
+                    <td className="px-3 py-3 text-right">{currency(summary.actualRevenueCents)}</td>
+                    <td className="px-3 py-3 text-right">{currency(costCents)}</td>
+                    <td className="px-3 py-3 text-right">{currency(summary.grossProfitCents)}</td>
+                    <td className="px-3 py-3 text-right"><Badge tone={summary.grossMarginPercent >= 35 ? "success" : summary.grossMarginPercent < 20 ? "danger" : "warning"}>{percent(summary.grossMarginPercent)}</Badge></td>
+                    <td className="px-3 py-3"><Badge tone={operatingTone(summary.status)}>{formatStatus(summary.status)}</Badge></td>
+                  </tr>
+                );
+              })}
+            </tbody>
+          </table>
+        </div>
+      </Panel>
+    </div>
+  );
+}
+
+function JobsPricerView({ workspace, operatingDepth }: { workspace: WorkspaceSnapshot; operatingDepth: OperatingDepth }) {
+  const defaultPackage = workspace.servicePackages[0];
+  const [packageId, setPackageId] = useState(defaultPackage?.id ?? "");
+  const selectedPackage = workspace.servicePackages.find((item) => item.id === packageId) ?? defaultPackage;
+  const [laborHours, setLaborHours] = useState(String(selectedPackage?.laborHours ?? 4));
+  const [laborRate, setLaborRate] = useState(String(Math.round((selectedPackage?.laborRateCents ?? 6500) / 100)));
+  const [materials, setMaterials] = useState(String(Math.round((selectedPackage?.materialCostCents ?? 25000) / 100)));
+  const [equipment, setEquipment] = useState(String(Math.round((selectedPackage?.equipmentCostCents ?? 8000) / 100)));
+  const [overheadPercent, setOverheadPercent] = useState(String(selectedPackage?.overheadPercent ?? 18));
+  const [targetMargin, setTargetMargin] = useState(String(selectedPackage?.targetMarginPercent ?? 42));
+  const laborCostCents = dollarsToCents(String(Number(laborHours || "0") * Number(laborRate || "0")));
+  const materialCostCents = dollarsToCents(materials);
+  const equipmentCostCents = dollarsToCents(equipment);
+  const directCostCents = laborCostCents + materialCostCents + equipmentCostCents;
+  const overheadCents = Math.round(directCostCents * (Number(overheadPercent || "0") / 100));
+  const totalCostCents = directCostCents + overheadCents;
+  const priceCents = Math.round(totalCostCents / Math.max(0.05, 1 - Number(targetMargin || "0") / 100));
+  const profitCents = priceCents - totalCostCents;
+
+  return (
+    <div className="grid gap-4 xl:grid-cols-[0.85fr_1.15fr]">
+      <Panel>
+        <div className="flex items-center gap-2 text-sm font-semibold text-[#224036]"><Calculator size={16} />Jobs pricer</div>
+        <h2 className="mt-2 text-2xl font-bold tracking-normal">Autoprice calculator for labor, material, equipment, overhead, and target margin</h2>
+        <div className="mt-5 grid gap-3">
+          <Field label="Service package">
+            <select className={inputClass()} value={packageId} onChange={(event) => setPackageId(event.target.value)}>
+              {workspace.servicePackages.map((item) => <option key={item.id} value={item.id}>{item.name}</option>)}
+            </select>
+          </Field>
+          <div className="grid gap-3 sm:grid-cols-2">
+            <Field label="Labor hours"><input className={inputClass()} value={laborHours} onChange={(event) => setLaborHours(event.target.value)} inputMode="decimal" /></Field>
+            <Field label="Labor $/hour"><input className={inputClass()} value={laborRate} onChange={(event) => setLaborRate(event.target.value)} inputMode="decimal" /></Field>
+            <Field label="Materials"><input className={inputClass()} value={materials} onChange={(event) => setMaterials(event.target.value)} inputMode="decimal" /></Field>
+            <Field label="Equipment"><input className={inputClass()} value={equipment} onChange={(event) => setEquipment(event.target.value)} inputMode="decimal" /></Field>
+            <Field label="Overhead %"><input className={inputClass()} value={overheadPercent} onChange={(event) => setOverheadPercent(event.target.value)} inputMode="decimal" /></Field>
+            <Field label="Target margin %"><input className={inputClass()} value={targetMargin} onChange={(event) => setTargetMargin(event.target.value)} inputMode="decimal" /></Field>
+          </div>
+        </div>
+      </Panel>
+
+      <div className="grid gap-4">
+        <Panel>
+          <div className="grid gap-3 sm:grid-cols-3">
+            <Metric label="Recommended price" value={currency(priceCents)} tone="success" />
+            <Metric label="Gross profit" value={currency(profitCents)} />
+            <Metric label="Margin" value={percent(priceCents > 0 ? (profitCents / priceCents) * 100 : 0)} />
+          </div>
+        </Panel>
+        <Panel>
+          <h3 className="font-bold">Cost stack</h3>
+          <div className="mt-4 grid gap-2">
+            {[
+              ["Labor", laborCostCents],
+              ["Materials", materialCostCents],
+              ["Equipment", equipmentCostCents],
+              ["Overhead", overheadCents],
+            ].map(([label, value]) => (
+              <div key={label} className="flex items-center justify-between rounded-md bg-stone-50 px-3 py-2 text-sm">
+                <span className="font-semibold">{label}</span>
+                <span>{currency(value as number)}</span>
+              </div>
+            ))}
+          </div>
+        </Panel>
+        <Panel>
+          <h3 className="font-bold">Price-book context</h3>
+          <div className="mt-3 grid gap-2">
+            {operatingDepth.revenue.serviceLineProfitability.slice(0, 4).map((row) => (
+              <div key={row.serviceCategory} className="flex items-center justify-between rounded-md border border-stone-200 p-3 text-sm">
+                <span className="font-semibold">{row.label}</span>
+                <span>{percent(row.grossMarginPercent)} margin</span>
               </div>
             ))}
           </div>
@@ -4376,13 +6322,106 @@ function DashboardView({
   );
 }
 
-function Metric({ icon = <Gauge size={18} />, label, value, tone = "neutral" }: { icon?: ReactNode; label: string; value: ReactNode; tone?: string }) {
+function ChurnLtvDashboard({ operatingDepth }: { operatingDepth: OperatingDepth }) {
+  const analytics = operatingDepth.admin.ownerAnalytics;
+  const highRisk = operatingDepth.revenue.customerProfitability.filter((customer) => ["high", "critical"].includes(customer.churnRiskLevel));
+  const turfProReference = {
+    churned: 2239,
+    greenAceChurned: 291,
+    turfProChurned: 1948,
+    greenAceTenure: 2.0,
+    turfProTenure: 4.8,
+    missingArchiveDate: 68,
+    landscaperCustomers: 740,
+  };
+
   return (
-    <Panel>
+    <div className="grid gap-4">
+      <Panel>
+        <div className="flex flex-wrap items-start justify-between gap-3">
+          <div>
+            <div className="text-sm font-semibold text-[#224036]">GreenAce (2013-2026) - Turf Pro (1998-2026)</div>
+            <h2 className="mt-2 text-2xl font-bold tracking-normal">Churn & LTV Dashboard</h2>
+          </div>
+          <div className="flex flex-wrap gap-2">
+            <Badge>Both Companies</Badge>
+            <Badge>All Customers</Badge>
+            <Badge>All Time</Badge>
+            <Badge>Compare Off</Badge>
+          </div>
+        </div>
+        <div className="mt-5 grid gap-3 sm:grid-cols-2 xl:grid-cols-4">
+          <Metric label="Total Churned" value={turfProReference.churned.toLocaleString()} />
+          <Metric label="GreenAce Churned" value={turfProReference.greenAceChurned.toLocaleString()} />
+          <Metric label="Turf Pro Churned" value={turfProReference.turfProChurned.toLocaleString()} />
+          <Metric label="Avg. Tenure GA" value={`${turfProReference.greenAceTenure.toFixed(1)} yrs`} />
+          <Metric label="Avg. Tenure TP" value={`${turfProReference.turfProTenure.toFixed(1)} yrs`} />
+          <Metric label="Missing Archive Date" value={turfProReference.missingArchiveDate} tone="warning" />
+          <Metric label="Landscaper Customers" value={turfProReference.landscaperCustomers} />
+          <Metric label="Current Churn Risk" value={percent(analytics.kpis.churnRatePercent)} tone={analytics.kpis.churnRatePercent > 12 ? "warning" : "success"} />
+          <Metric label="Average LTV" value={currency(analytics.kpis.averageLtvCents)} />
+          <Metric label="LTV:CAC" value={`${analytics.kpis.ltvToCac}x`} tone={analytics.kpis.ltvToCac >= 3 ? "success" : "warning"} />
+        </div>
+      </Panel>
+
+      <div className="grid gap-4 xl:grid-cols-[1fr_1fr]">
+        <Panel>
+          <h3 className="font-bold">Churn by segment</h3>
+          <div className="mt-4 grid gap-3">
+            {analytics.churn.map((row) => (
+              <div key={row.segment} className="rounded-md border border-stone-200 p-3">
+                <div className="flex flex-wrap items-center justify-between gap-2">
+                  <div className="font-semibold">{row.segment}</div>
+                  <Badge tone={row.churnRatePercent > 20 ? "danger" : row.churnRatePercent > 10 ? "warning" : "success"}>{percent(row.churnRatePercent)}</Badge>
+                </div>
+                <div className="mt-2 text-sm text-stone-500">{row.atRisk} of {row.customers} customers at risk - {currency(row.ltvAtRiskCents)} LTV exposed</div>
+                <div className="mt-2 flex flex-wrap gap-1.5">{row.drivers.map((driver) => <Badge key={driver}>{driver}</Badge>)}</div>
+              </div>
+            ))}
+          </div>
+        </Panel>
+
+        <Panel>
+          <h3 className="font-bold">LTV analysis</h3>
+          <div className="mt-4 grid gap-3">
+            {analytics.ltv.map((row) => (
+              <div key={row.segment} className="grid gap-2 rounded-md border border-stone-200 p-3 sm:grid-cols-3 sm:items-center">
+                <div className="font-semibold">{row.segment}</div>
+                <div><div className="text-xs text-stone-500">Average LTV</div><div className="font-bold">{currency(row.averageLtvCents)}</div></div>
+                <div><div className="text-xs text-stone-500">Payback</div><div className="font-bold">{row.paybackMonths} mo</div></div>
+              </div>
+            ))}
+          </div>
+        </Panel>
+      </div>
+
+      <Panel>
+        <h3 className="font-bold">Full customer risk data</h3>
+        <div className="mt-4 grid gap-2">
+          {highRisk.slice(0, 8).map((customer) => (
+            <div key={customer.customerId} className="grid gap-2 rounded-md border border-stone-200 p-3 md:grid-cols-[1fr_auto_auto] md:items-center">
+              <div>
+                <div className="font-semibold">{customer.customerName}</div>
+                <div className="text-sm text-stone-500">{customer.churnDrivers.join(", ") || "No driver captured"}</div>
+              </div>
+              <Badge tone={customer.churnRiskLevel === "critical" ? "danger" : "warning"}>{formatStatus(customer.churnRiskLevel)}</Badge>
+              <div className="text-sm font-semibold">{currency(customer.estimatedLtvCents)} est. LTV</div>
+            </div>
+          ))}
+        </div>
+      </Panel>
+    </div>
+  );
+}
+
+function Metric({ icon = <Gauge size={18} />, label, value, tone = "neutral", detail, onClick }: { icon?: ReactNode; label: string; value: ReactNode; tone?: string; detail?: string; onClick?: () => void }) {
+  const content = (
+    <>
       <div className="flex items-start justify-between gap-3">
         <div>
           <div className="text-sm text-stone-500">{label}</div>
           <div className="mt-2 text-2xl font-bold tracking-normal">{value}</div>
+          {detail ? <div className="mt-2 flex items-center gap-1 text-xs font-semibold text-[#315a4d]">{detail}<ArrowRight size={12} /></div> : null}
         </div>
         <div
           className={cn(
@@ -4393,8 +6432,12 @@ function Metric({ icon = <Gauge size={18} />, label, value, tone = "neutral" }: 
           {icon}
         </div>
       </div>
-    </Panel>
+    </>
   );
+  if (onClick) {
+    return <button type="button" onClick={onClick} className="rounded-lg border border-stone-200 bg-white p-4 text-left shadow-sm transition hover:border-[#8aa99a] hover:shadow">{content}</button>;
+  }
+  return <Panel>{content}</Panel>;
 }
 
 function OwnerTrendChart({ data }: { data: OperatingDepth["admin"]["ownerAnalytics"]["trend"] }) {
@@ -4632,6 +6675,7 @@ function ActivityTimeline({
 
 function CrmView({
   workspace,
+  plan,
   customerSearch,
   setCustomerSearch,
   selectedCustomer,
@@ -4648,6 +6692,7 @@ function CrmView({
   addActivity,
 }: {
   workspace: WorkspaceSnapshot;
+  plan?: string;
   customerSearch: string;
   setCustomerSearch: (value: string) => void;
   selectedCustomer?: WorkspaceSnapshot["customers"][number];
@@ -4689,9 +6734,10 @@ function CrmView({
   const accountBalanceCents = customerInvoices.reduce((sum, invoice) => sum + Math.max(0, invoice.totalCents - invoice.paidCents), 0);
   const latestPayment = [...customerPayments].sort((a, b) => b.receivedAt - a.receivedAt)[0];
   const freeContactLimit = 10;
-  const contactUsagePercent = Math.min(100, Math.round((workspace.customers.length / freeContactLimit) * 100));
-  const isAtFreeLimit = workspace.customers.length >= freeContactLimit;
-  const isOverFreeLimit = workspace.customers.length > freeContactLimit;
+  const contactCount = workspace.contacts.length;
+  const isProPlan = plan === "pro" || plan === "growth" || plan === "enterprise";
+  const contactUsagePercent = Math.min(100, Math.round((contactCount / freeContactLimit) * 100));
+  const isAtFreeLimit = !isProPlan && contactCount >= freeContactLimit;
   const [repeatLeadForm, setRepeatLeadForm] = useState<RepeatLeadFormState>(() => defaultRepeatLeadForm());
   const [repeatLeadState, setRepeatLeadState] = useState<"idle" | "submitting" | "success" | "error">("idle");
   const [repeatLeadMessage, setRepeatLeadMessage] = useState("");
@@ -4729,8 +6775,8 @@ function CrmView({
   }
 
   return (
-    <div className="grid gap-4 xl:grid-cols-[0.8fr_1.2fr]">
-      <Panel>
+    <div className={cn("grid gap-4", workspace.customers.length > 0 && "xl:grid-cols-[0.8fr_1.2fr]")}>
+      <Panel className={workspace.customers.length === 0 ? "hidden" : undefined}>
         <div className="flex items-center justify-between gap-3">
           <h2 className="text-base font-bold">Customers</h2>
           <Badge>{workspace.customers.length}</Badge>
@@ -4760,8 +6806,8 @@ function CrmView({
         </div>
       </Panel>
 
-      <div className="grid gap-4">
-        <Panel>
+      <div className={cn("grid gap-4", workspace.customers.length === 0 && "mx-auto w-full max-w-4xl")}>
+        <Panel className={!selectedCustomer ? "hidden" : undefined}>
           {selectedCustomer ? (
             <>
               <div className="flex flex-wrap items-start justify-between gap-3">
@@ -4946,7 +6992,7 @@ function CrmView({
           ) : null}
         </Panel>
 
-        <Panel>
+        <Panel className={!selectedCustomer ? "hidden" : undefined}>
           <div className="flex flex-wrap items-start justify-between gap-3">
             <div>
               <h2 className="text-base font-bold">New Service for Customer</h2>
@@ -4989,7 +7035,7 @@ function CrmView({
           </form>
         </Panel>
 
-        <Panel>
+        <Panel className={!selectedCustomer ? "hidden" : undefined}>
           <div className="flex flex-wrap items-center justify-between gap-3">
             <h2 className="text-base font-bold">Customer Activity</h2>
             <Badge>{customerTasks.length} open follow-up{customerTasks.length === 1 ? "" : "s"}</Badge>
@@ -5010,29 +7056,37 @@ function CrmView({
         <Panel>
           <div className="flex flex-wrap items-start justify-between gap-3">
             <div>
-              <h2 className="text-base font-bold">Create Lead</h2>
-              <p className="mt-1 text-sm leading-5 text-stone-500">Every new lead creates a customer, contact, property, lead, and opportunity.</p>
+              <h2 className="text-base font-bold">{workspace.customers.length === 0 ? "Add your first lead" : "Create Lead"}</h2>
+              <p className="mt-1 text-sm leading-5 text-stone-500">
+                {workspace.customers.length === 0
+                  ? "Enter the customer and property once. We will organize the contact, lead, and sales opportunity for you."
+                  : "Every new lead creates a customer, contact, property, lead, and opportunity."}
+              </p>
             </div>
-            <Badge tone={isAtFreeLimit ? "warning" : "success"}>{workspace.customers.length}/{freeContactLimit} free contacts</Badge>
+            <Badge tone={isAtFreeLimit ? "warning" : "success"}>
+              {isProPlan ? `${contactCount} contacts` : `${contactCount}/${freeContactLimit} free contacts`}
+            </Badge>
           </div>
           <div className={cn("mt-4 rounded-md border p-3", isAtFreeLimit ? "border-amber-200 bg-amber-50" : "border-emerald-200 bg-emerald-50")}>
             <div className="flex flex-wrap items-center justify-between gap-3">
               <div>
-                <div className="font-semibold">{isOverFreeLimit ? "Pro-scale demo workspace" : isAtFreeLimit ? "Free plan contact cap reached" : "Free plan usage"}</div>
+                <div className="font-semibold">{isProPlan ? "All-In Pro" : isAtFreeLimit ? "Free plan contact limit reached" : "Free plan"}</div>
                 <p className="mt-1 text-sm leading-5 text-stone-600">
-                  {isOverFreeLimit
-                    ? "This seeded workspace is above the free cap so we can test larger-company workflows. Production free accounts are blocked at 10 contacts."
+                  {isProPlan
+                    ? "This workspace includes the complete customer book with no contact cap."
                     : isAtFreeLimit
-                      ? "The backend blocks the 11th contact on free accounts and prompts the operator to upgrade."
-                      : "Free workspaces can create up to 10 contacts before upgrading to the $99/mo All-In Pro plan."}
+                      ? "Upgrade to All-In Pro to add more contacts and keep every customer workflow in one place."
+                      : `You can add ${freeContactLimit - contactCount} more contact${freeContactLimit - contactCount === 1 ? "" : "s"} before upgrading to All-In Pro.`}
                 </p>
               </div>
-              <Link href="/pricing" className="inline-flex min-h-9 items-center justify-center rounded-md border border-stone-200 bg-white px-3 text-sm font-semibold text-stone-800 shadow-sm transition hover:bg-stone-50">
-                Upgrade
-              </Link>
+              {!isProPlan ? (
+                <Link href="/pricing" className="inline-flex min-h-9 items-center justify-center rounded-md border border-stone-200 bg-white px-3 text-sm font-semibold text-stone-800 shadow-sm transition hover:bg-stone-50">
+                  View plans
+                </Link>
+              ) : null}
             </div>
             <div className="mt-3 h-2 overflow-hidden rounded-full bg-white/80">
-              <div className={cn("h-full rounded-full", isAtFreeLimit ? "bg-amber-600" : "bg-emerald-700")} style={{ width: `${contactUsagePercent}%` }} />
+              <div className={cn("h-full rounded-full", isAtFreeLimit ? "bg-amber-600" : "bg-emerald-700")} style={{ width: `${isProPlan ? 100 : contactUsagePercent}%` }} />
             </div>
           </div>
           {leadSubmitMessage ? (
@@ -6026,6 +8080,7 @@ function JobsView({
   toggleTask,
   createChangeOrder,
   approveChangeOrder,
+  operatingActions,
 }: {
   workspace: WorkspaceSnapshot;
   operatingDepth: OperatingDepth;
@@ -6053,11 +8108,22 @@ function JobsView({
     scheduleImpactDays: number;
   }) => Promise<string>;
   approveChangeOrder: (input: { changeOrderId: string; approvedByName: string; approvedByEmail?: string }) => Promise<{ changeOrderId: string; taskId: string }>;
+  operatingActions?: OperatingActions;
 }) {
   const visits = selectedJob ? workspace.visits.filter((visit) => visit.jobId === selectedJob.id) : [];
+  const phases = selectedJob ? [...workspace.jobPhases.filter((phase) => phase.jobId === selectedJob.id)].sort((left, right) => left.sortOrder - right.sortOrder) : [];
   const tasks = selectedJob ? workspace.tasks.filter((task) => task.entityType === "job" && task.entityId === selectedJob.id) : [];
   const jobActivities = selectedJob ? workspace.activities.filter((activity) => activity.entityType === "job" && activity.entityId === selectedJob.id) : [];
   const changeOrders = selectedJob ? workspace.changeOrders.filter((changeOrder) => changeOrder.jobId === selectedJob.id) : [];
+  const jobNotes = selectedJob ? workspace.notes.filter((note) => note.entityType === "job" && note.entityId === selectedJob.id) : [];
+  const relatedFiles = selectedJob
+    ? workspace.files.filter((file) =>
+        (file.entityType === "job" && file.entityId === selectedJob.id) ||
+        (selectedJob.estimateId && file.entityType === "estimate" && file.entityId === selectedJob.estimateId) ||
+        (selectedJob.propertyId && file.entityType === "property" && file.entityId === selectedJob.propertyId) ||
+        (file.entityType === "customer" && file.entityId === selectedJob.customerId),
+      )
+    : [];
   const property = selectedJob?.propertyId ? propertiesById.get(selectedJob.propertyId) : undefined;
   const selectedSummary = selectedJob ? operatingDepth.jobCosting.summaries.find((summary) => summary.jobId === selectedJob.id) : undefined;
   const selectedTime = selectedJob ? operatingDepth.fieldOps.timeBreakdowns.find((row) => row.jobId === selectedJob.id) : undefined;
@@ -6067,6 +8133,27 @@ function JobsView({
   const selectedCallbacks = selectedJob ? operatingDepth.fieldOps.callbacks.filter((callback) => callback.jobTitle === selectedJob.title) : [];
   const selectedMaterialLots = operatingDepth.fieldOps.materialLots.filter((lot) => selectedVisitIds.has(lot.visitId));
   const selectedEquipment = operatingDepth.fieldOps.equipmentCheckouts.filter((checkout) => selectedVisitIds.has(checkout.visitId));
+  const selectedInvoices = selectedJob ? operatingDepth.revenue.invoices.filter((invoice) => invoice.jobId === selectedJob.id) : [];
+  const openVisitCount = visits.filter((visit) => !["complete", "canceled"].includes(visit.status)).length;
+  const openTaskCount = tasks.filter((task) => ["open", "in_progress"].includes(task.status)).length;
+  const invoiceReady = Boolean(selectedSummary && selectedSummary.actualRevenueCents > 0);
+  const displayPhases = selectedJob
+    ? phases.length > 0
+      ? phases
+      : [
+          { id: "fallback-phase-1", jobId: selectedJob.id, name: "Sales handoff", status: selectedJob.status, sortOrder: 1, startDate: selectedJob.startDate, dueDate: selectedJob.startDate },
+          { id: "fallback-phase-2", jobId: selectedJob.id, name: "Production visit", status: selectedJob.status, sortOrder: 2, startDate: visits[0]?.scheduledStart, dueDate: visits[0]?.scheduledEnd },
+          { id: "fallback-phase-3", jobId: selectedJob.id, name: "Completion review", status: selectedJob.status, sortOrder: 3, startDate: visits.at(-1)?.scheduledEnd, dueDate: visits.at(-1)?.scheduledEnd },
+        ]
+    : [];
+  const jobTimeline = [
+    ...displayPhases.map((phase) => ({ id: `phase-${phase.id}`, label: `Phase: ${phase.name}`, detail: `${formatStatus(phase.status)}${phase.dueDate ? ` - due ${shortDate(phase.dueDate)}` : ""}`, at: phase.completedAt ?? phase.dueDate ?? phase.startDate ?? selectedJob?.startDate ?? 0, tone: phase.status === "completed" ? "success" : phase.status === "blocked" ? "danger" : "neutral" })),
+    ...visits.map((visit) => ({ id: `visit-${visit.id}`, label: `Visit ${visitStatusLabel(visit.status)}`, detail: `${shortDate(visit.scheduledStart)} - ${timeRange(visit.scheduledStart, visit.scheduledEnd)}`, at: visit.scheduledStart, tone: visit.status === "complete" ? "success" : visit.status === "missed" ? "danger" : "neutral" })),
+    ...tasks.map((task) => ({ id: `task-${task.id}`, label: `Task: ${task.title}`, detail: `${formatStatus(task.status)} - ${membersById.get(task.assignedUserId)?.name ?? "Unassigned"}`, at: task.dueAt, tone: task.status === "done" ? "success" : task.priority === "high" ? "warning" : "neutral" })),
+    ...changeOrders.map((changeOrder) => ({ id: `co-${changeOrder.id}`, label: `Change order: ${changeOrder.title}`, detail: `${formatStatus(changeOrder.status)} - ${currency(changeOrder.revenueDeltaCents)}`, at: changeOrder.approvedAt ?? changeOrder.requestedAt, tone: changeOrder.status === "approved" ? "success" : changeOrder.status === "pending_approval" ? "warning" : "neutral" })),
+    ...selectedInvoices.map((invoice) => ({ id: `invoice-${invoice.id}`, label: `Invoice ${invoice.invoiceNumber}`, detail: `${formatStatus(invoice.status)} - ${currency(invoice.balanceCents)} open`, at: invoice.dueAt ?? selectedJob?.startDate ?? 0, tone: invoice.balanceCents > 0 ? "warning" : "success" })),
+    ...jobActivities.map((activity) => ({ id: `activity-${activity.id}`, label: activity.summary, detail: formatStatus(activity.kind), at: activity.occurredAt, tone: "neutral" })),
+  ].sort((left, right) => right.at - left.at);
   const [changeOrderForm, setChangeOrderForm] = useState({
     title: "Additional landscape scope",
     description: "Customer requested extra work while the job is already active.",
@@ -6076,6 +8163,7 @@ function JobsView({
     scheduleImpactDays: "2",
   });
   const [changeOrderMessage, setChangeOrderMessage] = useState<{ state: "success" | "error" | "pending"; message: string } | null>(null);
+  const [closeoutMessage, setCloseoutMessage] = useState<{ state: "success" | "error" | "pending"; message: string } | null>(null);
 
   async function handleCreateChangeOrder(event: FormEvent) {
     event.preventDefault();
@@ -6116,8 +8204,38 @@ function JobsView({
         approvedByEmail: customersById.get(changeOrder.customerId)?.email,
       });
       setChangeOrderMessage({ state: "success", message: `Change order ${changeOrder.title} approved and scheduling task created.` });
-    } catch {
-      setChangeOrderMessage({ state: "error", message: "Change order could not be approved. Check approval permission and try again." });
+    } catch (error) {
+      const detail = error instanceof Error ? userFacingWriteError(error) : "Check approval permission and try again.";
+      setChangeOrderMessage({ state: "error", message: `Change order could not be approved. ${detail}` });
+    }
+  }
+
+  async function handleCloseJob(forceWithExceptions: boolean) {
+    if (!selectedJob) return;
+    setCloseoutMessage({ state: "pending", message: forceWithExceptions ? "Closing job with documented exceptions." : "Validating job closeout." });
+    try {
+      const result = await operatingActions?.closeJob?.(selectedJob.id, forceWithExceptions, true);
+      const blockers = result?.blockers ?? [];
+      const invoiceNumber = result?.invoice?.invoiceNumber;
+      setCloseoutMessage({
+        state: "success",
+        message: `Job closeout saved${invoiceNumber ? ` and invoice ${invoiceNumber} prepared` : ""}${blockers.length ? ` with ${blockers.length} exception${blockers.length === 1 ? "" : "s"}` : ""}.`,
+      });
+    } catch (error) {
+      const message = error instanceof Error ? error.message : "Resolve closeout blockers or use exceptions.";
+      setCloseoutMessage({ state: "error", message });
+    }
+  }
+
+  async function handleGenerateInvoice() {
+    if (!selectedJob) return;
+    setCloseoutMessage({ state: "pending", message: "Generating invoice from job work and approved changes." });
+    try {
+      const result = await operatingActions?.generateInvoiceFromJob?.(selectedJob.id, "sent", 14);
+      setCloseoutMessage({ state: "success", message: result?.created === false ? `Invoice ${result.invoiceNumber} already exists for this job.` : `Invoice ${result?.invoiceNumber ?? "created"} generated for finance.` });
+    } catch (error) {
+      const message = error instanceof Error ? error.message : "Invoice could not be generated.";
+      setCloseoutMessage({ state: "error", message });
     }
   }
 
@@ -6181,6 +8299,130 @@ function JobsView({
                 ))}
               </div>
             </>
+          ) : null}
+        </Panel>
+
+        <Panel>
+          <div className="flex flex-wrap items-start justify-between gap-3">
+            <div>
+              <h2 className="text-base font-bold">Closeout + Billing</h2>
+              <div className="mt-1 text-sm text-stone-500">Validates completion, cost, margin, invoice readiness, and audit trail before finance handoff.</div>
+            </div>
+            <Badge tone={selectedJob?.status === "completed" ? "success" : openVisitCount || openTaskCount ? "warning" : "success"}>
+              {selectedJob?.status === "completed" ? "closed" : openVisitCount || openTaskCount ? "exceptions" : "ready"}
+            </Badge>
+          </div>
+          {selectedJob ? (
+            <div className="mt-4 grid gap-4 lg:grid-cols-[1fr_0.85fr]">
+              <div className="grid gap-3 sm:grid-cols-2 xl:grid-cols-4">
+                <Metric label="Open visits" value={String(openVisitCount)} tone={openVisitCount > 0 ? "warning" : "success"} />
+                <Metric label="Open tasks" value={String(openTaskCount)} tone={openTaskCount > 0 ? "warning" : "success"} />
+                <Metric label="Margin" value={percent(selectedSummary?.grossMarginPercent ?? 0)} tone={(selectedSummary?.grossMarginPercent ?? 0) >= 30 ? "success" : "warning"} />
+                <Metric label="Invoice balance" value={currency(selectedInvoices.reduce((sum, invoice) => sum + invoice.balanceCents, 0))} />
+              </div>
+              <div className="rounded-md border border-stone-200 p-3">
+                <div className="text-xs font-semibold uppercase tracking-normal text-stone-500">Invoice readiness</div>
+                <div className="mt-2 grid gap-2 text-sm">
+                  <div className="flex items-center justify-between gap-3"><span>Billable revenue</span><Badge tone={invoiceReady ? "success" : "danger"}>{invoiceReady ? currency(selectedSummary?.actualRevenueCents ?? 0) : "missing"}</Badge></div>
+                  <div className="flex items-center justify-between gap-3"><span>Existing invoices</span><Badge>{selectedInvoices.length}</Badge></div>
+                  <div className="flex items-center justify-between gap-3"><span>Collected</span><strong>{currency(selectedSummary?.collectedCents ?? 0)}</strong></div>
+                </div>
+                <div className="mt-3 flex flex-wrap gap-2">
+                  <TextButton type="button" icon={<Check size={16} />} onClick={() => void handleCloseJob(false)} disabled={!operatingActions?.closeJob}>Close Job</TextButton>
+                  <TextButton type="button" variant="secondary" icon={<AlertTriangle size={16} />} onClick={() => void handleCloseJob(true)} disabled={!operatingActions?.closeJob}>Close With Exceptions</TextButton>
+                  <TextButton type="button" variant="secondary" icon={<Receipt size={16} />} onClick={() => void handleGenerateInvoice()} disabled={!operatingActions?.generateInvoiceFromJob}>Generate Invoice</TextButton>
+                </div>
+              </div>
+              {closeoutMessage ? (
+                <div className={cn("rounded-md border px-3 py-2 text-sm font-semibold lg:col-span-2", closeoutMessage.state === "error" ? "border-rose-200 bg-rose-50 text-rose-800" : closeoutMessage.state === "pending" ? "border-amber-200 bg-amber-50 text-amber-800" : "border-emerald-200 bg-emerald-50 text-emerald-800")}>
+                  {closeoutMessage.message}
+                </div>
+              ) : null}
+              {selectedInvoices.length > 0 ? (
+                <div className="grid gap-2 lg:col-span-2 md:grid-cols-2">
+                  {selectedInvoices.map((invoice) => (
+                    <div key={invoice.id} className="rounded-md border border-stone-200 p-3 text-sm">
+                      <div className="flex items-center justify-between gap-3">
+                        <div className="font-semibold">{invoice.invoiceNumber}</div>
+                        <Badge tone={operatingTone(invoice.status)}>{formatStatus(invoice.status)}</Badge>
+                      </div>
+                      <div className="mt-1 text-stone-500">{currency(invoice.totalCents)} total - {currency(invoice.balanceCents)} open - due {invoice.dueAt ? shortDate(invoice.dueAt) : "not set"}</div>
+                    </div>
+                  ))}
+                </div>
+              ) : null}
+            </div>
+          ) : null}
+        </Panel>
+
+        <Panel>
+          <div className="flex flex-wrap items-start justify-between gap-3">
+            <div>
+              <h2 className="text-base font-bold">Job Workspace</h2>
+              <div className="mt-1 text-sm text-stone-500">Phases, budget, visits, files, comments, and timeline in one operating view.</div>
+            </div>
+            <Badge>{displayPhases.length} phases</Badge>
+          </div>
+          {selectedJob ? (
+            <div className="mt-4 grid gap-4">
+              <div className="grid gap-3 md:grid-cols-3">
+                {displayPhases.map((phase) => (
+                  <div key={phase.id} role="group" aria-label={`Job phase ${phase.name}`} className="rounded-md border border-stone-200 p-3">
+                    <div className="flex items-start justify-between gap-2">
+                      <div>
+                        <div className="text-xs font-semibold uppercase tracking-normal text-stone-500">Phase {phase.sortOrder}</div>
+                        <div className="mt-1 font-semibold">{phase.name}</div>
+                      </div>
+                      <Badge tone={statusTone(phase.status)}>{formatStatus(phase.status)}</Badge>
+                    </div>
+                    <div className="mt-2 text-sm text-stone-500">Due {phase.dueDate ? shortDate(phase.dueDate) : "not set"}</div>
+                  </div>
+                ))}
+              </div>
+
+              <div className="grid gap-4 lg:grid-cols-[0.9fr_1.1fr]">
+                <div className="rounded-md border border-stone-200 p-3">
+                  <div className="flex items-center justify-between gap-2">
+                    <h3 className="font-bold">Files + Comments</h3>
+                    <Badge>{relatedFiles.length} files / {jobNotes.length} comments</Badge>
+                  </div>
+                  <div className="mt-3 grid gap-2">
+                    {relatedFiles.slice(0, 4).map((file) => (
+                      <div key={file.id} className="flex items-center justify-between gap-3 rounded-md bg-stone-50 p-2 text-sm">
+                        <span className="font-semibold">{file.fileName}</span>
+                        <Badge>{formatStatus(file.entityType)}</Badge>
+                      </div>
+                    ))}
+                    {relatedFiles.length === 0 ? <div className="rounded-md border border-dashed border-stone-200 p-3 text-sm text-stone-500">No files linked to this job yet.</div> : null}
+                    {jobNotes.slice(0, 3).map((note) => (
+                      <div key={note.id} className="rounded-md bg-stone-50 p-2 text-sm">
+                        <div className="font-semibold">{formatStatus(note.visibility)} comment</div>
+                        <div className="mt-1 text-stone-600">{note.body}</div>
+                      </div>
+                    ))}
+                    {jobNotes.length === 0 ? <div className="rounded-md border border-dashed border-stone-200 p-3 text-sm text-stone-500">No job comments yet. Add one from Job Activity.</div> : null}
+                  </div>
+                </div>
+
+                <div className="rounded-md border border-stone-200 p-3">
+                  <div className="flex items-center justify-between gap-2">
+                    <h3 className="font-bold">Workspace Timeline</h3>
+                    <Badge>{jobTimeline.length} events</Badge>
+                  </div>
+                  <div className="mt-3 grid max-h-[360px] gap-2 overflow-auto pr-1">
+                    {jobTimeline.slice(0, 12).map((item) => (
+                      <div key={item.id} role="group" aria-label={`Job timeline ${item.label}`} className="grid grid-cols-[auto_1fr] gap-3 rounded-md border border-stone-100 p-2 text-sm">
+                        <span className={cn("mt-1 h-2.5 w-2.5 rounded-full", item.tone === "success" ? "bg-emerald-600" : item.tone === "warning" ? "bg-amber-500" : item.tone === "danger" ? "bg-rose-600" : "bg-stone-300")} />
+                        <span>
+                          <span className="block font-semibold">{item.label}</span>
+                          <span className="mt-0.5 block text-xs text-stone-500">{item.detail}</span>
+                        </span>
+                      </div>
+                    ))}
+                  </div>
+                </div>
+              </div>
+            </div>
           ) : null}
         </Panel>
 
@@ -6385,7 +8627,7 @@ function JobsView({
 function FieldView({
   workspace,
   operatingDepth,
-  selectedVisit,
+  selectedVisit: requestedVisit,
   setSelectedVisitId,
   customersById,
   contactsByCustomerId,
@@ -6397,6 +8639,7 @@ function FieldView({
   startVisit,
   toggleChecklist,
   submitVisit,
+  operatingActions,
 }: {
   workspace: WorkspaceSnapshot;
   operatingDepth: OperatingDepth;
@@ -6419,23 +8662,34 @@ function FieldView({
       materialApplications?: Array<{ materialId: string; quantity: number; unit: string; targetAreaId?: string; notes?: string }>;
     },
   ) => Promise<{ visitId?: string; timesheetEntryId?: string; fieldIssueId?: string; issueTaskId?: string; issueOpportunityId?: string } | void>;
+  operatingActions?: OperatingActions;
 }) {
+  const defaultSessionCrewId = requestedVisit?.crewId ?? workspace.visits.find((visit) => visit.crewId)?.crewId ?? "";
+  const [fieldSessionRole, setFieldSessionRole] = useState<Role>("technician");
+  const [fieldSessionCrewId, setFieldSessionCrewId] = useState(defaultSessionCrewId);
+  const fieldRouteVisits = useMemo(
+    () => [...workspace.visits].sort((a, b) => a.routeOrder - b.routeOrder || a.scheduledStart - b.scheduledStart || a.id.localeCompare(b.id)),
+    [workspace.visits],
+  );
+  const fieldSessionCanSeeAll = ["owner", "admin", "manager", "dispatcher"].includes(fieldSessionRole);
+  const fieldVisibleVisits = useMemo(
+    () => fieldSessionCanSeeAll ? fieldRouteVisits : fieldRouteVisits.filter((visit) => visit.crewId && visit.crewId === fieldSessionCrewId),
+    [fieldRouteVisits, fieldSessionCanSeeAll, fieldSessionCrewId],
+  );
+  const selectedVisit = fieldVisibleVisits.find((visit) => visit.id === requestedVisit?.id) ?? fieldVisibleVisits[0];
   const property = selectedVisit?.propertyId ? propertiesById.get(selectedVisit.propertyId) : undefined;
   const customer = selectedVisit ? customersById.get(selectedVisit.customerId) : undefined;
   const selectedContacts = selectedVisit ? contactsByCustomerId.get(selectedVisit.customerId) ?? [] : [];
   const primaryContact = selectedContacts.find((contact) => contact.isPrimary) ?? selectedContacts[0];
   const selectedRoute = selectedVisit ? operatingDepth.fieldOps.routeConfidence.find((route) => route.visitId === selectedVisit.id) : undefined;
   const selectedLots = selectedVisit ? operatingDepth.fieldOps.materialLots.filter((lot) => lot.visitId === selectedVisit.id) : [];
+  const selectedComplianceRecords = selectedVisit ? operatingDepth.fieldOps.complianceRecords.filter((record) => record.visitId === selectedVisit.id) : [];
   const selectedEquipment = selectedVisit ? operatingDepth.fieldOps.equipmentCheckouts.filter((checkout) => checkout.visitId === selectedVisit.id) : [];
   const selectedTime = selectedVisit ? operatingDepth.fieldOps.timeBreakdowns.find((row) => row.jobId === selectedVisit.jobId) : undefined;
   const selectedWeather = selectedVisit ? operatingDepth.costIntelligence.weatherSnapshots.find((snapshot) => snapshot.id === `weather-${selectedVisit.id}` || snapshot.observedAt === selectedVisit.scheduledStart) : undefined;
   const selectedPropertyAreas = useMemo(
     () => (selectedVisit ? workspace.propertyAreas.filter((area) => area.propertyId === selectedVisit.propertyId) : []),
     [selectedVisit, workspace.propertyAreas],
-  );
-  const fieldRouteVisits = useMemo(
-    () => [...workspace.visits].sort((a, b) => a.routeOrder - b.routeOrder || a.scheduledStart - b.scheduledStart || a.id.localeCompare(b.id)),
-    [workspace.visits],
   );
   const defaultMaterial = workspace.materials.find((material) => material.active) ?? workspace.materials[0];
   const [startMessage, setStartMessage] = useState<{ state: "success" | "error" | "pending"; message: string } | null>(null);
@@ -6449,6 +8703,7 @@ function FieldView({
   const [pendingMaterialApplications, setPendingMaterialApplications] = useState<Array<{ materialId: string; quantity: number; unit: string; targetAreaId?: string; notes?: string }>>([]);
   const [materialMessage, setMaterialMessage] = useState<{ state: "success" | "error"; message: string } | null>(null);
   const [submitMessage, setSubmitMessage] = useState<{ state: "success" | "error" | "pending"; message: string } | null>(null);
+  const [complianceMessage, setComplianceMessage] = useState<{ state: "success" | "error" | "pending"; message: string } | null>(null);
   const [fieldIssueDraft, setFieldIssueDraft] = useState<FieldIssueDraft>({
     category: "customer_concern",
     severity: "high",
@@ -6556,12 +8811,62 @@ function FieldView({
     }
   }
 
+  async function handleGenerateCompliance(visit: JobVisit) {
+    setComplianceMessage({ state: "pending", message: "Generating pesticide/material compliance record." });
+    try {
+      const result = await operatingActions?.generateComplianceRecord?.(visit.id);
+      setComplianceMessage({
+        state: result?.ready === false ? "error" : "success",
+        message: `Compliance record generated for ${result?.recordCount ?? selectedComplianceRecords.length} material application${(result?.recordCount ?? selectedComplianceRecords.length) === 1 ? "" : "s"}${result?.missing?.length ? `; missing ${result.missing.join(", ")}` : ""}.`,
+      });
+    } catch (error) {
+      const message = error instanceof Error ? error.message : "Compliance record could not be generated.";
+      setComplianceMessage({ state: "error", message });
+    }
+  }
+
   return (
     <div className="mx-auto grid max-w-6xl gap-4 lg:grid-cols-[360px_1fr]">
       <Panel>
         <h2 className="text-base font-bold">My Visits</h2>
+        <div className="mt-4 rounded-md border border-stone-200 bg-stone-50 p-3" aria-label="Field login scope">
+          <div className="flex items-center justify-between gap-3">
+            <div>
+              <div className="text-xs font-semibold uppercase tracking-normal text-stone-500">Field technician login</div>
+              <div className="mt-1 text-sm font-semibold">Scoped mobile session</div>
+            </div>
+            <Badge tone={fieldSessionCanSeeAll ? "warning" : "success"}>{fieldSessionCanSeeAll ? "All visits" : "Assigned crew only"}</Badge>
+          </div>
+          <div className="mt-3 grid gap-2">
+            <Field label="Role">
+              <select aria-label="Field session role" className={inputClass()} value={fieldSessionRole} onChange={(event) => setFieldSessionRole(event.target.value as Role)}>
+                <option value="technician">Technician</option>
+                <option value="crew_lead">Crew lead</option>
+                <option value="dispatcher">Dispatcher</option>
+                <option value="manager">Manager</option>
+              </select>
+            </Field>
+            <Field label="Assigned crew">
+              <select aria-label="Field assigned crew" className={inputClass()} value={fieldSessionCrewId} onChange={(event) => setFieldSessionCrewId(event.target.value)} disabled={fieldSessionCanSeeAll}>
+                {workspace.crews.map((crew) => (
+                  <option key={crew.id} value={crew.id}>{crew.name}</option>
+                ))}
+              </select>
+            </Field>
+          </div>
+          <div className="mt-3 grid gap-2 text-xs leading-5 text-stone-600">
+            <div className="flex items-center justify-between gap-3">
+              <span>Visible visits</span>
+              <strong>{fieldVisibleVisits.length} of {fieldRouteVisits.length}</strong>
+            </div>
+            <div className="flex gap-2">
+              <ShieldCheck size={14} className="mt-0.5 shrink-0 text-[#224036]" />
+              <span>Contact info, property hazards, notes, and job scope stay limited to visible stops.</span>
+            </div>
+          </div>
+        </div>
         <div className="mt-4 grid gap-2">
-          {fieldRouteVisits.map((visit) => (
+          {fieldVisibleVisits.length > 0 ? fieldVisibleVisits.map((visit) => (
             <button
               key={visit.id}
               type="button"
@@ -6577,7 +8882,9 @@ function FieldView({
                 <span>{customersById.get(visit.customerId)?.name}</span>
               </div>
             </button>
-          ))}
+          )) : (
+            <div className="rounded-md border border-dashed border-stone-200 p-4 text-sm text-stone-500">No assigned visits are visible for this field session.</div>
+          )}
         </div>
       </Panel>
 
@@ -6735,6 +9042,43 @@ function FieldView({
                     </div>
                   ))}
                 </div>
+              </div>
+            </div>
+
+            <div className="rounded-md border border-stone-200 p-3">
+              <div className="flex flex-wrap items-start justify-between gap-3">
+                <div>
+                  <div className="text-xs font-semibold uppercase tracking-normal text-stone-500">Compliance record</div>
+                  <div className="mt-1 text-sm text-stone-600">Chemical, material, weather, applicator, site, quantity, and customer-ready record.</div>
+                </div>
+                <TextButton type="button" icon={<ShieldCheck size={16} />} onClick={() => void handleGenerateCompliance(selectedVisit)} disabled={!operatingActions?.generateComplianceRecord}>
+                  Generate Compliance Record
+                </TextButton>
+              </div>
+              {complianceMessage ? (
+                <div className={cn("mt-3 rounded-md border px-3 py-2 text-sm font-semibold", complianceMessage.state === "error" ? "border-rose-200 bg-rose-50 text-rose-800" : complianceMessage.state === "pending" ? "border-amber-200 bg-amber-50 text-amber-800" : "border-emerald-200 bg-emerald-50 text-emerald-800")}>
+                  {complianceMessage.message}
+                </div>
+              ) : null}
+              <div className="mt-3 grid gap-2">
+                {selectedComplianceRecords.length > 0 ? selectedComplianceRecords.map((record) => (
+                  <div key={record.id} role="group" aria-label={`Compliance record ${record.reportNumber}`} className="rounded-md bg-stone-50 p-3 text-sm">
+                    <div className="flex flex-wrap items-start justify-between gap-2">
+                      <div>
+                        <div className="font-semibold">{record.reportNumber} - {record.materialName}</div>
+                        <div className="mt-1 text-stone-500">{record.siteAddress}</div>
+                      </div>
+                      <Badge tone={record.ready ? "success" : "warning"}>{record.ready ? "ready" : "needs review"}</Badge>
+                    </div>
+                    <div className="mt-3 grid gap-2 md:grid-cols-3">
+                      <div><div className="text-xs font-semibold uppercase text-stone-500">EPA</div><div>{record.epaRegistrationNumber ?? "Missing"}</div></div>
+                      <div><div className="text-xs font-semibold uppercase text-stone-500">Quantity</div><div>{record.quantity} {record.unit}</div></div>
+                      <div><div className="text-xs font-semibold uppercase text-stone-500">Applicator</div><div>{record.applicator}</div></div>
+                    </div>
+                    <div className="mt-2 text-xs text-stone-500">{record.weatherSummary}</div>
+                    {record.missing.length > 0 ? <div className="mt-2 text-xs font-semibold text-amber-700">Missing: {record.missing.join(", ")}</div> : null}
+                  </div>
+                )) : <div className="rounded-md border border-dashed border-stone-200 p-3 text-sm text-stone-500">No compliance records generated from material usage yet.</div>}
               </div>
             </div>
 
@@ -7552,6 +9896,7 @@ function CostingView({ workspace, operatingDepth, operatingActions }: { workspac
   const [fertEquipmentCost, setFertEquipmentCost] = useState("25.00");
   const [fertOverheadPercent, setFertOverheadPercent] = useState("18");
   const [fertTargetMargin, setFertTargetMargin] = useState("42");
+  const [selectedFertScenarioKey, setSelectedFertScenarioKey] = useState<FertilizationMarginScenarioKey>("target");
   const [fertSaveState, setFertSaveState] = useState<"idle" | "saving" | "success" | "error">("idle");
   const [fertSaveMessage, setFertSaveMessage] = useState("");
   const [approvalMessages, setApprovalMessages] = useState<Record<string, { state: "saving" | "success" | "error"; message: string; status?: "approved" | "rejected" }>>({});
@@ -7566,7 +9911,7 @@ function CostingView({ workspace, operatingDepth, operatingActions }: { workspac
   const fertPriceBookRateMatch = selectedFertPriceBookItem?.formula?.match(/lawnSizeSqFt\s*\*\s*([0-9.]+)/)?.[1];
   const fertPriceBookRateCentsPerSqFt = fertPriceBookRateMatch ? Math.round(Number(fertPriceBookRateMatch) * 1000) / 10 : 1.8;
   const fertAdjustments = activeFertilizationPricingAdjustments(selectedFertRules, { turfAreaSqFt: fertTurfAreaSqFt, applicationCount: fertApplicationCount });
-  const fertPricing = calculateFertilizationProgramPricing({
+  const fertPricingInput = {
     turfAreaSqFt: fertTurfAreaSqFt,
     applicationCount: fertApplicationCount,
     materialUnitCostCents: selectedFertMaterial?.costCents ?? 0,
@@ -7579,12 +9924,15 @@ function CostingView({ workspace, operatingDepth, operatingActions }: { workspac
     priceBookRateCentsPerSqFt: fertPriceBookRateCentsPerSqFt,
     minPriceCents: selectedFertPriceBookItem?.minPriceCents ?? 0,
     adjustments: fertAdjustments,
-  });
+  };
+  const fertPricing = calculateFertilizationProgramPricing(fertPricingInput);
+  const fertMarginScenarios = buildFertilizationMarginScenarios(fertPricingInput);
+  const selectedFertScenario = fertMarginScenarios.find((scenario) => scenario.key === selectedFertScenarioKey) ?? fertMarginScenarios[1] ?? fertMarginScenarios[0];
   const membersById = new Map(workspace.members.map((member) => [member.id, member]));
   const approvalRequests = workspace.approvalRequests
     .slice()
     .sort((a, b) => (a.status === "pending" ? 0 : 1) - (b.status === "pending" ? 0 : 1) || a.dueAt - b.dueAt);
-  const pendingApprovalRequests = approvalRequests.filter((request) => request.status === "pending");
+  const pendingApprovalRequests = approvalRequests.filter((request) => request.status === "pending" && !approvalMessages[request.id]?.status);
 
   function submitTimesheet(event: FormEvent) {
     event.preventDefault();
@@ -7610,11 +9958,17 @@ function CostingView({ workspace, operatingDepth, operatingActions }: { workspac
           laborRateCents: dollarsToCents(fertLaborRate),
           equipmentCostCentsPerApplication: dollarsToCents(fertEquipmentCost),
           overheadPercent: Number(fertOverheadPercent || "0"),
-          targetMarginPercent: Number(fertTargetMargin || "0"),
+          targetMarginPercent: selectedFertScenario.targetMarginPercent,
+          selectedScenarioKey: selectedFertScenario.key,
+          selectedScenarioLabel: selectedFertScenario.label,
+          selectedScenarioTargetMarginPercent: selectedFertScenario.targetMarginPercent,
+          estimateLineItemName: selectedFertScenario.estimateLineItem.name,
+          estimateLineItemUnit: selectedFertScenario.estimateLineItem.unit,
+          estimateLineItemUnitPriceCents: selectedFertScenario.estimateLineItem.unitPriceCents,
         });
-        setFertSaveMessage(`Fertilization price session saved at ${currency(result.output.recommendedPriceCents)}.`);
+        setFertSaveMessage(`Fertilization price session saved: ${selectedFertScenario.label} scenario at ${currency(result.output.recommendedPriceCents)}.`);
       } else {
-        setFertSaveMessage(`Fertilization price calculated locally at ${currency(fertPricing.recommendedPriceCents)}.`);
+        setFertSaveMessage(`${selectedFertScenario.label} scenario calculated locally at ${currency(selectedFertScenario.recommendedPriceCents)}.`);
       }
       setFertSaveState("success");
     } catch (error) {
@@ -7789,7 +10143,7 @@ function CostingView({ workspace, operatingDepth, operatingActions }: { workspac
           <Field label="Material product">
             <select aria-label="Fertilization material product" className={inputClass()} value={selectedFertMaterial?.id ?? ""} onChange={(event) => setFertMaterialId(event.target.value)}>
               {fertilizationMaterials.map((material) => (
-                <option key={material.id} value={material.id}>{material.name} - {currency(material.costCents)} / {material.unit}</option>
+                <option key={material.id} value={material.id}>{material.name} - {currency(material.costCents ?? 0)} / {material.unit}</option>
               ))}
             </select>
           </Field>
@@ -7833,6 +10187,84 @@ function CostingView({ workspace, operatingDepth, operatingActions }: { workspac
           <Metric label="Material cost" value={currency(fertPricing.materialCostCents)} />
           <Metric label="Total cost" value={currency(fertPricing.totalCostCents)} />
           <Metric label="Per application" value={currency(fertPricing.pricePerApplicationCents)} />
+        </div>
+
+        <div className="mt-4 rounded-md border border-stone-200 p-3" aria-label="Margin Scenario Builder">
+          <div className="flex flex-wrap items-start justify-between gap-3">
+            <div>
+              <h3 className="text-sm font-bold">Margin Scenario Builder</h3>
+              <p className="mt-1 max-w-3xl text-sm leading-5 text-stone-500">Compare close-rate, owner-target, and premium pricing before creating the estimate line item.</p>
+            </div>
+            <Badge tone={selectedFertScenario.priceLiftFromPriceBookCents > 0 ? "warning" : "success"}>
+              {selectedFertScenario.priceLiftFromPriceBookCents > 0 ? `${currency(selectedFertScenario.priceLiftFromPriceBookCents)} lift needed` : "Price book clears margin"}
+            </Badge>
+          </div>
+          <div className="mt-3 grid gap-3 lg:grid-cols-3">
+            {fertMarginScenarios.map((scenario) => {
+              const selected = scenario.key === selectedFertScenario.key;
+              return (
+                <button
+                  key={scenario.key}
+                  type="button"
+                  aria-label={`Select ${scenario.label} scenario`}
+                  aria-pressed={selected}
+                  onClick={() => setSelectedFertScenarioKey(scenario.key)}
+                  className={cn(
+                    "rounded-md border p-3 text-left transition",
+                    selected ? "border-[#224036] bg-[#eef5ef] shadow-sm" : "border-stone-200 bg-white hover:bg-stone-50",
+                  )}
+                >
+                  <div className="flex items-start justify-between gap-3">
+                    <div>
+                      <div className="font-semibold">{scenario.label}</div>
+                      <div className="mt-1 text-xs text-stone-500">{percent(scenario.targetMarginPercent)} target margin</div>
+                    </div>
+                    <Badge tone={selected ? "success" : "neutral"}>{currency(scenario.recommendedPriceCents)}</Badge>
+                  </div>
+                  <div className="mt-3 grid grid-cols-3 gap-2 text-xs">
+                    <div>
+                      <div className="font-bold">{percent(scenario.grossMarginPercent)}</div>
+                      <div className="text-stone-500">Margin</div>
+                    </div>
+                    <div>
+                      <div className="font-bold">{currency(scenario.grossProfitCents)}</div>
+                      <div className="text-stone-500">Profit</div>
+                    </div>
+                    <div>
+                      <div className="font-bold">{currency(scenario.pricePerApplicationCents)}</div>
+                      <div className="text-stone-500">Per app</div>
+                    </div>
+                  </div>
+                  <div className="mt-3 grid gap-1 text-xs leading-5 text-stone-600">
+                    {scenario.riskNotes.slice(0, 2).map((note) => (
+                      <div key={`${scenario.key}-${note}`} className="flex gap-2">
+                        <span className="mt-2 h-1.5 w-1.5 shrink-0 rounded-full bg-current" />
+                        <span>{note}</span>
+                      </div>
+                    ))}
+                  </div>
+                </button>
+              );
+            })}
+          </div>
+          <div className="mt-3 grid gap-3 lg:grid-cols-[1fr_260px]">
+            <div className="rounded-md bg-stone-50 p-3 text-sm">
+              <div className="text-xs font-semibold uppercase tracking-normal text-stone-500">Estimate line-item preview</div>
+              <div className="mt-2 flex flex-wrap items-center justify-between gap-3">
+                <div>
+                  <div className="font-semibold">{selectedFertScenario.estimateLineItem.name}</div>
+                  <div className="mt-1 text-stone-500">{selectedFertScenario.estimateLineItem.quantity} {selectedFertScenario.estimateLineItem.unit} - {fertPricing.turfAreaSqFt.toLocaleString()} sq ft - {fertPricing.applicationCount} applications</div>
+                </div>
+                <div className="text-right">
+                  <div className="text-lg font-bold">{currency(selectedFertScenario.estimateLineItem.unitPriceCents)}</div>
+                  <div className="text-xs text-stone-500">{currency(selectedFertScenario.pricePer1000SqFtCents)} / 1k sq ft</div>
+                </div>
+              </div>
+            </div>
+            <TextButton type="button" icon={<Calculator size={16} />} className="w-full self-stretch" onClick={() => void saveFertilizationPricing()} disabled={fertSaveState === "saving" || !selectedFertProperty || !selectedFertMaterial}>
+              {fertSaveState === "saving" ? "Saving" : "Save Selected Scenario"}
+            </TextButton>
+          </div>
         </div>
 
         <div className="mt-4 grid gap-3 xl:grid-cols-[1fr_320px]">
@@ -8149,10 +10581,64 @@ function CostingView({ workspace, operatingDepth, operatingActions }: { workspac
   );
 }
 
-function ProfitView({ operatingDepth }: { operatingDepth: OperatingDepth }) {
+function ProfitView({ operatingDepth, operatingActions }: { operatingDepth: OperatingDepth; operatingActions?: OperatingActions }) {
   const directCosts = operatingDepth.revenue.laborCostCents + operatingDepth.revenue.materialCostCents + operatingDepth.revenue.equipmentCostCents + operatingDepth.revenue.overheadCostCents;
   const sortedJobs = [...operatingDepth.jobCosting.summaries].sort((a, b) => b.grossProfitCents - a.grossProfitCents);
   const analytics = operatingDepth.admin.ownerAnalytics;
+  const openInvoices = operatingDepth.revenue.invoices.filter((invoice) => invoice.balanceCents > 0);
+  const defaultInvoiceableJobId = operatingDepth.revenue.invoiceableJobs[0]?.jobId ?? "";
+  const defaultOpenInvoiceId = openInvoices[0]?.id ?? "";
+  const [invoiceJobId, setInvoiceJobId] = useState(defaultInvoiceableJobId);
+  const activeInvoiceJobId = invoiceJobId || defaultInvoiceableJobId;
+  const [invoiceDueInDays, setInvoiceDueInDays] = useState("14");
+  const [invoiceMessage, setInvoiceMessage] = useState<{ state: "success" | "error" | "pending"; message: string } | null>(null);
+  const [paymentInvoiceId, setPaymentInvoiceId] = useState(defaultOpenInvoiceId);
+  const activePaymentInvoiceId = paymentInvoiceId || defaultOpenInvoiceId;
+  const activePaymentInvoice = openInvoices.find((invoice) => invoice.id === activePaymentInvoiceId) ?? openInvoices[0];
+  const [paymentAmount, setPaymentAmount] = useState("");
+  const displayedPaymentAmount = paymentAmount || (activePaymentInvoice ? String(Math.round(activePaymentInvoice.balanceCents / 100)) : "0");
+  const [paymentMethod, setPaymentMethod] = useState<"cash" | "check" | "card" | "ach" | "other">("ach");
+  const [paymentReference, setPaymentReference] = useState("Manual payment");
+  const [paymentMessage, setPaymentMessage] = useState<{ state: "success" | "error" | "pending"; message: string } | null>(null);
+
+  async function handleGenerateProfitInvoice(event: FormEvent) {
+    event.preventDefault();
+    if (!activeInvoiceJobId) {
+      setInvoiceMessage({ state: "error", message: "Choose a billable job before generating an invoice." });
+      return;
+    }
+    setInvoiceMessage({ state: "pending", message: "Generating invoice from completed job work." });
+    try {
+      const result = await operatingActions?.generateInvoiceFromJob?.(activeInvoiceJobId, "sent", Math.max(1, Math.round(Number(invoiceDueInDays || "14"))));
+      setInvoiceMessage({ state: "success", message: result?.created === false ? `Invoice ${result.invoiceNumber} already exists.` : `Invoice ${result?.invoiceNumber ?? "created"} generated.` });
+    } catch (error) {
+      const message = error instanceof Error ? error.message : "Invoice could not be generated.";
+      setInvoiceMessage({ state: "error", message });
+    }
+  }
+
+  function handlePaymentInvoiceChange(invoiceId: string) {
+    setPaymentInvoiceId(invoiceId);
+    const invoice = openInvoices.find((candidate) => candidate.id === invoiceId);
+    if (invoice) setPaymentAmount(String(Math.round(invoice.balanceCents / 100)));
+  }
+
+  function handleRecordPayment(event: FormEvent) {
+    event.preventDefault();
+    const invoice = activePaymentInvoice;
+    if (!invoice) {
+      setPaymentMessage({ state: "error", message: "Choose an invoice with an open balance." });
+      return;
+    }
+    const amountCents = Math.min(invoice.balanceCents, dollarsToCents(displayedPaymentAmount));
+    if (amountCents <= 0) {
+      setPaymentMessage({ state: "error", message: "Payment amount must be greater than zero." });
+      return;
+    }
+    setPaymentMessage({ state: "pending", message: `Recording ${currency(amountCents)} payment for ${invoice.invoiceNumber}.` });
+    operatingActions?.recordCustomerPayment?.(invoice.id, amountCents, paymentMethod, paymentReference.trim() || undefined);
+    setPaymentMessage({ state: "success", message: `Payment queued for ${invoice.invoiceNumber}.` });
+  }
 
   return (
     <div className="grid gap-4">
@@ -8178,6 +10664,74 @@ function ProfitView({ operatingDepth }: { operatingDepth: OperatingDepth }) {
           <Metric label="Margin" value={percent(operatingDepth.revenue.grossMarginPercent)} />
         </div>
       </Panel>
+
+      <div className="grid gap-4 xl:grid-cols-[0.9fr_1.1fr]">
+        <Panel>
+          <div className="flex items-center gap-2">
+            <Receipt size={18} className="text-[#224036]" />
+            <h2 className="text-base font-bold">Invoice Builder</h2>
+          </div>
+          <form onSubmit={handleGenerateProfitInvoice} className="mt-4 grid gap-3">
+            <Field label="Billable job">
+              <select aria-label="Invoice builder job" className={inputClass()} value={activeInvoiceJobId} onChange={(event) => setInvoiceJobId(event.target.value)}>
+                {operatingDepth.revenue.invoiceableJobs.length === 0 ? <option value="">No uninvoiced jobs</option> : null}
+                {operatingDepth.revenue.invoiceableJobs.map((job) => (
+                  <option key={job.jobId} value={job.jobId}>{job.jobTitle} - {job.customerName} - {currency(job.billableCents)}</option>
+                ))}
+              </select>
+            </Field>
+            <Field label="Due days">
+              <input aria-label="Invoice due days" className={inputClass()} value={invoiceDueInDays} onChange={(event) => setInvoiceDueInDays(event.target.value)} inputMode="numeric" />
+            </Field>
+            <TextButton type="submit" icon={<Receipt size={16} />} disabled={!operatingActions?.generateInvoiceFromJob || !activeInvoiceJobId}>Generate Invoice</TextButton>
+            {invoiceMessage ? (
+              <div className={cn("rounded-md border px-3 py-2 text-sm font-semibold", invoiceMessage.state === "error" ? "border-rose-200 bg-rose-50 text-rose-800" : invoiceMessage.state === "pending" ? "border-amber-200 bg-amber-50 text-amber-800" : "border-emerald-200 bg-emerald-50 text-emerald-800")}>
+                {invoiceMessage.message}
+              </div>
+            ) : null}
+          </form>
+        </Panel>
+
+        <Panel>
+          <div className="flex items-center gap-2">
+            <DollarSign size={18} className="text-[#224036]" />
+            <h2 className="text-base font-bold">Payment Entry</h2>
+          </div>
+          <form onSubmit={handleRecordPayment} className="mt-4 grid gap-3 md:grid-cols-[1fr_120px_130px] md:items-end">
+            <Field label="Invoice">
+              <select aria-label="Payment invoice" className={inputClass()} value={activePaymentInvoiceId} onChange={(event) => handlePaymentInvoiceChange(event.target.value)}>
+                {openInvoices.length === 0 ? <option value="">No open invoices</option> : null}
+                {openInvoices.map((invoice) => (
+                  <option key={invoice.id} value={invoice.id}>{invoice.invoiceNumber} - {invoice.customerName} - {currency(invoice.balanceCents)} open</option>
+                ))}
+              </select>
+            </Field>
+            <Field label="Amount">
+              <input aria-label="Payment amount" className={inputClass()} value={displayedPaymentAmount} onChange={(event) => setPaymentAmount(event.target.value)} inputMode="decimal" />
+            </Field>
+            <Field label="Method">
+              <select aria-label="Payment method" className={inputClass()} value={paymentMethod} onChange={(event) => setPaymentMethod(event.target.value as typeof paymentMethod)}>
+                <option value="ach">ACH</option>
+                <option value="card">Card</option>
+                <option value="check">Check</option>
+                <option value="cash">Cash</option>
+                <option value="other">Other</option>
+              </select>
+            </Field>
+            <Field label="Reference">
+              <input aria-label="Payment reference" className={inputClass()} value={paymentReference} onChange={(event) => setPaymentReference(event.target.value)} />
+            </Field>
+            <div className="md:col-span-2">
+              <TextButton type="submit" icon={<DollarSign size={16} />} disabled={!operatingActions?.recordCustomerPayment || !activePaymentInvoiceId}>Record Payment</TextButton>
+            </div>
+          </form>
+          {paymentMessage ? (
+            <div className={cn("mt-3 rounded-md border px-3 py-2 text-sm font-semibold", paymentMessage.state === "error" ? "border-rose-200 bg-rose-50 text-rose-800" : paymentMessage.state === "pending" ? "border-amber-200 bg-amber-50 text-amber-800" : "border-emerald-200 bg-emerald-50 text-emerald-800")}>
+              {paymentMessage.message}
+            </div>
+          ) : null}
+        </Panel>
+      </div>
 
       <div className="grid gap-4 xl:grid-cols-[0.78fr_1.22fr]">
         <Panel>
@@ -8235,6 +10789,82 @@ function ProfitView({ operatingDepth }: { operatingDepth: OperatingDepth }) {
           }))}
           valueFormatter={(value) => currency(value)}
         />
+      </div>
+
+      <div className="grid gap-4 xl:grid-cols-[0.95fr_1.05fr]">
+        <Panel className="overflow-hidden p-0">
+          <div className="border-b border-stone-200 p-4">
+            <div className="flex items-center justify-between gap-3">
+              <h2 className="text-base font-bold">AR Aging Review</h2>
+              <Badge tone={operatingDepth.revenue.arAging.some((invoice) => invoice.risk === "high") ? "danger" : operatingDepth.revenue.arAging.length ? "warning" : "success"}>{operatingDepth.revenue.arAging.length} open</Badge>
+            </div>
+          </div>
+          <div className="grid gap-2 p-4">
+            {operatingDepth.revenue.arAging.slice(0, 6).map((invoice) => (
+              <div key={invoice.invoiceId} role="group" aria-label={`AR aging invoice ${invoice.invoiceNumber}`} className="rounded-md border border-stone-200 p-3">
+                <div className="flex flex-wrap items-start justify-between gap-2">
+                  <div>
+                    <div className="font-semibold">{invoice.invoiceNumber}</div>
+                    <div className="mt-1 text-sm text-stone-500">{invoice.customerName} - {invoice.jobTitle}</div>
+                  </div>
+                  <Badge tone={invoice.risk === "high" ? "danger" : invoice.risk === "medium" ? "warning" : "success"}>{invoice.bucket}</Badge>
+                </div>
+                <div className="mt-3 grid grid-cols-3 gap-2 text-sm">
+                  <div><div className="font-bold">{currency(invoice.balanceCents)}</div><div className="text-xs text-stone-500">Open</div></div>
+                  <div><div className="font-bold">{invoice.daysPastDue}</div><div className="text-xs text-stone-500">Days late</div></div>
+                  <div><div className="font-bold">{invoice.dueAt ? shortDate(invoice.dueAt) : "No due date"}</div><div className="text-xs text-stone-500">Due</div></div>
+                </div>
+                <div className="mt-2 text-xs font-semibold text-stone-600">{invoice.nextAction}</div>
+              </div>
+            ))}
+            {operatingDepth.revenue.arAging.length === 0 ? <div className="rounded-md border border-dashed border-stone-200 p-4 text-sm text-stone-500">No open AR balances.</div> : null}
+          </div>
+        </Panel>
+
+        <Panel className="overflow-hidden p-0">
+          <div className="border-b border-stone-200 p-4">
+            <div className="flex items-center justify-between gap-3">
+              <h2 className="text-base font-bold">Customer Profitability Profiles</h2>
+              <Badge>{operatingDepth.revenue.customerProfitability.length} accounts</Badge>
+            </div>
+          </div>
+          <div className="overflow-x-auto">
+            <table className="min-w-[820px] w-full border-collapse text-sm">
+              <thead className="bg-stone-50 text-left text-xs font-semibold uppercase tracking-normal text-stone-500">
+                <tr>
+                  <th className="px-4 py-3">Customer</th>
+                  <th className="px-4 py-3 text-right">Revenue</th>
+                  <th className="px-4 py-3 text-right">Profit</th>
+                  <th className="px-4 py-3 text-right">Margin</th>
+                  <th className="px-4 py-3 text-right">LTV</th>
+                  <th className="px-4 py-3">Risk / Action</th>
+                </tr>
+              </thead>
+              <tbody className="divide-y divide-stone-100">
+                {operatingDepth.revenue.customerProfitability.slice(0, 8).map((customer) => (
+                  <tr key={customer.customerId} role="row" aria-label={`Customer profitability ${customer.customerName}`}>
+                    <td className="px-4 py-3">
+                      <div className="font-semibold">{customer.customerName}</div>
+                      <div className="text-xs text-stone-500">{customer.serviceMix.slice(0, 3).join(", ") || formatStatus(customer.customerType)}</div>
+                    </td>
+                    <td className="px-4 py-3 text-right">{currency(customer.lifetimeRevenueCents)}</td>
+                    <td className="px-4 py-3 text-right font-semibold">{currency(customer.grossProfitCents)}</td>
+                    <td className="px-4 py-3 text-right"><Badge tone={customer.grossMarginPercent >= 35 ? "success" : customer.grossMarginPercent < 20 ? "danger" : "warning"}>{percent(customer.grossMarginPercent)}</Badge></td>
+                    <td className="px-4 py-3 text-right">{currency(customer.estimatedLtvCents)}</td>
+                    <td className="px-4 py-3">
+                      <div className="flex flex-wrap items-center gap-1">
+                        <Badge tone={customer.churnRiskLevel === "critical" || customer.churnRiskLevel === "high" ? "danger" : customer.churnRiskLevel === "medium" ? "warning" : "success"}>{formatStatus(customer.churnRiskLevel)}</Badge>
+                        <Badge>{customer.paymentBehavior}</Badge>
+                        <Badge>{customer.callbackCount} callbacks</Badge>
+                      </div>
+                      <div className="mt-1 text-xs text-stone-500">{customer.nextBestAction}</div>
+                    </td>
+                  </tr>
+                ))}
+              </tbody>
+            </table>
+          </div>
+        </Panel>
       </div>
 
       <div className="grid gap-4 xl:grid-cols-[360px_1fr]">
@@ -8638,7 +11268,7 @@ function AdminView({
   const auditExportCount = filteredAuditEvents.filter((event) => event.exportState !== "not_exported").length;
   const auditChangedFieldCount = filteredAuditEvents.reduce((total, event) => total + event.changedFields.length, 0);
 
-  function submitInvite(event: FormEvent) {
+  async function submitInvite(event: FormEvent) {
     event.preventDefault();
     const email = inviteEmail.trim().toLowerCase();
     if (!email) return;
@@ -8651,17 +11281,22 @@ function AdminView({
       status: "invited",
     };
     setOptimisticInviteMembers((current) => [optimisticMember, ...current.filter((member) => member.email !== email)]);
-    operatingActions?.inviteMember?.({
-      email,
-      name: inviteName.trim() || undefined,
-      role: inviteRole,
-      expiresInDays: Math.max(1, Math.min(30, Math.round(Number(inviteExpiresInDays || "14")))),
-    });
     setInviteMessage(`Invitation queued for ${email}.`);
     setInviteEmail("");
     setInviteName("");
     setInviteRole("technician");
     setInviteExpiresInDays("14");
+    try {
+      await operatingActions?.inviteMember?.({
+        email,
+        name: optimisticMember.name,
+        role: optimisticMember.role,
+        expiresInDays: Math.max(1, Math.min(30, Math.round(Number(inviteExpiresInDays || "14")))),
+      });
+    } catch (error) {
+      setOptimisticInviteMembers((current) => current.filter((member) => member.id !== optimisticMember.id));
+      setInviteMessage(error instanceof Error ? error.message : `Invitation for ${email} could not be sent.`);
+    }
   }
 
   function updateOptimisticInvite(memberId: string, status: "expired" | "revoked") {
@@ -9577,6 +12212,11 @@ function SpecsView({ backendState, workspace }: { backendState: BackendState; wo
 
   return (
     <div className="grid gap-4">
+      <JourneyWorkflowPanel
+        title="Data Export Workflow"
+        description="Tenant export request controls for audit history, reporting snapshots, and operational records."
+        items={specsJourneyWorkflows}
+      />
       <Panel>
         <div className="flex flex-wrap items-start justify-between gap-4">
           <div className="min-w-0">

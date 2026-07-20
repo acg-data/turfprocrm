@@ -1,5 +1,5 @@
-/* Hallmark · pre-emit critique: P5 H4 E4 S5 R4 V4 */
-/* Hallmark · macrostructure: Workbench · tone: modern-minimal operator · anchor hue: green */
+/* Hallmark pre-emit critique: P5 H4 E4 S5 R4 V4 */
+/* Hallmark macrostructure: Workbench, tone: modern-minimal operator, anchor hue: green */
 :root {
   --color-paper: oklch(99% 0.004 95);
   --color-paper-warm: oklch(96% 0.024 93);
@@ -17,6 +17,9 @@
   --color-warn: oklch(68% 0.13 72);
   --color-danger: oklch(58% 0.17 24);
   --color-focus: oklch(58% 0.15 143);
+  --font-fraunces: Georgia, "Times New Roman", serif;
+  --font-geist-sans: Arial, Helvetica, sans-serif;
+  --font-geist-mono: "Courier New", ui-monospace, monospace;
   --font-display: var(--font-fraunces), Georgia, serif;
   --font-body: var(--font-geist-sans), Arial, sans-serif;
   --font-mono: var(--font-geist-mono), ui-monospace, monospace;

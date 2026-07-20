@@ -37,6 +37,12 @@ export const priceFertilizationProgram = mutation({
     equipmentCostCentsPerApplication: v.number(),
     overheadPercent: v.number(),
     targetMarginPercent: v.number(),
+    selectedScenarioKey: v.optional(v.union(v.literal("low"), v.literal("target"), v.literal("premium"))),
+    selectedScenarioLabel: v.optional(v.string()),
+    selectedScenarioTargetMarginPercent: v.optional(v.number()),
+    estimateLineItemName: v.optional(v.string()),
+    estimateLineItemUnit: v.optional(v.string()),
+    estimateLineItemUnitPriceCents: v.optional(v.number()),
   },
   handler: async (ctx, args) => {
     const { user } = await requireMembership(ctx, args.organizationId, "createEstimate");
@@ -95,6 +101,19 @@ export const priceFertilizationProgram = mutation({
       adjustments,
     });
     const now = Date.now();
+    const selectedScenario = args.selectedScenarioKey
+      ? {
+        key: args.selectedScenarioKey,
+        label: args.selectedScenarioLabel ?? args.selectedScenarioKey,
+        targetMarginPercent: args.selectedScenarioTargetMarginPercent ?? args.targetMarginPercent,
+      }
+      : undefined;
+    const estimateLineItemPreview = {
+      name: args.estimateLineItemName ?? `${args.applicationCount}-step fertilization program`,
+      quantity: 1,
+      unit: args.estimateLineItemUnit ?? "season",
+      unitPriceCents: args.estimateLineItemUnitPriceCents ?? output.recommendedPriceCents,
+    };
     const sessionId = await ctx.db.insert("pricingCalculatorSessions", {
       organizationId: args.organizationId,
       propertyId: property._id,
@@ -105,8 +124,13 @@ export const priceFertilizationProgram = mutation({
         materialName: material.name,
         resolvedPriceBookItemId: fallbackPriceBookItem?._id,
         priceBookItemName: fallbackPriceBookItem?.name,
+        selectedScenario,
       },
-      outputs: output,
+      outputs: {
+        ...output,
+        selectedScenario,
+        estimateLineItemPreview,
+      },
       createdByUserId: user._id,
       createdAt: now,
     });
@@ -118,9 +142,9 @@ export const priceFertilizationProgram = mutation({
       entityType: "property",
       entityId: property._id,
       summary: `Calculated fertilization program for ${property.label}`,
-      after: { sessionId, recommendedPriceCents: output.recommendedPriceCents, turfAreaSqFt },
+      after: { sessionId, recommendedPriceCents: output.recommendedPriceCents, turfAreaSqFt, selectedScenario, estimateLineItemPreview },
     });
 
-    return { sessionId, output };
+    return { sessionId, output, selectedScenario, estimateLineItemPreview };
   },
 });

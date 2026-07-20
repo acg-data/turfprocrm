@@ -4,6 +4,10 @@ This is the goal-run source map for building the product into a serious green-in
 
 The executable registry lives in `src/data/customer-journeys.ts`, and the in-app surface lives in `/app` under Journeys. Keep this document human-readable and keep the TypeScript registry test-enforced.
 
+## Implementation Status
+
+As of the current build, the executable registry marks all 100 journeys as verified. Remaining notes in each journey are now production-hardening follow-ups, not uncovered P0/P1/P2 journey gaps. The lower-priority journeys are exposed through module-specific workflow panels across CRM, Lead Ops, Pipeline, Dispatch, Jobs, Field, Costing, Profit, Admin, Onboarding, and Specs.
+
 ## Goal Run Standard
 
 Every journey should eventually have:
@@ -411,6 +415,7 @@ Current registry snapshot, June 22, 2026: 100 total journeys, 58 verified, 12 in
 - Prime-time path: user compares low, target, and premium scenarios, with revenue, gross margin, labor/material/equipment risk, and suggested price.
 - Required data and events: pricing session, estimate lines, job cost assumptions, margin guardrails, and scenario records.
 - Done when: low-margin work is obvious before the quote reaches the customer.
+- Current evidence: shared fertilization scenario helper builds low, target, and premium margins from one cost basis; Costing Margin Scenario Builder compares price, profit, margin, per-application cost, risk notes, and price-book lift; selected scenario saves into Convex pricingCalculatorSessions with estimateLineItemPreview metadata and audit details; Vitest pricing scenario test, Convex backend persistence test, and Playwright desktop/mobile Costing scenario-save test cover it.
 
 ### 47. Estimate needs internal approval
 
@@ -543,6 +548,7 @@ Current registry snapshot, June 22, 2026: 100 total journeys, 58 verified, 12 in
 - Prime-time path: authenticated field view shows only assigned work and hides restricted CRM/admin/finance data.
 - Required data and events: Clerk user, Convex user, membership role, assignments, crew membership, and permission checks.
 - Done when: field users see the right jobs and cannot access unrelated tenant data.
+- Current evidence: Clerk sign-in shell is configured for one-page signin/signup and workspace launch; Field PWA role-scoped mobile session defaults to technician and filters visible visits to assigned crew; production field.getMyVisits filters technicians and crew leads by active crew membership while managers/dispatchers see all visits; start/checklist/submit mutations reject unassigned crew access; backend field-role test proves zero unassigned visits and one assigned visit after crew membership; Playwright desktop/mobile Field flow verifies technician scoped visibility before start/submit.
 
 ### 62. Field tech opens job detail
 
@@ -630,6 +636,7 @@ Current registry snapshot, June 22, 2026: 100 total journeys, 58 verified, 12 in
 - Prime-time path: job workspace shows phases, visits, tasks, budget, actuals, customer/property, timeline, files, comments, issues, and closeout readiness.
 - Required data and events: jobs, phases, visits, tasks, job cost summary, files, photos, activities, comments/notes, and audit timeline.
 - Done when: the job can be managed from one place.
+- Current evidence: Jobs now renders a Job Workspace with phases, budget/revenue/profit metrics, visits, tasks, change orders, closeout/billing state, files/comments, and a consolidated timeline; `demo.getWorkspace` returns `jobPhases`; converted estimates create the three default phases; Playwright verifies the workspace from a real quote-to-job conversion.
 
 ### 72. Project has multiple phases
 
@@ -704,6 +711,7 @@ Current registry snapshot, June 22, 2026: 100 total journeys, 58 verified, 12 in
 - Prime-time path: closeout verifies visit completion, open tasks, costs, invoice readiness, margin, customer notes, files/photos, and final audit event.
 - Required data and events: job status, visits, tasks, job cost summary, invoice readiness, activity, and audit event.
 - Done when: closed jobs are clean for finance, reporting, and future service history.
+- Current evidence: Jobs now has a Closeout + Billing panel, `operating.closeJob` validates blockers, writes `job.closeout` audit/activity events, can generate invoices, and Convex tests verify clean closeout.
 
 ## Revenue, Invoicing, Payments, and Profitability
 
@@ -714,6 +722,7 @@ Current registry snapshot, June 22, 2026: 100 total journeys, 58 verified, 12 in
 - Prime-time path: invoice builder pulls completed work, approved change orders, pricing, taxes, terms, and customer billing contact.
 - Required data and events: customer invoice, job/visit, line items, taxes, terms, billing contact, status, and audit event.
 - Done when: completed work can become an accurate invoice with minimal re-entry.
+- Current evidence: Profit has an Invoice Builder, Jobs closeout can generate invoices, `operating.generateInvoiceFromJob` creates customer invoice rows and `revenue.invoice.generate` audit events, and Convex tests verify invoice creation.
 
 ### 82. Customer pays invoice
 
@@ -722,6 +731,7 @@ Current registry snapshot, June 22, 2026: 100 total journeys, 58 verified, 12 in
 - Prime-time path: payment record captures amount, date, method, reference, invoice allocation, and remaining balance.
 - Required data and events: customer payment, invoice, payment allocation, method, transaction reference, balance, and audit event.
 - Done when: AR and invoice status update from the payment.
+- Current evidence: Profit has Payment Entry, `operating.recordCustomerPayment` writes payment/allocation rows, updates invoice paid status, audits `payment.record`, and Playwright verifies manual payment entry.
 
 ### 83. Partial payment is applied
 
@@ -730,6 +740,7 @@ Current registry snapshot, June 22, 2026: 100 total journeys, 58 verified, 12 in
 - Prime-time path: finance allocates payment across invoices, sees unapplied balance, and AR updates.
 - Required data and events: payment, payment allocations, invoices, balance, customer account, and audit event.
 - Done when: partial payments do not distort revenue or AR.
+- Current evidence: Partial payment is supported by allocation capping, partially paid invoice status, updated collected revenue, and Convex payment tests.
 
 ### 84. Overdue invoice is reviewed
 
@@ -738,6 +749,7 @@ Current registry snapshot, June 22, 2026: 100 total journeys, 58 verified, 12 in
 - Prime-time path: AR dashboard shows aging bucket, customer, amount, last touch, promised payment, risk, and collection task.
 - Required data and events: invoice, due date, status, payment history, activities, tasks, risk flag, and audit event.
 - Done when: overdue money has an owner and next action.
+- Current evidence: `operating.getDemoOperatingDepth` projects AR aging buckets/risk/next action and Profit renders AR Aging Review cards verified by Convex and Playwright checks.
 
 ### 85. Job cost summary recalculates
 
@@ -779,6 +791,7 @@ Current registry snapshot, June 22, 2026: 100 total journeys, 58 verified, 12 in
 - Prime-time path: profile shows lifetime revenue, gross margin, callbacks, payment behavior, service mix, retention risk, and LTV.
 - Required data and events: customer lifecycle snapshot, invoices, payments, job costs, callbacks, activities, and churn signals.
 - Done when: the team knows which customers are profitable and which need action.
+- Current evidence: Profit renders Customer Profitability Profiles backed by lifecycle snapshots, invoices, payments, job-cost summaries, callback counts, AR, churn risk, LTV, service mix, and next action.
 
 ### 90. Monthly P&L proxy is reviewed
 
@@ -858,6 +871,7 @@ Current registry snapshot, June 22, 2026: 100 total journeys, 58 verified, 12 in
 - Prime-time path: record includes applicator, product, rate, quantity, site, target pest, weather, customer, property, date/time, and notes.
 - Required data and events: material application, material, applicator user, weather snapshot, property, visit, customer, and compliance file/export.
 - Done when: the company can produce a clean service/compliance record for regulators or customers.
+- Current evidence: Field now has a Compliance record panel, `operating.generateComplianceRecord` validates material/weather/site data and writes audit evidence, and Convex plus mobile Playwright tests verify generated records.
 
 ### 99. Data retention policy is applied
 

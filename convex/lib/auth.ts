@@ -9,6 +9,7 @@ export const permissionRoles = {
   manageOrganization: ["owner", "admin"],
   manageMembers: ["owner", "admin"],
   manageCatalog: ["owner", "admin", "manager"],
+  manageFinance: ["owner", "admin", "manager"],
   managePipeline: ["owner", "admin", "manager", "sales"],
   createEstimate: ["owner", "admin", "manager", "sales"],
   approveEstimates: ["owner", "admin", "manager"],

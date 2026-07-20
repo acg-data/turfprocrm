@@ -356,6 +356,33 @@ export const upsertServiceCatalogItem = mutation({
   },
 });
 
+export const toggleServiceCatalogItem = mutation({
+  args: {
+    organizationId: v.id("organizations"),
+    itemId: v.id("serviceCatalogItems"),
+  },
+  handler: async (ctx, args) => {
+    const { user } = await requireMembership(ctx, args.organizationId, "manageCatalog");
+    const item = await ctx.db.get(args.itemId);
+    if (!item || item.organizationId !== args.organizationId) {
+      throw new ConvexError({ code: "NOT_FOUND", message: "Catalog item not found." });
+    }
+    const now = Date.now();
+    await ctx.db.patch(args.itemId, { active: !item.active, updatedAt: now });
+    await audit(ctx, {
+      organizationId: args.organizationId,
+      actorUserId: user._id,
+      action: "catalog.toggle",
+      entityType: "service_catalog_item",
+      entityId: args.itemId,
+      summary: `${item.active ? "Deactivated" : "Activated"} service ${item.name}`,
+      before: { active: item.active },
+      after: { active: !item.active },
+    });
+    return { itemId: args.itemId, active: !item.active };
+  },
+});
+
 export const createCrew = mutation({
   args: {
     organizationId: v.id("organizations"),

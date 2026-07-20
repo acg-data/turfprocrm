@@ -1,5 +1,5 @@
 import { describe, expect, it } from "vitest";
-import { activeFertilizationPricingAdjustments, calculateFertilizationProgramPricing } from "@/domain/fertilization-pricing";
+import { activeFertilizationPricingAdjustments, buildFertilizationMarginScenarios, calculateFertilizationProgramPricing } from "@/domain/fertilization-pricing";
 
 describe("fertilization program pricing", () => {
   it("prices a turf program from area, applications, material rate, and target margin", () => {
@@ -58,5 +58,33 @@ describe("fertilization program pricing", () => {
     expect(result.recommendedPriceCents).toBe(188000);
     expect(result.appliedAdjustments.map((adjustment) => adjustment.name)).toEqual(["Commercial complexity", "Fuel surcharge"]);
     expect(result.grossMarginPercent).toBeGreaterThan(50);
+  });
+
+  it("builds low, target, and premium margin scenarios from the same cost basis", () => {
+    const scenarios = buildFertilizationMarginScenarios({
+      turfAreaSqFt: 55000,
+      applicationCount: 6,
+      materialUnitCostCents: 7300,
+      materialRateUnitsPer1000SqFt: 0.008,
+      laborHoursPerApplication: 1.5,
+      laborRateCents: 3200,
+      equipmentCostCentsPerApplication: 2500,
+      overheadPercent: 18,
+      targetMarginPercent: 42,
+      priceBookRateCentsPerSqFt: 1.8,
+      minPriceCents: 62000,
+    });
+
+    expect(scenarios.map((scenario) => scenario.key)).toEqual(["low", "target", "premium"]);
+    expect(scenarios.map((scenario) => scenario.targetMarginPercent)).toEqual([32, 42, 52]);
+    expect(scenarios[0].recommendedPriceCents).toBeLessThan(scenarios[1].recommendedPriceCents);
+    expect(scenarios[2].recommendedPriceCents).toBeGreaterThan(scenarios[1].recommendedPriceCents);
+    expect(scenarios[1].estimateLineItem).toMatchObject({
+      name: "6-step fertilization program",
+      quantity: 1,
+      unit: "season",
+      unitPriceCents: scenarios[1].recommendedPriceCents,
+    });
+    expect(scenarios[1].riskNotes).toContain("Meets the configured owner margin target for this program.");
   });
 });

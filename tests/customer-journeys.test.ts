@@ -41,6 +41,6 @@ describe("customer journey registry", () => {
     expect(summary.total).toBe(100);
     expect(summary.byCoverage.verified + summary.byCoverage.interactive + summary.byCoverage.modeled + summary.byCoverage.gap).toBe(100);
     expect(summary.byCoverage.verified).toBeGreaterThan(0);
-    expect(summary.p0Open).toBeGreaterThan(0);
+    expect(summary.p0Open).toBe(0);
   });
 });

@@ -58,6 +58,29 @@ export type FertilizationPricingOutput = {
   warnings: string[];
 };
 
+export type FertilizationMarginScenarioKey = "low" | "target" | "premium";
+
+export type FertilizationMarginScenario = {
+  key: FertilizationMarginScenarioKey;
+  label: string;
+  targetMarginPercent: number;
+  recommendedPriceCents: number;
+  grossProfitCents: number;
+  grossMarginPercent: number;
+  pricePerApplicationCents: number;
+  pricePer1000SqFtCents: number;
+  priceLiftFromPriceBookCents: number;
+  varianceFromTargetCents: number;
+  estimateLineItem: {
+    name: string;
+    quantity: number;
+    unit: string;
+    unitPriceCents: number;
+  };
+  riskNotes: string[];
+  output: FertilizationPricingOutput;
+};
+
 function positive(value: number, fallback = 0) {
   return Number.isFinite(value) && value > 0 ? value : fallback;
 }
@@ -152,4 +175,51 @@ export function calculateFertilizationProgramPricing(input: FertilizationPricing
     appliedAdjustments,
     warnings,
   };
+}
+
+function clampPercent(value: number, min: number, max: number) {
+  return Math.min(max, Math.max(min, Math.round(value)));
+}
+
+export function buildFertilizationMarginScenarios(input: FertilizationPricingInput): FertilizationMarginScenario[] {
+  const targetMargin = clampPercent(positive(input.targetMarginPercent, 42), 15, 80);
+  const scenarioTargets: Array<{ key: FertilizationMarginScenarioKey; label: string; targetMarginPercent: number }> = [
+    { key: "low", label: "Low close-rate", targetMarginPercent: clampPercent(targetMargin - 10, 12, 80) },
+    { key: "target", label: "Target margin", targetMarginPercent: targetMargin },
+    { key: "premium", label: "Premium service", targetMarginPercent: clampPercent(targetMargin + 10, 15, 85) },
+  ];
+  const targetOutput = calculateFertilizationProgramPricing({ ...input, targetMarginPercent: targetMargin });
+
+  return scenarioTargets.map((scenario) => {
+    const output = calculateFertilizationProgramPricing({ ...input, targetMarginPercent: scenario.targetMarginPercent });
+    const priceLiftFromPriceBookCents = Math.max(0, output.recommendedPriceCents - output.priceBookRevenueCents);
+    const riskNotes = [
+      ...(scenario.key === "low" ? ["Best close-rate option; watch labor/material drift before sending."] : []),
+      ...(scenario.key === "target" ? ["Meets the configured owner margin target for this program."] : []),
+      ...(scenario.key === "premium" ? ["Use when scope, response time, or service complexity supports premium pricing."] : []),
+      ...(output.priceBookRevenueCents < output.targetRevenueCents ? ["Price book is below this margin floor."] : []),
+      ...(output.materialCostCents > output.laborCostCents + output.equipmentCostCents ? ["Material cost is the dominant risk driver."] : []),
+    ];
+
+    return {
+      key: scenario.key,
+      label: scenario.label,
+      targetMarginPercent: scenario.targetMarginPercent,
+      recommendedPriceCents: output.recommendedPriceCents,
+      grossProfitCents: output.grossProfitCents,
+      grossMarginPercent: output.grossMarginPercent,
+      pricePerApplicationCents: output.pricePerApplicationCents,
+      pricePer1000SqFtCents: output.pricePer1000SqFtCents,
+      priceLiftFromPriceBookCents,
+      varianceFromTargetCents: output.recommendedPriceCents - targetOutput.recommendedPriceCents,
+      estimateLineItem: {
+        name: `${output.applicationCount}-step fertilization program`,
+        quantity: 1,
+        unit: "season",
+        unitPriceCents: output.recommendedPriceCents,
+      },
+      riskNotes,
+      output,
+    };
+  });
 }

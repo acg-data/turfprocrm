@@ -219,6 +219,17 @@ export type Job = {
   recurrence?: RecurringServicePlan["frequency"];
 };
 
+export type JobPhase = {
+  id: string;
+  jobId: string;
+  name: string;
+  status: JobStatus;
+  sortOrder: number;
+  startDate?: number;
+  dueDate?: number;
+  completedAt?: number;
+};
+
 export type JobVisit = {
   id: string;
   jobId: string;
@@ -391,8 +402,10 @@ export type Material = {
   id: string;
   name: string;
   unit: string;
-  costCents: number;
+  costCents?: number;
   active: boolean;
+  epaRegistrationNumber?: string;
+  restrictedUse?: boolean;
 };
 
 export type WorkspaceSnapshot = {
@@ -418,6 +431,7 @@ export type WorkspaceSnapshot = {
   pricingRules: PricingRule[];
   crews: Crew[];
   jobs: Job[];
+  jobPhases: JobPhase[];
   visits: JobVisit[];
   recurringServicePlans: RecurringServicePlan[];
   changeOrders: ChangeOrder[];

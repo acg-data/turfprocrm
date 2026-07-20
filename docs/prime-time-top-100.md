@@ -2,6 +2,8 @@
 
 This repo now carries the top-100 SaaS hardening backlog as product data in `src/data/prime-time-roadmap.ts` and renders it in the app under `/app` -> `Prime Time`.
 
+The expanded execution backlog is [World-Class CRM: 500-Item Product and Quality Backlog](./world-class-crm-500-backlog.md). Use the 100-item roadmap for the launch score and the 500-item backlog for detailed implementation, audit, and regression work.
+
 ## Purpose
 
 The board is the operating checklist for turning the current green-industry CRM MVP into a sellable SaaS. It is intentionally broader than feature work: it covers product workflow, lead ops, estimating, dispatch, field, finance, admin, data, integrations, security, reliability, go-to-market, onboarding, billing, and support.
@@ -21,7 +23,7 @@ The launch score in the UI is weighted:
 
 ## Current P0 Blockers
 
-- Stripe checkout and billing operations need Stripe products, prices, webhook signing secret, and production checkout flow.
+- Paddle checkout and billing operations need a Paddle product, recurring price, webhook signing secret, and production checkout flow.
 - Clerk invite flow needs organization/member invitation configuration.
 - Error monitoring needs a production service selection and DSN.
 - Uptime checks need a monitoring target and alert destination.

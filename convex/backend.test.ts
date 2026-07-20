@@ -2,7 +2,7 @@
 
 import { convexTest } from "convex-test";
 import type { TestConvexForDataModelAndIdentity } from "convex-test";
-import { describe, expect, it } from "vitest";
+import { describe, expect, it, vi } from "vitest";
 import { api } from "./_generated/api";
 import type { DataModel, Id } from "./_generated/dataModel";
 import schema from "./schema";
@@ -250,6 +250,67 @@ describe("Convex operating system functions", () => {
     const overview = await owner.query(api.dashboard.getOverview, { organizationId });
     expect(overview.counts.customers).toBe(1);
     expect(overview.wonValueCents).toBe(90000);
+  });
+
+  it("runs operating controls against a real tenant and rejects a non-member", async () => {
+    const t = convexTest(schema, modules);
+    const tenant = await createOperationalTenant(t, "production_operating");
+
+    const before = await tenant.owner.query(api.operating.getDemoOperatingDepth, { organizationId: tenant.organizationId });
+    expect(before?.leadOps.rows.some((row) => row.id === tenant.leadId)).toBe(true);
+
+    await tenant.owner.mutation(api.operating.updateLead, {
+      organizationId: tenant.organizationId,
+      leadId: tenant.leadId,
+      status: "contacted",
+      grade: "a",
+    });
+    await tenant.owner.mutation(api.operating.upsertLeadStatusSetting, {
+      organizationId: tenant.organizationId,
+      status: "follow_up",
+      label: "Follow-up queue",
+      color: "#b45309",
+      sortOrder: 5,
+      terminal: false,
+      active: true,
+    });
+    await tenant.owner.mutation(api.operating.upsertLaborRate, {
+      organizationId: tenant.organizationId,
+      roleName: "Production technician",
+      hourlyCostCents: 3200,
+      billableRateCents: 7200,
+    });
+
+    const invoice = await tenant.owner.mutation(api.operating.generateInvoiceFromJob, {
+      organizationId: tenant.organizationId,
+      jobId: tenant.jobId,
+      status: "sent",
+      dueInDays: 14,
+    });
+    expect(invoice.created).toBe(true);
+    expect(invoice.invoiceId).toBeDefined();
+
+    await tenant.owner.mutation(api.operating.recordCustomerPayment, {
+      organizationId: tenant.organizationId,
+      invoiceId: invoice.invoiceId!,
+      amountCents: 10000,
+      method: "ach",
+      reference: "PROD-TEST-10000",
+    });
+
+    const after = await tenant.owner.query(api.operating.getDemoOperatingDepth, { organizationId: tenant.organizationId });
+    expect(after?.leadOps.rows.find((row) => row.id === tenant.leadId)?.status).toBe("contacted");
+    expect(after?.revenue.payments.some((payment) => payment.reference === "PROD-TEST-10000")).toBe(true);
+    expect(after?.admin.auditEvents.some((event) => event.action === "payment.record" && event.actorName === "Production Operating Owner")).toBe(true);
+
+    const outsider = t.withIdentity(identity("production_operating_outsider"));
+    await expectRejected("non-members cannot run real tenant operating mutations", () =>
+      outsider.mutation(api.operating.updateLead, {
+        organizationId: tenant.organizationId,
+        leadId: tenant.leadId,
+        status: "spam",
+      }),
+    );
   });
 
   it("persists dispatch crew assignment with assignment row and audit trail", async () => {
@@ -680,6 +741,11 @@ describe("Convex operating system functions", () => {
       equipmentCostCentsPerApplication: 2500,
       overheadPercent: 18,
       targetMarginPercent: 42,
+      selectedScenarioKey: "target",
+      selectedScenarioLabel: "Target margin",
+      selectedScenarioTargetMarginPercent: 42,
+      estimateLineItemName: "6-step fertilization program",
+      estimateLineItemUnit: "season",
     });
 
     expect(priced.output.turfAreaSqFt).toBe(52000);
@@ -696,7 +762,14 @@ describe("Convex operating system functions", () => {
     });
     expect(persisted.session?.inputs.kind).toBe("fertilization_program");
     expect(persisted.session?.inputs.propertyAreaId).toBe(propertyAreaId);
+    expect(persisted.session?.inputs.selectedScenario).toMatchObject({ key: "target", label: "Target margin", targetMarginPercent: 42 });
     expect(persisted.session?.outputs.recommendedPriceCents).toBe(priced.output.recommendedPriceCents);
+    expect(persisted.session?.outputs.estimateLineItemPreview).toMatchObject({
+      name: "6-step fertilization program",
+      quantity: 1,
+      unit: "season",
+      unitPriceCents: priced.output.recommendedPriceCents,
+    });
     expect(persisted.audits.some((event) => event.action === "pricing.fertilization.calculate" && event.entityId === lead.propertyId)).toBe(true);
   });
 
@@ -1216,6 +1289,194 @@ describe("Convex operating system functions", () => {
     expect(seeded.integrations.map((integration) => integration.provider)).toEqual(expect.arrayContaining(["google_maps", "csv"]));
     expect(seeded.crewMembers).toHaveLength(1);
     expect(seeded.auditEvents.some((event) => event.action === "organization.provision" && event.entityId === organizationId)).toBe(true);
+  });
+
+  it("can provision tenant-scoped sample data without touching the shared demo workspace", async () => {
+    const t = convexTest(schema, modules);
+    const owner = t.withIdentity(identity("sample_owner"));
+
+    const organizationId = await owner.mutation(api.setup.createOrganization, {
+      name: "Sample Turf Co",
+      timezone: "America/New_York",
+      industryFocus: "both",
+      billingPlan: "free",
+      seedSampleData: true,
+    });
+
+    const workspace = await owner.query(api.workspace.getWorkspace, { organizationId });
+    expect(workspace?.organization.name).toBe("Sample Turf Co");
+    expect(workspace?.customers.map((customer) => customer.name)).toContain("Sample HOA Property");
+    expect(workspace?.leads.map((lead) => lead.title)).toContain("Sample six-step turf program");
+
+    const rows = await t.run(async (ctx) => {
+      const [customers, contacts, properties, leads, auditEvents] = await Promise.all([
+        ctx.db.query("customers").withIndex("by_org_updated", (q) => q.eq("organizationId", organizationId)).collect(),
+        ctx.db.query("contacts").withIndex("by_org", (q) => q.eq("organizationId", organizationId)).collect(),
+        ctx.db.query("properties").withIndex("by_org", (q) => q.eq("organizationId", organizationId)).collect(),
+        ctx.db.query("leads").withIndex("by_org_created", (q) => q.eq("organizationId", organizationId)).collect(),
+        ctx.db.query("auditEvents").withIndex("by_org", (q) => q.eq("organizationId", organizationId)).collect(),
+      ]);
+      return { customers, contacts, properties, leads, auditEvents };
+    });
+
+    expect(rows.customers).toHaveLength(1);
+    expect(rows.contacts).toHaveLength(1);
+    expect(rows.properties).toHaveLength(1);
+    expect(rows.leads).toHaveLength(1);
+    expect(rows.auditEvents.some((event) => event.action === "organization.provision" && event.after?.seedSampleData === true)).toBe(true);
+  });
+
+  it("syncs Stripe subscription and invoice webhook state idempotently", async () => {
+    vi.stubEnv("STRIPE_WEBHOOK_SECRET", "test_webhook_secret");
+    try {
+      const t = convexTest(schema, modules);
+      const owner = t.withIdentity(identity("billing_owner"));
+      const organizationId = await owner.mutation(api.setup.createOrganization, {
+        name: "Billing Turf Co",
+        timezone: "America/New_York",
+        industryFocus: "both",
+        billingPlan: "free",
+      });
+
+      const first = await owner.mutation(api.billing.syncStripeSubscriptionFromWebhook, {
+        webhookSecret: "test_webhook_secret",
+        eventId: "evt_1",
+        eventType: "checkout.session.completed",
+        organizationId,
+        stripeCustomerId: "cus_test_123",
+        stripeSubscriptionId: "sub_test_123",
+        plan: "pro",
+        status: "active",
+        seats: 1,
+        currentPeriodStart: 1_789_000_000_000,
+        currentPeriodEnd: 1_791_592_000_000,
+        invoice: {
+          stripeInvoiceId: "in_test_123",
+          status: "paid",
+          amountDueCents: 9900,
+          amountPaidCents: 9900,
+          paidAt: 1_789_000_100_000,
+        },
+      });
+      const second = await owner.mutation(api.billing.syncStripeSubscriptionFromWebhook, {
+        webhookSecret: "test_webhook_secret",
+        eventId: "evt_1_retry",
+        eventType: "invoice.paid",
+        organizationId,
+        stripeCustomerId: "cus_test_123",
+        stripeSubscriptionId: "sub_test_123",
+        plan: "pro",
+        status: "active",
+        seats: 1,
+        currentPeriodStart: 1_789_000_000_000,
+        currentPeriodEnd: 1_791_592_000_000,
+        invoice: {
+          stripeInvoiceId: "in_test_123",
+          status: "paid",
+          amountDueCents: 9900,
+          amountPaidCents: 9900,
+          paidAt: 1_789_000_100_000,
+        },
+      });
+
+      expect(second.subscriptionId).toBe(first.subscriptionId);
+
+      const billingState = await t.run(async (ctx) => {
+        const [organization, subscriptions, invoices, auditEvents] = await Promise.all([
+          ctx.db.get(organizationId),
+          ctx.db.query("subscriptions").withIndex("by_org", (q) => q.eq("organizationId", organizationId)).collect(),
+          ctx.db.query("invoices").withIndex("by_org", (q) => q.eq("organizationId", organizationId)).collect(),
+          ctx.db.query("auditEvents").withIndex("by_org", (q) => q.eq("organizationId", organizationId)).collect(),
+        ]);
+        return { organization, subscriptions, invoices, auditEvents };
+      });
+
+      expect(billingState.organization?.billingPlan).toBe("pro");
+      expect(billingState.organization?.subscriptionStatus).toBe("active");
+      expect(billingState.subscriptions).toHaveLength(1);
+      expect(billingState.subscriptions[0].stripeCustomerId).toBe("cus_test_123");
+      expect(billingState.subscriptions[0].stripeSubscriptionId).toBe("sub_test_123");
+      expect(billingState.invoices).toHaveLength(1);
+      expect(billingState.invoices[0].stripeInvoiceId).toBe("in_test_123");
+      expect(billingState.invoices[0].amountPaidCents).toBe(9900);
+      expect(billingState.auditEvents.filter((event) => event.action === "billing.stripe_webhook.sync")).toHaveLength(2);
+    } finally {
+      vi.unstubAllEnvs();
+    }
+  });
+
+  it("syncs Paddle subscription and transaction webhook state idempotently", async () => {
+    vi.stubEnv("PADDLE_WEBHOOK_SECRET_KEY", "test_paddle_secret");
+    try {
+      const t = convexTest(schema, modules);
+      const owner = t.withIdentity(identity("paddle_owner"));
+      const organizationId = await owner.mutation(api.setup.createOrganization, {
+        name: "Paddle Turf Co",
+        timezone: "America/New_York",
+        industryFocus: "both",
+        billingPlan: "free",
+      });
+
+      const first = await owner.mutation(api.billing.syncPaddleSubscriptionFromWebhook, {
+        webhookSecret: "test_paddle_secret",
+        eventId: "evt_paddle_1",
+        eventType: "transaction.completed",
+        organizationId,
+        paddleCustomerId: "ctm_01paddlecustomer0000000000",
+        paddleSubscriptionId: "sub_01paddlesubscription000000",
+        paddleTransactionId: "txn_01paddletransaction000000",
+        plan: "pro",
+        status: "active",
+        seats: 1,
+        currentPeriodStart: 1_789_000_000_000,
+        currentPeriodEnd: 1_791_592_000_000,
+        invoice: {
+          paddleTransactionId: "txn_01paddletransaction000000",
+          status: "paid",
+          amountDueCents: 0,
+          amountPaidCents: 9900,
+          paidAt: 1_789_000_100_000,
+        },
+      });
+      const second = await owner.mutation(api.billing.syncPaddleSubscriptionFromWebhook, {
+        webhookSecret: "test_paddle_secret",
+        eventId: "evt_paddle_1_retry",
+        eventType: "subscription.updated",
+        organizationId,
+        paddleCustomerId: "ctm_01paddlecustomer0000000000",
+        paddleSubscriptionId: "sub_01paddlesubscription000000",
+        paddleTransactionId: "txn_01paddletransaction000000",
+        plan: "pro",
+        status: "active",
+        seats: 1,
+        currentPeriodStart: 1_789_000_000_000,
+        currentPeriodEnd: 1_791_592_000_000,
+      });
+
+      expect(second.subscriptionId).toBe(first.subscriptionId);
+
+      const billingState = await t.run(async (ctx) => {
+        const [organization, subscriptions, invoices, auditEvents] = await Promise.all([
+          ctx.db.get(organizationId),
+          ctx.db.query("subscriptions").withIndex("by_org", (q) => q.eq("organizationId", organizationId)).collect(),
+          ctx.db.query("invoices").withIndex("by_org", (q) => q.eq("organizationId", organizationId)).collect(),
+          ctx.db.query("auditEvents").withIndex("by_org", (q) => q.eq("organizationId", organizationId)).collect(),
+        ]);
+        return { organization, subscriptions, invoices, auditEvents };
+      });
+
+      expect(billingState.organization?.billingPlan).toBe("pro");
+      expect(billingState.organization?.subscriptionStatus).toBe("active");
+      expect(billingState.subscriptions).toHaveLength(1);
+      expect(billingState.subscriptions[0].paddleCustomerId).toBe("ctm_01paddlecustomer0000000000");
+      expect(billingState.subscriptions[0].paddleSubscriptionId).toBe("sub_01paddlesubscription000000");
+      expect(billingState.invoices).toHaveLength(1);
+      expect(billingState.invoices[0].paddleTransactionId).toBe("txn_01paddletransaction000000");
+      expect(billingState.invoices[0].amountPaidCents).toBe(9900);
+      expect(billingState.auditEvents.filter((event) => event.action === "billing.paddle_webhook.sync")).toHaveLength(2);
+    } finally {
+      vi.unstubAllEnvs();
+    }
   });
 
   it("creates and updates service catalog items with pricing defaults and audit trail", async () => {
@@ -1938,9 +2199,76 @@ describe("Convex operating system functions", () => {
 
     const invoice = afterTime!.revenue.invoices.find((candidate) => candidate.balanceCents > 0)!;
     const collectedBefore = afterTime!.revenue.collectedCents;
-    await t.mutation(api.operating.recordCustomerPayment, { invoiceId: invoice.id, amountCents: 1000, method: "ach" });
+    await t.mutation(api.operating.recordCustomerPayment, { invoiceId: invoice.id, amountCents: 1000, method: "ach", reference: "TEST-ACH-1000" });
     const afterPayment = await t.query(api.operating.getDemoOperatingDepth, {});
     expect(afterPayment!.revenue.collectedCents).toBeGreaterThan(collectedBefore);
+    expect(afterPayment!.admin.auditEvents.some((event) => event.action === "payment.record" && event.entityType === "customer_payment" && event.module === "Revenue")).toBe(true);
+
+    const billableJobId = await t.run(async (ctx) => {
+      const org = await ctx.db.query("organizations").withIndex("by_slug", (q) => q.eq("slug", "greenline-demo")).unique();
+      const customer = org ? await ctx.db.query("customers").withIndex("by_org", (q) => q.eq("organizationId", org._id)).first() : null;
+      const property = org ? await ctx.db.query("properties").withIndex("by_org", (q) => q.eq("organizationId", org._id)).first() : null;
+      if (!org || !customer) throw new Error("Missing seeded tenant.");
+      const now = Date.now();
+      const newJobId = await ctx.db.insert("jobs", {
+        organizationId: org._id,
+        customerId: customer._id,
+        propertyId: property?._id,
+        title: "Backend verified closeout job",
+        status: "in_progress",
+        priority: "normal",
+        startDate: now - 2 * 60 * 60 * 1000,
+        createdAt: now,
+        updatedAt: now,
+      });
+      await ctx.db.insert("jobVisits", {
+        organizationId: org._id,
+        jobId: newJobId,
+        customerId: customer._id,
+        propertyId: property?._id,
+        scheduledStart: now - 2 * 60 * 60 * 1000,
+        scheduledEnd: now - 60 * 60 * 1000,
+        status: "complete",
+        routeOrder: 9,
+        checklist: [{ id: "done", label: "Verified work completed", isDone: true, completedAt: now - 60 * 60 * 1000 }],
+        completedAt: now - 60 * 60 * 1000,
+        createdAt: now,
+        updatedAt: now,
+      });
+      await ctx.db.insert("timesheetEntries", {
+        organizationId: org._id,
+        jobId: newJobId,
+        status: "approved",
+        roleName: "Technician",
+        startedAt: now - 2 * 60 * 60 * 1000,
+        endedAt: now - 60 * 60 * 1000,
+        hours: 1,
+        hourlyCostCents: 3200,
+        totalCostCents: 3200,
+        createdAt: now,
+        updatedAt: now,
+      });
+      return newJobId;
+    });
+    await t.mutation(api.operating.addTimesheetEntry, { jobId: billableJobId, roleName: "Crew Lead", hours: 1, hourlyCostCents: 3600 });
+    const generatedInvoice = await t.mutation(api.operating.generateInvoiceFromJob, { jobId: billableJobId, status: "sent", dueInDays: 7 });
+    expect(generatedInvoice.created).toBe(true);
+    expect(generatedInvoice.invoiceNumber).toMatch(/^INV-/);
+    const closeout = await t.mutation(api.operating.closeJob, { jobId: billableJobId, generateInvoice: true });
+    expect(closeout.status).toBe("completed");
+    expect(closeout.blockers).toEqual([]);
+    const afterCloseout = await t.query(api.operating.getDemoOperatingDepth, {});
+    expect(afterCloseout!.revenue.invoices.some((candidate) => candidate.id === generatedInvoice.invoiceId && candidate.jobId === billableJobId)).toBe(true);
+    expect(afterCloseout!.revenue.arAging.some((candidate) => candidate.invoiceId === generatedInvoice.invoiceId && candidate.balanceCents > 0)).toBe(true);
+    expect(afterCloseout!.revenue.customerProfitability.some((customer) => customer.invoiceCount > 0 && customer.grossMarginPercent >= 0)).toBe(true);
+    expect(afterCloseout!.admin.auditEvents.some((event) => event.action === "job.closeout" && event.entityId === billableJobId && event.module === "Jobs")).toBe(true);
+    expect(afterCloseout!.admin.auditEvents.some((event) => event.action === "revenue.invoice.generate" && event.entityId === generatedInvoice.invoiceId && event.module === "Revenue")).toBe(true);
+
+    const complianceRecord = afterCloseout!.fieldOps.complianceRecords[0];
+    const generatedCompliance = await t.mutation(api.operating.generateComplianceRecord, { visitId: complianceRecord.visitId });
+    expect(generatedCompliance.recordCount).toBeGreaterThan(0);
+    const afterCompliance = await t.query(api.operating.getDemoOperatingDepth, {});
+    expect(afterCompliance!.admin.auditEvents.some((event) => event.action === "compliance_record.generate" && event.entityId === complianceRecord.visitId && event.module === "Compliance")).toBe(true);
 
     const snapshotCount = afterPayment!.costIntelligence.costSnapshots.length;
     await t.mutation(api.operating.refreshCostIntelligence, {});
