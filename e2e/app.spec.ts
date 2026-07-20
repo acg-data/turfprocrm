@@ -21,8 +21,13 @@ test("marketing front page routes to product pages and the live app", async ({ p
   await page.goto("/");
   await expect(page.getByRole("heading", { name: /The All-in-One CRM Built for Outdoor Professionals/i })).toBeVisible();
   await expect(page.locator("header").getByRole("link", { name: "Get Started" })).toHaveAttribute("href", "/signin");
+  await expect(page.getByRole("link", { name: "Book a Demo" }).first()).toHaveAttribute("href", "/demo");
   await expect(page.getByRole("heading", { name: "Follow a customer from first call to profitable renewal" })).toBeVisible();
   await expect(page.getByRole("link", { name: "Explore Live Sample" })).toHaveAttribute("href", "/app?demo=established");
+  await expect(page.getByRole("link", { name: "Open leads in the live sample" })).toHaveAttribute("href", "/app?demo=established&view=lead_ops");
+
+  await page.goto("/lead-ops");
+  await expect(page.getByRole("link", { name: "Open Lead Ops" })).toHaveAttribute("href", "/app?demo=established&view=lead_ops");
 
   await page.goto("/features");
   await expect(page.getByRole("heading", { name: /Powerful Features/i })).toBeVisible();
@@ -332,7 +337,7 @@ test("dispatch surfaces route confidence and crew risk", async ({ page }) => {
   await expect(page.getByText("Guardrail").first()).toBeVisible();
 });
 
-test("profit and admin expose owner analytics", async ({ page }, testInfo) => {
+test("financials expose owner analytics and settings expose workspace controls", async ({ page }, testInfo) => {
   const inviteEmail = `invite-${testInfo.project.name}-${Date.now()}@example.com`;
   const serviceName = `Playwright pest bundle ${testInfo.project.name}-${Date.now()}`;
   const laborRole = `Playwright Crew Lead ${testInfo.project.name}-${Date.now()}`;
@@ -344,9 +349,9 @@ test("profit and admin expose owner analytics", async ({ page }, testInfo) => {
   await waitForWorkspaceReady(page);
 
   await openAppView(page, "Financials");
-  await expect(page.getByText("Owner Unit Economics")).toBeVisible();
-  await expect(page.getByText("Churn Analysis").first()).toBeVisible();
-  await expect(page.getByText("LTV by Segment").first()).toBeVisible();
+  await expect(page.getByText("Owner Unit Economics")).toHaveCount(0);
+  await expect(page.getByText("Churn Analysis")).toHaveCount(0);
+  await expect(page.getByText("LTV by Segment")).toHaveCount(0);
   await expect(page.getByRole("heading", { name: "P&L Snapshot" })).toBeVisible();
   await expect(page.getByText("Cost Breakdown").first()).toBeVisible();
   await expect(page.getByRole("heading", { name: "Service-Line Profitability" })).toBeVisible();
@@ -363,7 +368,15 @@ test("profit and admin expose owner analytics", async ({ page }, testInfo) => {
   await page.getByRole("button", { name: "Record Payment" }).click();
   await expect(page.getByText("Payment queued for", { exact: false })).toBeVisible();
 
-  await openAppView(page, "Market costs");
+  await openAppView(page, "Retention");
+  await expect(page.getByText("Churn by segment").first()).toBeVisible();
+  await expect(page.getByText("LTV analysis").first()).toBeVisible();
+
+  await openAppView(page, "Cost intelligence");
+  await expect(page.getByRole("heading", { name: "External weather and market signals" })).toBeVisible();
+  await expect(page.getByRole("heading", { name: "Labor Override" })).toHaveCount(0);
+
+  await openAppView(page, "Settings");
   await expect(page.getByRole("heading", { name: "Labor Override" })).toBeVisible();
   await page.getByLabel("Labor rate role").fill(laborRole);
   await page.getByLabel("Labor cost per hour").fill("42");
@@ -384,12 +397,12 @@ test("profit and admin expose owner analytics", async ({ page }, testInfo) => {
   await expect(vendorRow).toContainText(vendorName, { timeout: convexWriteTimeout });
   await expect(vendorRow).toContainText("$58 / bag");
 
-  await openAppView(page, "Settings");
-  await expect(page.getByRole("heading", { name: "Owner chart pack for churn, LTV, P&L, and costs" })).toBeVisible();
+  await expect(page.getByRole("heading", { name: "Tenant settings, permissions, crews, and catalog" })).toBeVisible();
+  await expect(page.getByRole("heading", { name: "Owner chart pack for churn, LTV, P&L, and costs" })).toHaveCount(0);
+  await expect(page.getByRole("heading", { name: "P&L Snapshot" })).toHaveCount(0);
   await expect(page.getByRole("heading", { name: "Tag Taxonomy" })).toBeVisible();
   await expect(page.getByRole("heading", { name: "Lead Quality Thresholds" })).toBeVisible();
   await expect(page.getByRole("heading", { name: "Workflow Status Settings" })).toBeVisible();
-  await expect(page.getByRole("heading", { name: "Customer Segments" })).toBeVisible();
   await expect(page.getByRole("heading", { name: "Service Catalog" })).toBeVisible();
   const workflowStatusRow = page.getByRole("group", { name: "Workflow status follow_up" });
   await page.getByLabel("Workflow status code").selectOption("follow_up");
@@ -502,42 +515,32 @@ test("mobile field screen can complete checklist items", async ({ page }, testIn
   await expect(page.getByText(`Field upsell: ${issueSummary}`).first()).toBeVisible();
 });
 
-test("client onboarding previews a new tenant provisioning flow", async ({ page }, testInfo) => {
-  const runId = `${testInfo.project.name}-${Date.now()}`;
+test("tenant navigation hides platform provisioning and supports module deep links", async ({ page }) => {
   await page.goto("/app");
   await waitForWorkspaceReady(page);
-  await openAppView(page, "Company setup");
+  await expect(page.getByRole("button", { name: "Company setup" })).toHaveCount(0);
 
-  await page.getByLabel("Upload lead import CSV").setInputFiles({
-    name: "sample-leads.csv",
-    mimeType: "text/csv",
-    buffer: Buffer.from(
-      [
-        "Customer,Email,Phone,Street,City,State,Zip,Service,Source",
-        `Import Ready ${runId},ready-${runId}@example.com,,2 Test Street,Foxborough,MA,02035,Lawn,CSV`,
-        `Import Review ${runId},,,3 Test Street,Mansfield,MA,02048,Pest,CSV`,
-        `Import Blocked ${runId},blocked-${runId}@example.com,(508) 555-0103,4 Test Street,Boston,MA,02108,Pest,CSV`,
-      ].join("\n"),
-    ),
-  });
-  await expect(page.getByText("sample-leads.csv", { exact: true })).toBeVisible();
-  await expect(page.getByText(`Row 2 - Import Ready ${runId}`)).toBeVisible();
-  await expect(page.getByText(`Row 4 - Import Blocked ${runId}`)).toBeVisible();
-  await expect(page.getByText("Outside service territory")).toBeVisible();
-  await expect(page.getByText("Import job saved", { exact: false })).toBeVisible({ timeout: convexWriteTimeout });
-  await expect(page.getByRole("button", { name: "Commit Ready Rows" })).toBeEnabled();
-  await page.getByRole("button", { name: "Commit Ready Rows" }).click();
-  await expect(page.getByText("1 rows imported, 1 skipped, 1 failed.")).toBeVisible();
+  await page.goto("/app?demo=established&view=estimates");
+  await expect(page.getByRole("heading", { name: "Estimates", exact: true })).toBeVisible();
+  await expect(page.getByRole("heading", { name: "Estimate workbench" })).toBeVisible();
 
-  await page.getByLabel("Company").fill("Acme Turf and Pest");
-  await page.getByLabel("Owner email").fill("owner@acmeturf.example");
-  await page.getByLabel("Seats").fill("8");
-  await page.getByRole("button", { name: "Create Client Workspace" }).scrollIntoViewIfNeeded();
-  await page.getByRole("button", { name: "Create Client Workspace" }).click();
+  await page.goto("/app?demo=established&view=lead_ops");
+  await expect(page.getByRole("heading", { name: "Leads", exact: true })).toBeVisible();
+  await expect(page.getByRole("heading", { name: "Lead command table" })).toBeVisible();
+  await page.getByRole("button", { name: "Prepare Estimate" }).click();
+  await expect(page.getByRole("heading", { name: "Estimates", exact: true })).toBeVisible();
+  await expect(page.getByRole("heading", { name: "Customer estimate workbench" })).toBeVisible();
+});
 
-  await expect(page.getByText("Acme Turf and Pest")).toBeVisible();
-  await expect(page.getByText("/acme-turf-and-pest - owner@acmeturf.example")).toBeVisible();
-  await expect(page.getByText("Lead statuses and saved views")).toBeVisible();
-  await expect(page.getByRole("heading", { name: "Import QA Preview" })).toBeVisible();
-  await expect(page.getByText("Outside service territory")).toBeVisible();
+test("book a demo submits a simple request form", async ({ page }) => {
+  await page.goto("/demo");
+  await expect(page.getByRole("heading", { name: "Book a Turf Pro CRM demo" })).toBeVisible();
+  await page.getByLabel("Your name").fill("Jordan Green");
+  await page.getByLabel("Company").fill("Greenline Services");
+  await page.getByLabel("Work email").fill("jordan@example.com");
+  await page.getByLabel("Primary business").selectOption({ label: "Multi-service" });
+  await page.getByLabel("Team size").selectOption({ label: "6-20 people" });
+  await page.getByRole("button", { name: "Submit demo request" }).click();
+  await expect(page.getByRole("heading", { name: "Request submitted" })).toBeVisible();
+  await expect(page.getByText("Thanks, Jordan Green.")).toBeVisible();
 });

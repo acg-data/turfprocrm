@@ -24,6 +24,10 @@ cloudflare-env.d.ts
 
 # production
 /build
+/dist/
+
+# local agent workspaces
+/.claude/
 
 # misc
 .DS_Store

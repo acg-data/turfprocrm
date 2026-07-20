@@ -142,6 +142,42 @@ async function expectRejected(name: string, attempt: () => Promise<unknown>) {
 }
 
 describe("Convex operating system functions", () => {
+  it("converts a lead to an estimate idempotently and enforces tenant isolation", async () => {
+    const t = convexTest(schema, modules);
+    const tenantA = await createOperationalTenant(t, "convert_a");
+    const tenantB = await createOperationalTenant(t, "convert_b");
+
+    const first = await tenantA.owner.mutation(api.pipeline.convertLead, {
+      organizationId: tenantA.organizationId,
+      leadId: tenantA.leadId,
+      action: "estimate",
+      valueCents: 125000,
+      serviceLines: ["pest_control"],
+    });
+    const second = await tenantA.owner.mutation(api.pipeline.convertLead, {
+      organizationId: tenantA.organizationId,
+      leadId: tenantA.leadId,
+      action: "estimate",
+      valueCents: 125000,
+      serviceLines: ["pest_control"],
+    });
+
+    expect(first.opportunityId).toBe(tenantA.opportunityId);
+    expect(first.estimateId).toBe(tenantA.estimateId);
+    expect(second.estimateId).toBe(first.estimateId);
+    expect(second.created).toBe(false);
+    const estimateRows = await t.run(async (ctx) => ctx.db.query("estimates").withIndex("by_opportunity", (q) => q.eq("opportunityId", tenantA.opportunityId)).collect());
+    expect(estimateRows).toHaveLength(1);
+
+    await expectRejected("cross-tenant lead conversion", () => tenantB.owner.mutation(api.pipeline.convertLead, {
+      organizationId: tenantB.organizationId,
+      leadId: tenantA.leadId,
+      action: "opportunity",
+      valueCents: 125000,
+      serviceLines: ["pest_control"],
+    }));
+  });
+
   it("creates an organization, lead, opportunity, estimate, job, visit, and audit trail", async () => {
     const t = convexTest(schema, modules);
     const owner = t.withIdentity({

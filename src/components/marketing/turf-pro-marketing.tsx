@@ -396,6 +396,7 @@ export function TurfProLandingPage() {
 }
 
 export function TurfProMarketingPage({ page }: { page: MarketingPage }) {
+  const primaryHref = page.demoView ? `/app?demo=established&view=${page.demoView}` : "/signin";
   return (
     <main className={styles.site}>
       <MarketingNav />
@@ -408,7 +409,7 @@ export function TurfProMarketingPage({ page }: { page: MarketingPage }) {
           <div>
             <p className={styles.lede}>{page.lede}</p>
             <div className={styles.heroActions} style={{ marginTop: "var(--space-lg)" }}>
-              <Link href={route("/signin")} className={styles.button}>{page.primaryAction}</Link>
+              <Link href={route(primaryHref)} className={styles.button}>{page.primaryAction}</Link>
               <Link href={route("/")} className={styles.buttonSoft}>Back home</Link>
             </div>
             <div className={styles.pageProof} style={{ marginTop: "var(--space-lg)" }}>

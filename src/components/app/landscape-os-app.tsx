@@ -6,7 +6,6 @@ import {
   ArrowUp,
   AlertTriangle,
   BarChart3,
-  Bell,
   Briefcase,
   CalendarDays,
   Calculator,
@@ -39,6 +38,7 @@ import {
   SlidersHorizontal,
   Sprout,
   TrendingUp,
+  Truck,
   UserRound,
   UsersRound,
   X,
@@ -86,7 +86,7 @@ import { cn, currency, googleMapsUrl, shortDate, timeRange } from "@/lib/utils";
 import { api } from "../../../convex/_generated/api";
 import type { Id } from "../../../convex/_generated/dataModel";
 
-type View = "dashboard" | "prime_time" | "journeys" | "lead_ops" | "crm" | "pipeline" | "calendar" | "dispatch" | "routing" | "jobs" | "job_analysis" | "job_pricer" | "chemicals" | "field" | "costing" | "profit" | "churn_ltv" | "cost_intel" | "admin" | "onboarding" | "specs";
+type View = "dashboard" | "prime_time" | "journeys" | "lead_ops" | "crm" | "pipeline" | "estimates" | "calendar" | "dispatch" | "routing" | "jobs" | "job_analysis" | "job_pricer" | "chemicals" | "field" | "costing" | "profit" | "churn_ltv" | "cost_intel" | "admin" | "onboarding" | "specs";
 
 type NavigationItem = { id: View; label: string; icon: ReactNode };
 
@@ -101,16 +101,17 @@ const navGroups: Array<{ label: string; items: NavigationItem[] }> = [
       { id: "lead_ops", label: "Leads", icon: <Filter size={18} /> },
       { id: "crm", label: "Customers", icon: <UsersRound size={18} /> },
       { id: "pipeline", label: "Pipeline", icon: <Gauge size={18} /> },
+      { id: "estimates", label: "Estimates", icon: <FileText size={18} /> },
     ],
   },
   {
     label: "Operations",
     items: [
       { id: "calendar", label: "Calendar", icon: <CalendarDays size={18} /> },
-      { id: "dispatch", label: "Dispatch", icon: <CalendarDays size={18} /> },
+      { id: "dispatch", label: "Dispatch", icon: <Truck size={18} /> },
       { id: "routing", label: "Routes", icon: <Route size={18} /> },
       { id: "jobs", label: "Jobs", icon: <ClipboardList size={18} /> },
-      { id: "field", label: "Field", icon: <Route size={18} /> },
+      { id: "field", label: "Field", icon: <MapPin size={18} /> },
       { id: "chemicals", label: "Chemical tracking", icon: <Package size={18} /> },
     ],
   },
@@ -119,18 +120,15 @@ const navGroups: Array<{ label: string; items: NavigationItem[] }> = [
     items: [
       { id: "job_analysis", label: "Job performance", icon: <BarChart3 size={18} /> },
       { id: "job_pricer", label: "Pricing", icon: <Calculator size={18} /> },
-      { id: "costing", label: "Job costing", icon: <Calculator size={18} /> },
-      { id: "profit", label: "Financials", icon: <BarChart3 size={18} /> },
+      { id: "costing", label: "Job costing", icon: <Receipt size={18} /> },
+      { id: "profit", label: "Financials", icon: <DollarSign size={18} /> },
       { id: "churn_ltv", label: "Retention", icon: <TrendingUp size={18} /> },
-      { id: "cost_intel", label: "Market costs", icon: <CloudSun size={18} /> },
+      { id: "cost_intel", label: "Cost intelligence", icon: <CloudSun size={18} /> },
     ],
   },
   {
     label: "Workspace",
-    items: [
-      { id: "admin", label: "Settings", icon: <Settings size={18} /> },
-      { id: "onboarding", label: "Company setup", icon: <Briefcase size={18} /> },
-    ],
+    items: [{ id: "admin", label: "Settings", icon: <Settings size={18} /> }],
   },
 ];
 
@@ -141,6 +139,7 @@ const viewDescriptions: Partial<Record<View, string>> = {
   lead_ops: "Qualify, assign, and follow up with every incoming lead.",
   crm: "Customers, contacts, properties, notes, and service history.",
   pipeline: "Move opportunities from first conversation to approved work.",
+  estimates: "Send, approve, and convert customer estimates into scheduled work.",
   calendar: "See the day clearly and open any scheduled visit.",
   dispatch: "Balance crews, timing, route order, and workload conflicts.",
   routing: "Plan efficient service routes and open stops in the field view.",
@@ -152,7 +151,7 @@ const viewDescriptions: Partial<Record<View, string>> = {
   costing: "Track estimated versus actual cost and margin.",
   profit: "Monitor revenue, collections, margin, and operating performance.",
   churn_ltv: "Understand retention, churn, tenure, and customer lifetime value.",
-  cost_intel: "Keep labor, materials, weather, and market assumptions current.",
+  cost_intel: "Review weather, wage, commodity, and operating cost signals.",
   admin: "Manage people, permissions, services, rates, and company controls.",
   onboarding: "Configure a workspace and prepare data for launch.",
 };
@@ -856,6 +855,19 @@ type ImportPreviewUiRow = {
 type OperatingActions = {
   bootstrap?: () => void;
   updateLead?: (leadId: string, fields: { status?: string; grade?: string; hidden?: boolean }) => void;
+  convertLead?: (input: {
+    leadId: string;
+    action: "opportunity" | "estimate" | "disqualify";
+    valueCents: number;
+    serviceLines: ServiceCategory[];
+  }) => Promise<{
+    action: "opportunity" | "estimate" | "disqualify";
+    leadId: string;
+    opportunityId?: string;
+    estimateId?: string;
+    estimateNumber?: string;
+    created: boolean;
+  }>;
   bulkUpdateLeads?: (leadIds: string[], status: string) => void;
   createLeadImportPreview?: (input: { fileName?: string; csvText: string }) => Promise<{ importJobId: string; rows: Array<ImportPreviewUiRow & { id: string }> }>;
   commitLeadImportRows?: (importJobId: string) => Promise<{ imported: number; skipped: number; failed: number }>;
@@ -2090,7 +2102,7 @@ function TextButton({
 }
 
 function Panel({ children, className }: { children: ReactNode; className?: string }) {
-  return <section className={cn("rounded-lg border border-stone-200 bg-white p-4 shadow-sm", className)}>{children}</section>;
+  return <section className={cn("min-w-0 rounded-lg border border-stone-200 bg-white p-4 shadow-sm", className)}>{children}</section>;
 }
 
 function Field({ label, children }: { label: string; children: ReactNode }) {
@@ -2171,10 +2183,10 @@ function inputClass() {
   return "block h-10 w-full rounded-md border border-stone-200 bg-white px-3 text-sm text-stone-900 outline-none transition placeholder:text-stone-400 focus:border-[#315a4d] focus:ring-2 focus:ring-[#315a4d]/15";
 }
 
-export function LandscapeOsApp({ initialDemoPersona = null }: { initialDemoPersona?: DemoPersona | null }) {
+export function LandscapeOsApp({ initialDemoPersona = null, initialView }: { initialDemoPersona?: DemoPersona | null; initialView?: string | null }) {
   const [localDemoPersona, setLocalDemoPersona] = useState<DemoPersona>(initialDemoPersona ?? "established");
   if (process.env.NEXT_PUBLIC_CONVEX_URL) {
-    return <LandscapeOsLiveApp initialDemoPersona={initialDemoPersona} />;
+    return <LandscapeOsLiveApp initialDemoPersona={initialDemoPersona} initialView={initialView} />;
   }
 
   return (
@@ -2182,6 +2194,7 @@ export function LandscapeOsApp({ initialDemoPersona = null }: { initialDemoPerso
       <DemoPersonaSwitcher persona={localDemoPersona} onSelect={setLocalDemoPersona} />
       <LandscapeOsWorkspace
         key={localDemoPersona}
+        initialView={initialView}
         initialWorkspace={getDemoWorkspaceForPersona(localDemoPersona)}
         backendState={{
           mode: "local",
@@ -2200,7 +2213,7 @@ export function LandscapeOsApp({ initialDemoPersona = null }: { initialDemoPerso
   );
 }
 
-function LandscapeOsLiveApp({ initialDemoPersona }: { initialDemoPersona?: DemoPersona | null }) {
+function LandscapeOsLiveApp({ initialDemoPersona, initialView }: { initialDemoPersona?: DemoPersona | null; initialView?: string | null }) {
   type OrganizationRow = {
     organization: {
       _id: Id<"organizations">;
@@ -2258,6 +2271,7 @@ function LandscapeOsLiveApp({ initialDemoPersona }: { initialDemoPersona?: DemoP
   const convertProductionEstimateToJobMutation = useMutation(api.estimates.convertToJob);
   const advanceOpportunityMutation = useMutation(api.demo.advanceOpportunity);
   const advanceProductionOpportunityMutation = useMutation(api.pipeline.advanceOpportunity);
+  const convertProductionLeadMutation = useMutation(api.pipeline.convertLead);
   const assignVisitMutation = useMutation(api.demo.assignVisit);
   const assignProductionVisitMutation = useMutation(api.dispatch.assignVisit);
   const reorderVisitMutation = useMutation(api.demo.reorderVisit);
@@ -2822,6 +2836,21 @@ function LandscapeOsLiveApp({ initialDemoPersona }: { initialDemoPersona?: DemoP
           hidden: fields.hidden,
         }).catch((error) => logConvexWriteFailure("updateLead", error));
       },
+      convertLead: async (input) => {
+        if (!activeOrganizationId) throw new Error("Select a production workspace before converting a lead.");
+        try {
+          return await convertProductionLeadMutation({
+            organizationId: activeOrganizationId as Id<"organizations">,
+            leadId: input.leadId as Id<"leads">,
+            action: input.action,
+            valueCents: input.valueCents,
+            serviceLines: input.serviceLines,
+          });
+        } catch (error) {
+          logConvexWriteFailure("convertLead", error);
+          throw error;
+        }
+      },
       bulkUpdateLeads: (leadIds, status) => {
         void bulkUpdateLeadsMutation({ organizationId: activeOrganizationId as Id<"organizations"> | undefined, leadIds: leadIds as Array<Id<"leads">>, status: status as Parameters<typeof bulkUpdateLeadsMutation>[0]["status"] }).catch((error) => logConvexWriteFailure("bulkUpdateLeads", error));
       },
@@ -2990,6 +3019,7 @@ function LandscapeOsLiveApp({ initialDemoPersona }: { initialDemoPersona?: DemoP
       bootstrapOperatingDepth,
       bulkUpdateLeadsMutation,
       commitLeadImportRowsMutation,
+      convertProductionLeadMutation,
       createLeadImportPreviewMutation,
       decideApprovalRequestMutation,
       decideProductionApprovalMutation,
@@ -3097,6 +3127,7 @@ function LandscapeOsLiveApp({ initialDemoPersona }: { initialDemoPersona?: DemoP
         <DemoPersonaSwitcher persona={demoPersona} onSelect={setDemoPersona} />
         <LandscapeOsWorkspace
           key={demoPersona}
+          initialView={initialView}
           initialWorkspace={activeWorkspace ?? getDemoWorkspaceForPersona(demoPersona)}
           backendState={backendState}
         />
@@ -3120,6 +3151,7 @@ function LandscapeOsLiveApp({ initialDemoPersona }: { initialDemoPersona?: DemoP
         }}
       />
       <LandscapeOsWorkspace
+        initialView={initialView}
         initialWorkspace={activeWorkspace ?? demoWorkspace}
         backendState={backendState}
         // Keep the demo backed by Convex too so audit history and workflow writes are real,
@@ -3277,12 +3309,14 @@ function TenantSwitcher({
 
 function LandscapeOsWorkspace({
   initialWorkspace,
+  initialView,
   backendState,
   liveActions,
   operatingDepth,
   operatingActions,
 }: {
   initialWorkspace: WorkspaceSnapshot;
+  initialView?: string | null;
   backendState: BackendState;
   liveActions?: LiveActions;
   operatingDepth?: OperatingDepth;
@@ -3290,10 +3324,14 @@ function LandscapeOsWorkspace({
 }) {
   const normalizedInitialWorkspace = useMemo(() => normalizeWorkspaceSnapshot(initialWorkspace), [initialWorkspace]);
   const [workspace, setWorkspace] = useState<WorkspaceSnapshot>(normalizedInitialWorkspace);
-  const [view, setView] = useState<View>("dashboard");
+  const [view, setView] = useState<View>(() => navItems.some((item) => item.id === initialView) ? initialView as View : "dashboard");
   const [mobileNavOpen, setMobileNavOpen] = useState(false);
   const [globalSearch, setGlobalSearch] = useState("");
   const [customerSearch, setCustomerSearch] = useState("");
+
+  useEffect(() => {
+    window.scrollTo({ top: 0, left: 0, behavior: "auto" });
+  }, [view]);
   const [selectedCustomerId, setSelectedCustomerId] = useState(normalizedInitialWorkspace.customers[0]?.id ?? "");
   const [selectedJobId, setSelectedJobId] = useState(normalizedInitialWorkspace.jobs[0]?.id ?? "");
   const [selectedVisitId, setSelectedVisitId] = useState(normalizedInitialWorkspace.visits[0]?.id ?? "");
@@ -3472,6 +3510,82 @@ function LandscapeOsWorkspace({
           qualityScore: fields.grade ? ({ a: 92, b: 78, c: 64, d: 48, f: 20 }[fields.grade] ?? lead.qualityScore) : lead.qualityScore,
         } : lead),
       }));
+    },
+    convertLead: async ({ leadId, action, valueCents, serviceLines }) => {
+      const current = workspaceRef.current;
+      const lead = current.leads.find((candidate) => candidate.id === leadId);
+      if (!lead) throw new Error("Lead not found.");
+
+      if (action === "disqualify") {
+        setWorkspace((snapshot) => ({ ...snapshot, leads: snapshot.leads.map((candidate) => candidate.id === leadId ? { ...candidate, status: "disqualified" } : candidate) }));
+        appendLocalAudit({ action: "lead.disqualify", summary: `Disqualified ${lead.title}`, entityType: "lead", entityId: leadId, changedFields: ["status"] });
+        return { action, leadId, created: false };
+      }
+
+      const existingOpportunity = current.opportunities.find((candidate) => candidate.leadId === leadId);
+      const opportunityId = existingOpportunity?.id ?? newId("opp");
+      const nextValueCents = Math.max(existingOpportunity?.valueCents ?? 0, valueCents, 10000);
+      const nextServiceLines = existingOpportunity?.serviceLines.length ? existingOpportunity.serviceLines : serviceLines.length ? serviceLines : ["maintenance" as ServiceCategory];
+      const opportunity = existingOpportunity
+        ? {
+            ...existingOpportunity,
+            stage: action === "estimate" && ["new", "qualified"].includes(existingOpportunity.stage) ? "estimating" as const : existingOpportunity.stage,
+            valueCents: nextValueCents,
+            serviceLines: nextServiceLines,
+            updatedAt: now(),
+          }
+        : {
+            id: opportunityId,
+            leadId,
+            customerId: lead.customerId,
+            propertyId: lead.propertyId,
+            title: lead.title,
+            stage: action === "estimate" ? "estimating" as const : "qualified" as const,
+            valueCents: nextValueCents,
+            closeProbability: action === "estimate" ? 45 : 30,
+            expectedCloseDate: now() + 14 * 24 * 60 * 60 * 1000,
+            ownerId: lead.ownerId,
+            serviceLines: nextServiceLines,
+            updatedAt: now(),
+          };
+
+      const existingEstimate = action === "estimate" ? current.estimates.find((candidate) => candidate.opportunityId === opportunityId) : undefined;
+      const estimateId = existingEstimate?.id ?? (action === "estimate" ? newId("estimate") : undefined);
+      const estimateNumber = existingEstimate?.estimateNumber ?? (estimateId ? `EST-${String(Date.now()).slice(-6)}` : undefined);
+
+      setWorkspace((snapshot) => ({
+        ...snapshot,
+        leads: snapshot.leads.map((candidate) => candidate.id === leadId ? { ...candidate, status: "contacted" } : candidate),
+        opportunities: existingOpportunity
+          ? snapshot.opportunities.map((candidate) => candidate.id === opportunityId ? opportunity : candidate)
+          : [opportunity, ...snapshot.opportunities],
+        estimates: action === "estimate" && !existingEstimate && estimateId && estimateNumber
+          ? [{
+              id: estimateId,
+              opportunityId,
+              customerId: lead.customerId,
+              propertyId: lead.propertyId,
+              estimateNumber,
+              status: "draft",
+              approvalStatus: "not_required",
+              subtotalCents: nextValueCents,
+              discountCents: 0,
+              taxCents: 0,
+              totalCents: nextValueCents,
+              expiresAt: now() + 30 * 24 * 60 * 60 * 1000,
+              terms: "Pricing is valid for 30 days and subject to final site verification.",
+            }, ...snapshot.estimates]
+          : snapshot.estimates,
+      }));
+
+      appendLocalAudit({
+        action: action === "estimate" ? "lead.convert_estimate" : "lead.convert_opportunity",
+        summary: `${existingOpportunity ? "Opened" : "Created"} ${action} for ${lead.title}`,
+        entityType: action === "estimate" ? "estimate" : "opportunity",
+        entityId: estimateId ?? opportunityId,
+        changedFields: action === "estimate" ? ["status", "opportunityId", "estimateId"] : ["status", "opportunityId"],
+      });
+      return { action, leadId, opportunityId, estimateId, estimateNumber, created: !existingOpportunity || (action === "estimate" && !existingEstimate) };
     },
     bulkUpdateLeads: (leadIds, status) => {
       const selected = new Set(leadIds);
@@ -4991,9 +5105,6 @@ function LandscapeOsWorkspace({
                 </div>
               </div>
               <div className="flex shrink-0 items-center gap-2">
-                <IconButton title="Notifications">
-                  <Bell size={18} />
-                </IconButton>
                 {authConfigured ? (
                   <>
                     <Show when="signed-out">
@@ -5060,7 +5171,7 @@ function LandscapeOsWorkspace({
             )}
             {view === "prime_time" && <PrimeTimeView />}
             {view === "journeys" && <JourneyAuditView />}
-            {view === "lead_ops" && <LeadOpsView operatingDepth={effectiveOperatingDepth} operatingActions={effectiveOperatingActions} />}
+            {view === "lead_ops" && <LeadOpsView operatingDepth={effectiveOperatingDepth} operatingActions={effectiveOperatingActions} setView={setView} />}
             {view === "crm" && (
               <CrmView
                 workspace={workspace}
@@ -5082,6 +5193,7 @@ function LandscapeOsWorkspace({
               />
             )}
             {view === "pipeline" && <PipelineView workspace={workspace} customersById={customersById} moveOpportunity={moveOpportunity} createQuoteFromOpportunity={createQuoteFromOpportunity} sendQuoteToCustomer={sendQuoteToCustomer} acceptQuoteFromCustomer={acceptQuoteFromCustomer} convertAcceptedQuoteToJob={convertAcceptedQuoteToJob} openJob={(jobId) => { setSelectedJobId(jobId); setView("jobs"); }} />}
+            {view === "estimates" && <EstimatesView workspace={workspace} customersById={customersById} sendQuoteToCustomer={sendQuoteToCustomer} acceptQuoteFromCustomer={acceptQuoteFromCustomer} convertAcceptedQuoteToJob={convertAcceptedQuoteToJob} openJob={(jobId) => { setSelectedJobId(jobId); setView("jobs"); }} />}
             {view === "calendar" && (
               <CalendarDayView
                 workspace={workspace}
@@ -5583,7 +5695,7 @@ function DashboardView({
     { id: "overdue-tasks", title: `${dashboard.overdueTasks.length} overdue ${dashboard.overdueTasks.length === 1 ? "task" : "tasks"}`, detail: "Close the loop on customer and production commitments.", count: dashboard.overdueTasks.length, view: "jobs" as View, lenses: ["owner", "operations", "field"], urgent: true },
     { id: "stale-opportunities", title: `${staleOpportunities.length} sales ${staleOpportunities.length === 1 ? "follow-up" : "follow-ups"} due`, detail: "Advance, reschedule, or close opportunities that need a next step.", count: staleOpportunities.length, view: "pipeline" as View, lenses: ["owner", "sales"] },
     { id: "unassigned-visits", title: `${unassignedVisits.length} unassigned ${unassignedVisits.length === 1 ? "visit" : "visits"}`, detail: "Assign a crew before the route is released to the field.", count: unassignedVisits.length, view: "dispatch" as View, lenses: ["owner", "operations"] },
-    { id: "open-estimates", title: `${dashboard.openEstimates.length} open ${dashboard.openEstimates.length === 1 ? "estimate" : "estimates"}`, detail: "Review aging quotes and capture the next customer decision.", count: dashboard.openEstimates.length, view: "pipeline" as View, lenses: ["owner", "sales"] },
+    { id: "open-estimates", title: `${dashboard.openEstimates.length} open ${dashboard.openEstimates.length === 1 ? "estimate" : "estimates"}`, detail: "Review aging quotes and capture the next customer decision.", count: dashboard.openEstimates.length, view: "estimates" as View, lenses: ["owner", "sales"] },
   ].filter((item) => item.lenses.includes(dashboardLens) && item.count > 0);
 
   return (
@@ -5591,7 +5703,7 @@ function DashboardView({
       <div className="grid gap-4 md:grid-cols-2 xl:grid-cols-4">
         <Metric icon={<DollarSign size={18} />} label="Open pipeline" value={currency(dashboard.pipelineValue)} detail="Review pipeline" onClick={() => setView("pipeline")} />
         <Metric icon={<Route size={18} />} label="Today's visits" value={String(dashboard.todayVisits.length)} detail="Open today's calendar" onClick={() => setView("calendar")} />
-        <Metric icon={<FileText size={18} />} label="Open estimates" value={String(dashboard.openEstimates.length)} detail="Review estimates" onClick={() => setView("pipeline")} />
+        <Metric icon={<FileText size={18} />} label="Open estimates" value={String(dashboard.openEstimates.length)} detail="Review estimates" onClick={() => setView("estimates")} />
         <Metric icon={<ClipboardCheck size={18} />} label="Overdue tasks" value={String(dashboard.overdueTasks.length)} detail="Review job tasks" onClick={() => setView("jobs")} tone={dashboard.overdueTasks.length ? "danger" : "success"} />
       </div>
 
@@ -5602,7 +5714,8 @@ function DashboardView({
             <p className="mt-1 text-sm text-stone-500">Start the next customer, schedule, dispatch, or pricing action.</p>
           </div>
           <div className="flex flex-wrap gap-2">
-            <TextButton icon={<Plus size={16} />} onClick={() => setView("crm")}>Add Lead</TextButton>
+            <TextButton icon={<Plus size={16} />} onClick={() => setView("crm")}>New Customer</TextButton>
+            <TextButton variant="secondary" icon={<Filter size={16} />} onClick={() => setView("lead_ops")}>Work Leads</TextButton>
             <TextButton variant="secondary" icon={<CalendarDays size={16} />} onClick={() => setView("calendar")}>Day Calendar</TextButton>
             <TextButton variant="secondary" icon={<Route size={16} />} onClick={() => setView("dispatch")}>Dispatch</TextButton>
             <TextButton variant="secondary" icon={<Calculator size={16} />} onClick={() => setView("job_pricer")}>Build Price</TextButton>
@@ -5625,7 +5738,7 @@ function DashboardView({
                   <CalendarDays size={22} className="mx-auto text-stone-400" />
                   <div className="mt-3 text-sm font-semibold">No visits scheduled today</div>
                   <p className="mt-1 max-w-md text-sm text-stone-500">Create a lead, approve an estimate, and schedule the first visit to build the route board.</p>
-                  <TextButton className="mt-4" variant="secondary" icon={<Plus size={15} />} onClick={() => setView("crm")}>Add the first lead</TextButton>
+                  <TextButton className="mt-4" variant="secondary" icon={<Plus size={15} />} onClick={() => setView("crm")}>Create First Customer</TextButton>
                 </div>
               </div>
             ) : dashboard.todayVisits.map((visit) => {
@@ -6428,7 +6541,7 @@ function Metric({ icon = <Gauge size={18} />, label, value, tone = "neutral", de
         <div
           className={cn(
             "grid h-10 w-10 place-items-center rounded-md",
-            tone === "danger" ? "bg-rose-50 text-rose-700" : tone === "success" ? "bg-emerald-50 text-emerald-700" : "bg-[#e8efe8] text-[#224036]",
+            tone === "danger" ? "bg-rose-50 text-rose-700" : tone === "warning" ? "bg-amber-50 text-amber-700" : tone === "success" ? "bg-emerald-50 text-emerald-700" : "bg-[#e8efe8] text-[#224036]",
           )}
         >
           {icon}
@@ -7221,6 +7334,139 @@ function CrmView({
             </div>
           </form>
         </Panel>
+      </div>
+    </div>
+  );
+}
+
+function EstimatesView({
+  workspace,
+  customersById,
+  sendQuoteToCustomer,
+  acceptQuoteFromCustomer,
+  convertAcceptedQuoteToJob,
+  openJob,
+}: {
+  workspace: WorkspaceSnapshot;
+  customersById: Map<string, WorkspaceSnapshot["customers"][number]>;
+  sendQuoteToCustomer: (estimateId: string) => Promise<{ estimateId: string; estimateNumber: string; sentAt: number; expiresAt: number }>;
+  acceptQuoteFromCustomer: (input: {
+    estimateId: string;
+    acceptedByName?: string;
+    acceptedByEmail?: string;
+    acceptanceSource?: "customer_portal" | "email" | "verbal" | "office";
+    acceptanceNote?: string;
+  }) => Promise<{ estimateId: string; estimateNumber: string; acceptedAt: number }>;
+  convertAcceptedQuoteToJob: (input: {
+    estimateId: string;
+    scheduledStart?: number;
+    scheduledEnd?: number;
+    crewId?: string;
+  }) => Promise<{ estimateId: string; estimateNumber: string; jobId: string; visitId: string; jobTitle: string }>;
+  openJob: (jobId: string) => void;
+}) {
+  const [search, setSearch] = useState("");
+  const [statusFilter, setStatusFilter] = useState("all");
+  const [messages, setMessages] = useState<Record<string, { state: "pending" | "success" | "error"; message: string }>>({});
+  const primaryContactByCustomerId = new Map(workspace.contacts.filter((contact) => contact.isPrimary).map((contact) => [contact.customerId, contact]));
+  const nowMs = now();
+  const estimates = [...workspace.estimates]
+    .filter((estimate) => {
+      const customer = customersById.get(estimate.customerId);
+      const normalized = search.trim().toLowerCase();
+      if (statusFilter !== "all" && estimate.status !== statusFilter) return false;
+      return !normalized || [estimate.estimateNumber, customer?.name].some((value) => value?.toLowerCase().includes(normalized));
+    })
+    .sort((left, right) => (right.sentAt ?? right.acceptedAt ?? 0) - (left.sentAt ?? left.acceptedAt ?? 0));
+  const openEstimates = workspace.estimates.filter((estimate) => ["draft", "sent"].includes(estimate.status));
+  const expiringSoon = workspace.estimates.filter((estimate) => estimate.status === "sent" && estimate.expiresAt && estimate.expiresAt >= nowMs && estimate.expiresAt <= nowMs + 7 * 24 * 60 * 60 * 1000);
+
+  async function runEstimateAction(estimateId: string, action: () => Promise<unknown>, success: string) {
+    setMessages((current) => ({ ...current, [estimateId]: { state: "pending", message: "Saving estimate workflow..." } }));
+    try {
+      await action();
+      setMessages((current) => ({ ...current, [estimateId]: { state: "success", message: success } }));
+    } catch (error) {
+      setMessages((current) => ({ ...current, [estimateId]: { state: "error", message: error instanceof Error ? error.message : "Estimate action could not be completed." } }));
+    }
+  }
+
+  return (
+    <div className="grid gap-4">
+      <Panel>
+        <div className="flex flex-wrap items-start justify-between gap-4">
+          <div>
+            <div className="flex items-center gap-2 text-sm font-semibold text-[#224036]"><FileText size={16} /> Estimating</div>
+            <h2 className="mt-2 text-2xl font-bold tracking-normal">Customer estimate workbench</h2>
+            <p className="mt-2 max-w-2xl text-sm text-stone-500">Review drafts, send quotes, capture approval, and convert accepted scope into an operations job.</p>
+          </div>
+          <div className="grid grid-cols-2 gap-2 sm:grid-cols-4">
+            <Metric label="Open" value={openEstimates.length} />
+            <Metric label="Draft" value={workspace.estimates.filter((estimate) => estimate.status === "draft").length} />
+            <Metric label="Awaiting decision" value={workspace.estimates.filter((estimate) => estimate.status === "sent").length} tone="warning" />
+            <Metric label="Expiring soon" value={expiringSoon.length} tone={expiringSoon.length ? "warning" : "success"} />
+          </div>
+        </div>
+      </Panel>
+
+      <Panel>
+        <div className="grid gap-3 md:grid-cols-[1fr_220px]">
+          <div className="relative">
+            <Search size={16} className="pointer-events-none absolute left-3 top-3 text-stone-400" />
+            <input aria-label="Search estimates" className={cn(inputClass(), "pl-9")} value={search} onChange={(event) => setSearch(event.target.value)} placeholder="Estimate number or customer" />
+          </div>
+          <select aria-label="Estimate status filter" className={inputClass()} value={statusFilter} onChange={(event) => setStatusFilter(event.target.value)}>
+            <option value="all">All statuses</option>
+            <option value="draft">Draft</option>
+            <option value="sent">Sent</option>
+            <option value="accepted">Accepted</option>
+            <option value="declined">Declined</option>
+            <option value="expired">Expired</option>
+          </select>
+        </div>
+      </Panel>
+
+      <div className="grid gap-3">
+        {estimates.map((estimate) => {
+          const customer = customersById.get(estimate.customerId);
+          const contact = primaryContactByCustomerId.get(estimate.customerId);
+          const linkedJob = workspace.jobs.find((job) => job.estimateId === estimate.id);
+          const message = messages[estimate.id];
+          const sendBlocked = estimate.approvalStatus === "pending" || estimate.approvalStatus === "rejected";
+          return (
+            <Panel key={estimate.id} className="p-0 overflow-hidden">
+              <div className="grid gap-4 p-4 lg:grid-cols-[minmax(0,1fr)_auto] lg:items-center">
+                <div className="min-w-0">
+                  <div className="flex flex-wrap items-center gap-2">
+                    <h3 className="font-bold">{estimate.estimateNumber}</h3>
+                    <Badge tone={statusTone(estimate.status)}>{formatStatus(estimate.status)}</Badge>
+                    {estimate.approvalStatus && estimate.approvalStatus !== "not_required" ? <Badge tone={estimate.approvalStatus === "approved" ? "success" : estimate.approvalStatus === "rejected" ? "danger" : "warning"}>{formatStatus(estimate.approvalStatus)} approval</Badge> : null}
+                  </div>
+                  <div className="mt-1 text-sm text-stone-500">{customer?.name ?? "Unknown customer"}</div>
+                  <div className="mt-3 grid gap-2 text-sm sm:grid-cols-3">
+                    <div><div className="font-bold">{currency(estimate.totalCents)}</div><div className="text-xs text-stone-500">Estimate total</div></div>
+                    <div><div className="font-bold">{estimate.sentAt ? shortDate(estimate.sentAt) : "Not sent"}</div><div className="text-xs text-stone-500">Sent</div></div>
+                    <div><div className="font-bold">{estimate.expiresAt ? shortDate(estimate.expiresAt) : "Not set"}</div><div className="text-xs text-stone-500">Expires</div></div>
+                  </div>
+                </div>
+                <div className="flex flex-wrap gap-2 lg:justify-end">
+                  {estimate.status === "draft" ? (
+                    <TextButton icon={<Send size={15} />} disabled={sendBlocked || message?.state === "pending"} onClick={() => void runEstimateAction(estimate.id, () => sendQuoteToCustomer(estimate.id), `${estimate.estimateNumber} sent to the customer.`)}>Send Estimate</TextButton>
+                  ) : null}
+                  {estimate.status === "sent" ? (
+                    <TextButton icon={<Check size={15} />} disabled={message?.state === "pending"} onClick={() => void runEstimateAction(estimate.id, () => acceptQuoteFromCustomer({ estimateId: estimate.id, acceptedByName: contact?.name ?? customer?.name, acceptedByEmail: contact?.email ?? customer?.email, acceptanceSource: "office", acceptanceNote: "Approval captured from the estimate workbench." }), `${estimate.estimateNumber} approved.`)}>Capture Approval</TextButton>
+                  ) : null}
+                  {estimate.status === "accepted" && !linkedJob ? (
+                    <TextButton icon={<ArrowRight size={15} />} disabled={message?.state === "pending"} onClick={() => void runEstimateAction(estimate.id, () => convertAcceptedQuoteToJob({ estimateId: estimate.id }), `${estimate.estimateNumber} converted to a job.`)}>Convert to Job</TextButton>
+                  ) : null}
+                  {linkedJob ? <TextButton variant="secondary" icon={<ClipboardList size={15} />} onClick={() => openJob(linkedJob.id)}>Open Job</TextButton> : null}
+                </div>
+              </div>
+              {message ? <div className={cn("border-t px-4 py-2 text-sm font-semibold", message.state === "error" ? "border-rose-200 bg-rose-50 text-rose-800" : message.state === "pending" ? "border-amber-200 bg-amber-50 text-amber-800" : "border-emerald-200 bg-emerald-50 text-emerald-800")}>{message.message}</div> : null}
+            </Panel>
+          );
+        })}
+        {estimates.length === 0 ? <Panel><div className="py-8 text-center text-sm text-stone-500">No estimates match this view.</div></Panel> : null}
       </div>
     </div>
   );
@@ -9203,7 +9449,7 @@ function FieldView({
   );
 }
 
-function LeadOpsView({ operatingDepth, operatingActions }: { operatingDepth: OperatingDepth; operatingActions?: OperatingActions }) {
+function LeadOpsView({ operatingDepth, operatingActions, setView }: { operatingDepth: OperatingDepth; operatingActions?: OperatingActions; setView: (view: View) => void }) {
   const [query, setQuery] = useState("");
   const [statusFilter, setStatusFilter] = useState("all");
   const [gradeFilter, setGradeFilter] = useState("all");
@@ -9221,6 +9467,8 @@ function LeadOpsView({ operatingDepth, operatingActions }: { operatingDepth: Ope
   const [webLeadMessage, setWebLeadMessage] = useState("");
   const [staleCheckState, setStaleCheckState] = useState<"idle" | "running" | "complete" | "error">("idle");
   const [staleCheckMessage, setStaleCheckMessage] = useState("");
+  const [conversionState, setConversionState] = useState<"idle" | "saving" | "success" | "error">("idle");
+  const [conversionMessage, setConversionMessage] = useState("");
   const statusOptions = operatingDepth.leadOps.statusSettings.length > 0 ? operatingDepth.leadOps.statusSettings : [];
   const leadOpsImportTerritory = ["Foxborough", "Mansfield", "Sharon", "Wrentham", "Plainville"];
   const rows = useMemo(() => {
@@ -9349,6 +9597,35 @@ function LeadOpsView({ operatingDepth, operatingActions }: { operatingDepth: Ope
     } catch (error) {
       setStaleCheckState("error");
       setStaleCheckMessage(userFacingWriteError(error));
+    }
+  }
+
+  async function convertSelectedLead(action: "opportunity" | "estimate" | "disqualify") {
+    if (!selectedLead || !operatingActions?.convertLead) return;
+    try {
+      setConversionState("saving");
+      setConversionMessage(action === "disqualify" ? "Disqualifying lead." : `Preparing ${action} record.`);
+      const result = await operatingActions.convertLead({
+        leadId: selectedLead.id,
+        action,
+        valueCents: selectedLead.valueCents,
+        serviceLines: selectedLead.programRequests,
+      });
+      setConversionState("success");
+      if (action === "disqualify") {
+        setConversionMessage(`${selectedLead.customerName} was disqualified.`);
+        return;
+      }
+      if (action === "estimate") {
+        setConversionMessage(`${result.estimateNumber ?? "Estimate"} is ready in the estimate workbench.`);
+        setView("estimates");
+        return;
+      }
+      setConversionMessage("Opportunity is ready in Pipeline.");
+      setView("pipeline");
+    } catch (error) {
+      setConversionState("error");
+      setConversionMessage(userFacingWriteError(error));
     }
   }
 
@@ -9733,18 +10010,17 @@ function LeadOpsView({ operatingDepth, operatingActions }: { operatingDepth: Ope
                 <div>
                   <div className="text-xs font-semibold uppercase tracking-normal text-stone-500">Conversion actions</div>
                   <div className="mt-2 grid grid-cols-2 gap-2">
-                    {selectedLead.conversionOptions.map((option) => (
-                      <button
-                        key={option.label}
-                        type="button"
-                        disabled={!operatingActions?.updateLead}
-                        onClick={() => operatingActions?.updateLead?.(selectedLead.id, { status: option.targetStatus })}
-                        className={cn("rounded-md px-3 py-2 text-sm font-semibold", option.primary ? "bg-[#224036] text-white" : "border border-stone-200 bg-white text-stone-700", !operatingActions?.updateLead && "cursor-not-allowed opacity-50")}
-                      >
-                        {option.label}
-                      </button>
-                    ))}
+                    <button type="button" disabled={!operatingActions?.convertLead || conversionState === "saving"} onClick={() => void convertSelectedLead("opportunity")} className="rounded-md border border-stone-200 bg-white px-3 py-2 text-sm font-semibold text-stone-700 disabled:cursor-not-allowed disabled:opacity-50">
+                      Open Opportunity
+                    </button>
+                    <button type="button" disabled={!operatingActions?.convertLead || conversionState === "saving"} onClick={() => void convertSelectedLead("estimate")} className="rounded-md bg-[#224036] px-3 py-2 text-sm font-semibold text-white disabled:cursor-not-allowed disabled:opacity-50">
+                      Prepare Estimate
+                    </button>
+                    <button type="button" disabled={!operatingActions?.convertLead || conversionState === "saving"} onClick={() => void convertSelectedLead("disqualify")} className="col-span-2 rounded-md border border-rose-200 bg-white px-3 py-2 text-sm font-semibold text-rose-700 disabled:cursor-not-allowed disabled:opacity-50">
+                      Disqualify Lead
+                    </button>
                   </div>
+                  {conversionMessage ? <div className={cn("mt-2 rounded-md border px-3 py-2 text-sm font-semibold", conversionState === "error" ? "border-rose-200 bg-rose-50 text-rose-800" : conversionState === "saving" ? "border-amber-200 bg-amber-50 text-amber-800" : "border-emerald-200 bg-emerald-50 text-emerald-800")}>{conversionMessage}</div> : null}
                 </div>
                 <div>
                   <div className="text-xs font-semibold uppercase tracking-normal text-stone-500">Duplicate and loss controls</div>
@@ -10735,51 +11011,8 @@ function ProfitView({ operatingDepth, operatingActions }: { operatingDepth: Oper
         </Panel>
       </div>
 
-      <div className="grid gap-4 xl:grid-cols-[0.78fr_1.22fr]">
-        <Panel>
-          <div className="flex items-center gap-2">
-            <BarChart3 size={18} className="text-[#224036]" />
-            <h2 className="text-base font-bold">Owner Unit Economics</h2>
-          </div>
-          <div className="mt-4 grid gap-3 sm:grid-cols-2">
-            <Metric label="Retention" value={percent(analytics.kpis.retentionRatePercent)} tone="success" />
-            <Metric label="Churn Risk" value={percent(analytics.kpis.churnRatePercent)} tone={analytics.kpis.churnRatePercent >= 20 ? "danger" : "warning"} />
-            <Metric label="Avg LTV" value={currency(analytics.kpis.averageLtvCents)} />
-            <Metric label="CAC" value={currency(analytics.kpis.cacCents)} />
-            <Metric label="LTV:CAC" value={`${analytics.kpis.ltvToCac}x`} tone={analytics.kpis.ltvToCac >= 3 ? "success" : "warning"} />
-            <Metric label="NRR" value={percent(analytics.kpis.netRevenueRetentionPercent)} tone={analytics.kpis.netRevenueRetentionPercent >= 100 ? "success" : "warning"} />
-            <Metric label="Avg Margin" value={percent(analytics.kpis.avgGrossMarginPercent)} />
-            <Metric label="Break-even Rev." value={currency(analytics.kpis.breakEvenRevenueCents)} />
-          </div>
-        </Panel>
-
-        <Panel>
-          <OwnerTrendChart data={analytics.trend} />
-        </Panel>
-      </div>
-
-      <div className="grid gap-4 xl:grid-cols-3">
-        <HorizontalBarChart
-          title="Churn Analysis"
-          subtitle="At-risk customers by segment, with LTV exposure."
-          tone="rose"
-          rows={analytics.churn.map((row) => ({
-            label: row.segment,
-            value: row.churnRatePercent,
-            detail: `${row.atRisk}/${row.customers} at risk - ${currency(row.ltvAtRiskCents)} LTV exposed`,
-          }))}
-          valueFormatter={(value) => percent(value)}
-        />
-        <HorizontalBarChart
-          title="LTV by Segment"
-          subtitle="Estimated customer lifetime value by customer segment."
-          rows={analytics.ltv.map((row) => ({
-            label: row.segment,
-            value: row.averageLtvCents,
-            detail: `${currency(row.averageGrossProfitCents)} avg gross profit - ${row.paybackMonths} mo payback`,
-          }))}
-          valueFormatter={(value) => currency(value)}
-        />
+      <div className="grid gap-4 xl:grid-cols-[1.2fr_0.8fr]">
+        <Panel><OwnerTrendChart data={analytics.trend} /></Panel>
         <HorizontalBarChart
           title="Cost Breakdown"
           subtitle="Direct and operating costs as a share of service revenue."
@@ -10985,6 +11218,91 @@ function ProfitView({ operatingDepth, operatingActions }: { operatingDepth: Oper
 }
 
 function CostIntelligenceView({ operatingDepth, operatingActions }: { operatingDepth: OperatingDepth; operatingActions?: OperatingActions }) {
+  return (
+    <div className="grid gap-4">
+      <Panel>
+        <div className="flex flex-wrap items-start justify-between gap-4">
+          <div>
+            <div className="flex items-center gap-2 text-sm font-semibold text-[#224036]"><CloudSun size={16} /> Cost Intelligence</div>
+            <h2 className="mt-2 text-2xl font-bold tracking-normal">External weather and market signals</h2>
+            <p className="mt-2 max-w-3xl text-sm leading-6 text-stone-500">Monitor weather, wage, fertilizer, and equipment baselines here. Edit company-specific costs and vendor prices in Settings.</p>
+          </div>
+          <TextButton variant="secondary" icon={<Database size={16} />} onClick={() => operatingActions?.refreshCostIntelligence?.()}>Refresh Signals</TextButton>
+        </div>
+        <div className="mt-5 grid gap-3 sm:grid-cols-2 xl:grid-cols-4">
+          <Metric label="Market snapshots" value={operatingDepth.costIntelligence.costSnapshots.length} />
+          <Metric label="Weather sites" value={operatingDepth.costIntelligence.weatherSnapshots.length} />
+          <Metric label="Labor baselines" value={operatingDepth.costIntelligence.laborRates.length} />
+          <Metric label="Equipment baselines" value={operatingDepth.costIntelligence.equipmentRates.length} />
+        </div>
+      </Panel>
+
+      <div className="grid gap-4 xl:grid-cols-2">
+        <Panel>
+          <div className="flex items-center gap-2"><Package size={18} className="text-[#224036]" /><h2 className="text-base font-bold">Market Cost Snapshots</h2></div>
+          <div className="mt-4 grid gap-3 md:grid-cols-2">
+            {operatingDepth.costIntelligence.costSnapshots.map((snapshot) => (
+              <div key={snapshot.id} className="rounded-md border border-stone-200 p-3">
+                <div className="flex items-start justify-between gap-3">
+                  <div><div className="font-semibold">{snapshot.label}</div><div className="mt-1 text-sm text-stone-500">{snapshot.region ?? "Global"} - {snapshot.unit}</div></div>
+                  <Badge>{snapshot.source}</Badge>
+                </div>
+                <div className="mt-3 text-2xl font-bold">{snapshot.value}</div>
+                <div className="mt-1 text-xs text-stone-500">Captured {dateTime(snapshot.capturedAt)}</div>
+              </div>
+            ))}
+          </div>
+        </Panel>
+
+        <Panel>
+          <h2 className="text-base font-bold">Job-site Weather Risk</h2>
+          <div className="mt-4 grid gap-3 md:grid-cols-2">
+            {operatingDepth.costIntelligence.weatherSnapshots.map((snapshot) => (
+              <div key={snapshot.id} className="rounded-md border border-stone-200 p-3">
+                <div className="flex items-start justify-between gap-3">
+                  <div><div className="font-semibold">{snapshot.propertyName}</div><div className="mt-1 text-sm text-stone-500">{snapshot.conditions}</div></div>
+                  <Badge tone={operatingTone(snapshot.applicationRisk)}>{snapshot.applicationRisk}</Badge>
+                </div>
+                <div className="mt-3 grid grid-cols-3 gap-2 text-center text-sm">
+                  <div className="rounded-md bg-stone-50 p-2"><div className="font-bold">{snapshot.temperatureF ?? "-"}F</div><div className="text-xs text-stone-500">Temp</div></div>
+                  <div className="rounded-md bg-stone-50 p-2"><div className="font-bold">{snapshot.windMph ?? "-"} mph</div><div className="text-xs text-stone-500">Wind</div></div>
+                  <div className="rounded-md bg-stone-50 p-2"><div className="font-bold">{snapshot.precipitationProbability ?? "-"}%</div><div className="text-xs text-stone-500">Rain</div></div>
+                </div>
+              </div>
+            ))}
+          </div>
+        </Panel>
+      </div>
+
+      <div className="grid gap-4 lg:grid-cols-2">
+        <Panel>
+          <h2 className="text-base font-bold">Labor Baselines</h2>
+          <div className="mt-4 grid gap-2">
+            {operatingDepth.costIntelligence.laborRates.map((rate) => (
+              <div key={rate.id} role="group" aria-label={`Labor baseline ${rate.roleName}`} className="rounded-md border border-stone-200 p-3">
+                <div className="flex items-center justify-between gap-3"><div className="font-semibold">{rate.roleName}</div><Badge>{rate.source}</Badge></div>
+                <div className="mt-1 text-sm text-stone-500">{currency(rate.hourlyCostCents)} cost / {rate.billableRateCents ? `${currency(rate.billableRateCents)} billable` : "no billable rate"}</div>
+              </div>
+            ))}
+          </div>
+        </Panel>
+        <Panel>
+          <h2 className="text-base font-bold">Equipment Baselines</h2>
+          <div className="mt-4 grid gap-2">
+            {operatingDepth.costIntelligence.equipmentRates.map((rate) => (
+              <div key={rate.id} className="rounded-md border border-stone-200 p-3">
+                <div className="flex items-center justify-between gap-3"><div className="font-semibold">{rate.name}</div><Badge>{rate.category}</Badge></div>
+                <div className="mt-1 text-sm text-stone-500">{currency(rate.hourlyCostCents)} cost / {rate.billableRateCents ? `${currency(rate.billableRateCents)} billable` : "no billable rate"}</div>
+              </div>
+            ))}
+          </div>
+        </Panel>
+      </div>
+    </div>
+  );
+}
+
+function CostCatalogControls({ operatingDepth, operatingActions }: { operatingDepth: OperatingDepth; operatingActions?: OperatingActions }) {
   const [laborRole, setLaborRole] = useState("Technician");
   const [laborCost, setLaborCost] = useState("29.00");
   const [laborBillable, setLaborBillable] = useState("68.00");
@@ -11022,7 +11340,7 @@ function CostIntelligenceView({ operatingDepth, operatingActions }: { operatingD
 
   return (
     <div className="grid gap-4">
-      <Panel>
+      <Panel className="hidden">
         <div className="flex flex-wrap items-start justify-between gap-4">
           <div>
             <div className="flex items-center gap-2 text-sm font-semibold text-[#224036]">
@@ -11043,8 +11361,15 @@ function CostIntelligenceView({ operatingDepth, operatingActions }: { operatingD
         </div>
       </Panel>
 
-      <div className="grid gap-4 xl:grid-cols-[1fr_360px]">
-        <div className="grid gap-4">
+      <Panel>
+        <div className="flex items-center gap-2">
+          <Package size={18} className="text-[#224036]" />
+          <h2 className="text-base font-bold">Cost Catalog &amp; Rate Overrides</h2>
+        </div>
+        <p className="mt-2 text-sm leading-6 text-stone-500">Tenant-specific labor and vendor pricing overrides the external market defaults used by estimates and job costing.</p>
+      </Panel>
+      <div className="grid gap-4">
+        <div className="hidden">
           <Panel>
             <div className="flex items-center gap-2">
               <Package size={18} className="text-[#224036]" />
@@ -11121,7 +11446,7 @@ function CostIntelligenceView({ operatingDepth, operatingActions }: { operatingD
           </div>
         </div>
 
-        <div className="grid gap-4">
+        <div className="grid gap-4 lg:grid-cols-3">
           <Panel>
             <h2 className="text-base font-bold">Labor Override</h2>
             <form onSubmit={submitLabor} className="mt-4 grid gap-3">
@@ -11133,6 +11458,14 @@ function CostIntelligenceView({ operatingDepth, operatingActions }: { operatingD
               <TextButton type="submit" icon={<Plus size={16} />} variant={operatingActions?.upsertLaborRate ? "primary" : "secondary"}>Save Rate</TextButton>
               {laborRateMessage ? <div className="rounded-md border border-emerald-200 bg-emerald-50 px-3 py-2 text-sm font-semibold text-emerald-900">{laborRateMessage}</div> : null}
             </form>
+            <div className="mt-4 grid gap-2">
+              {operatingDepth.costIntelligence.laborRates.slice(0, 6).map((rate) => (
+                <div key={rate.id} role="group" aria-label={`Labor rate ${rate.roleName}`} className="rounded-md border border-stone-200 p-3">
+                  <div className="flex items-center justify-between gap-3"><div className="font-semibold">{rate.roleName}</div><Badge>{rate.source}</Badge></div>
+                  <div className="mt-1 text-sm text-stone-500">{currency(rate.hourlyCostCents)} cost / {rate.billableRateCents ? `${currency(rate.billableRateCents)} billable` : "no billable rate"}</div>
+                </div>
+              ))}
+            </div>
           </Panel>
 
           <Panel>
@@ -11202,7 +11535,6 @@ function AdminView({
   }) => Promise<string>;
 }) {
   const roleOptions: Role[] = ["owner", "admin", "manager", "sales", "dispatcher", "crew_lead", "technician"];
-  const analytics = operatingDepth.admin.ownerAnalytics;
   const tagGroups = operatingDepth.admin.tagTaxonomy.reduce<Record<string, typeof operatingDepth.admin.tagTaxonomy>>((groups, tag) => {
     groups[tag.category] = [...(groups[tag.category] ?? []), tag];
     return groups;
@@ -11404,40 +11736,9 @@ function AdminView({
         </div>
       </Panel>
 
-      <div className="grid gap-4 xl:grid-cols-[1fr_420px]">
-        <Panel>
-          <div className="flex flex-wrap items-start justify-between gap-4">
-            <div>
-              <div className="flex items-center gap-2 text-sm font-semibold text-[#224036]">
-                <BarChart3 size={16} />
-                Admin Analytics
-              </div>
-              <h2 className="mt-2 text-xl font-bold tracking-normal">Owner chart pack for churn, LTV, P&L, and costs</h2>
-            </div>
-            <div className="grid grid-cols-2 gap-2 sm:grid-cols-4">
-              <div className="rounded-md bg-stone-50 p-3">
-                <div className="text-xs font-semibold uppercase text-stone-500">Retention</div>
-                <div className="mt-1 text-xl font-bold">{percent(analytics.kpis.retentionRatePercent)}</div>
-              </div>
-              <div className="rounded-md bg-stone-50 p-3">
-                <div className="text-xs font-semibold uppercase text-stone-500">Churn risk</div>
-                <div className="mt-1 text-xl font-bold">{percent(analytics.kpis.churnRatePercent)}</div>
-              </div>
-              <div className="rounded-md bg-stone-50 p-3">
-                <div className="text-xs font-semibold uppercase text-stone-500">Avg LTV</div>
-                <div className="mt-1 text-xl font-bold">{currency(analytics.kpis.averageLtvCents)}</div>
-              </div>
-              <div className="rounded-md bg-stone-50 p-3">
-                <div className="text-xs font-semibold uppercase text-stone-500">LTV:CAC</div>
-                <div className="mt-1 text-xl font-bold">{analytics.kpis.ltvToCac}x</div>
-              </div>
-            </div>
-          </div>
-          <div className="mt-4">
-            <OwnerTrendChart data={analytics.trend} />
-          </div>
-        </Panel>
+      <CostCatalogControls operatingDepth={operatingDepth} operatingActions={operatingActions} />
 
+      <div className="grid gap-4">
         <Panel>
           <h2 className="text-base font-bold">Tag Taxonomy</h2>
           <p className="mt-1 text-sm leading-6 text-stone-500">Governed tags power customer segments, risk cohorts, profitability filters, and reporting exports.</p>
@@ -11525,40 +11826,6 @@ function AdminView({
                 </div>
               ))}
             </div>
-          </div>
-        </Panel>
-      </div>
-
-      <div className="grid gap-4 xl:grid-cols-3">
-        <HorizontalBarChart
-          title="Churn Analysis"
-          subtitle="Segment-level risk and exposed LTV."
-          tone="rose"
-          rows={analytics.churn.map((row) => ({ label: row.segment, value: row.churnRatePercent, detail: `${row.atRisk}/${row.customers} accounts - ${row.drivers.join(", ")}` }))}
-          valueFormatter={(value) => percent(value)}
-        />
-        <HorizontalBarChart
-          title="LTV by Segment"
-          subtitle="Average LTV and payback by customer segment."
-          rows={analytics.ltv.map((row) => ({ label: row.segment, value: row.averageLtvCents, detail: `${row.paybackMonths} mo payback` }))}
-          valueFormatter={(value) => currency(value)}
-        />
-        <Panel>
-          <h2 className="text-base font-bold">Customer Segments</h2>
-          <div className="mt-4 grid gap-3">
-            {operatingDepth.admin.segmentCards.map((segment) => (
-              <div key={segment.label} className="rounded-md border border-stone-200 p-3">
-                <div className="flex items-center justify-between gap-3">
-                  <div className="font-semibold">{segment.label}</div>
-                  <Badge tone={segment.churnRiskPercent >= 30 ? "danger" : segment.churnRiskPercent > 0 ? "warning" : "success"}>{percent(segment.churnRiskPercent)} risk</Badge>
-                </div>
-                <div className="mt-3 grid grid-cols-3 gap-2 text-sm">
-                  <div><div className="font-bold">{segment.customerCount}</div><div className="text-xs text-stone-500">Customers</div></div>
-                  <div><div className="font-bold">{currency(segment.revenueCents)}</div><div className="text-xs text-stone-500">Revenue</div></div>
-                  <div><div className="font-bold">{currency(segment.grossProfitCents)}</div><div className="text-xs text-stone-500">Profit</div></div>
-                </div>
-              </div>
-            ))}
           </div>
         </Panel>
       </div>

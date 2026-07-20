@@ -7,6 +7,7 @@ export type MarketingFeature = {
 
 export type MarketingPage = {
   slug: string;
+  demoView?: string;
   navLabel: string;
   eyebrow: string;
   title: string;
@@ -74,6 +75,7 @@ export const productModules: MarketingFeature[] = [
 export const marketingPages: MarketingPage[] = [
   {
     slug: "features",
+    demoView: "dashboard",
     navLabel: "Features",
     eyebrow: "Operating system",
     title: "The green-industry CRM, scheduling, field, and costing stack in one workspace.",
@@ -100,6 +102,7 @@ export const marketingPages: MarketingPage[] = [
   },
   {
     slug: "solutions",
+    demoView: "dashboard",
     navLabel: "Solutions",
     eyebrow: "Industry fit",
     title: "Built around landscaping, lawn care, tree and shrub, irrigation, snow, and pest workflows.",
@@ -126,6 +129,7 @@ export const marketingPages: MarketingPage[] = [
   },
   {
     slug: "lead-ops",
+    demoView: "lead_ops",
     navLabel: "Lead Ops",
     eyebrow: "Lead operations",
     title: "A lead list that works like an operating queue, not a static spreadsheet.",
@@ -152,6 +156,7 @@ export const marketingPages: MarketingPage[] = [
   },
   {
     slug: "crm",
+    demoView: "crm",
     navLabel: "CRM",
     eyebrow: "Customer memory",
     title: "A HubSpot-style CRM shaped for properties, service history, and field execution.",
@@ -178,6 +183,7 @@ export const marketingPages: MarketingPage[] = [
   },
   {
     slug: "dispatch",
+    demoView: "dispatch",
     navLabel: "Dispatch",
     eyebrow: "Scheduling",
     title: "Calendar, board, crews, and route order for the day the team actually has to run.",
@@ -204,6 +210,7 @@ export const marketingPages: MarketingPage[] = [
   },
   {
     slug: "field",
+    demoView: "field",
     navLabel: "Field",
     eyebrow: "Mobile PWA",
     title: "A focused field experience for checklists, notes, photos, materials, and completion.",
@@ -230,6 +237,7 @@ export const marketingPages: MarketingPage[] = [
   },
   {
     slug: "job-costing",
+    demoView: "costing",
     navLabel: "Job Costing",
     eyebrow: "Profitability",
     title: "Know what a job costs while it is still operationally useful.",
@@ -256,6 +264,7 @@ export const marketingPages: MarketingPage[] = [
   },
   {
     slug: "cost-intelligence",
+    demoView: "cost_intel",
     navLabel: "Cost Intel",
     eyebrow: "Cost signals",
     title: "Weather, wage, fertilizer, vendor, and route signals beside the operating data.",
@@ -282,6 +291,7 @@ export const marketingPages: MarketingPage[] = [
   },
   {
     slug: "admin-controls",
+    demoView: "admin",
     navLabel: "Admin",
     eyebrow: "Tenant control",
     title: "The control plane for roles, rates, crews, catalog, workflows, flags, and audit history.",
