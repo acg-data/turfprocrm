@@ -672,9 +672,9 @@ const baseDemoWorkspace: WorkspaceSnapshot = {
     },
   ],
   materials: [
-    { id: "mat-grub", name: "Merit grub control", unit: "bag", costCents: 7300, active: true },
-    { id: "mat-barrier", name: "Mosquito barrier mix", unit: "gallon", costCents: 2800, active: true },
-    { id: "mat-seed", name: "Premium overseed blend", unit: "bag", costCents: 6400, active: true },
+    { id: "mat-grub", name: "Merit grub control", unit: "bag", costCents: 7300, active: true, epaRegistrationNumber: "EPA-432-1471" },
+    { id: "mat-barrier", name: "Mosquito barrier mix", unit: "gallon", costCents: 2800, active: true, epaRegistrationNumber: "EPA-8329-98" },
+    { id: "mat-seed", name: "Premium overseed blend", unit: "bag", costCents: 6400, active: true, epaRegistrationNumber: "EPA-100-1102" },
   ],
 };
 
@@ -732,17 +732,16 @@ const scaleStatuses = ["new", "contacted", "converted", "disqualified"] as const
 const scaleStages = ["new", "qualified", "estimating", "proposal_sent", "won"] as const;
 
 function buildScaledDemoWorkspace(workspace: WorkspaceSnapshot, scaleCount = 100): WorkspaceSnapshot {
-  const syntheticMembers: WorkspaceSnapshot["members"] = Array.from({ length: scaleCount }, (_, index) => {
-    const number = index + 1;
-    const firstName = scaleFirstNames[index % scaleFirstNames.length];
-    const lastName = scaleLastNames[Math.floor(index / scaleFirstNames.length) % scaleLastNames.length];
-    return {
-      id: `u-demo-${String(number).padStart(3, "0")}`,
-      name: `${firstName} ${lastName}`,
-      email: `demo.user${String(number).padStart(3, "0")}@turfpro.test`,
-      role: scaleRoles[index % scaleRoles.length],
-    };
-  });
+  // A realistic staff roster (base workspace already has owner/sales/dispatcher/crew lead).
+  const syntheticMembers: WorkspaceSnapshot["members"] = [
+    { id: "u-demo-001", name: "Priya Shah", email: "priya@greenline.test", role: "sales" },
+    { id: "u-demo-002", name: "Derek Boone", email: "derek@greenline.test", role: "crew_lead" },
+    { id: "u-demo-003", name: "Sofia Marin", email: "sofia@greenline.test", role: "technician" },
+    { id: "u-demo-004", name: "Tom Gallagher", email: "tom@greenline.test", role: "technician" },
+  ];
+  const staffPool = [...workspace.members, ...syntheticMembers];
+  const salesPool = staffPool.filter((member) => member.role === "sales" || member.role === "owner");
+  const opsPool = staffPool.filter((member) => ["dispatcher", "crew_lead", "manager", "owner"].includes(member.role));
 
   const syntheticCustomers: WorkspaceSnapshot["customers"] = [];
   const syntheticContacts: WorkspaceSnapshot["contacts"] = [];
@@ -758,14 +757,17 @@ function buildScaledDemoWorkspace(workspace: WorkspaceSnapshot, scaleCount = 100
   const syntheticPayments: WorkspaceSnapshot["payments"] = [];
   const syntheticNotes: WorkspaceSnapshot["notes"] = [];
   const syntheticFiles: WorkspaceSnapshot["files"] = [];
+  const crewStopCounters = new Map<string, number>();
 
   for (let index = 0; index < scaleCount; index += 1) {
     const number = index + 1;
     const padded = String(number).padStart(3, "0");
     const firstName = scaleFirstNames[index % scaleFirstNames.length];
-    const lastName = scaleLastNames[(index * 3) % scaleLastNames.length];
+    // Shift the last-name cycle each time the first-name pool wraps so every generated full name is unique.
+    const lastName = scaleLastNames[(index * 3 + Math.floor(index / scaleFirstNames.length)) % scaleLastNames.length];
     const program = scalePrograms[index % scalePrograms.length];
-    const owner = syntheticMembers[index % syntheticMembers.length];
+    const owner = salesPool[index % salesPool.length];
+    const manager = opsPool[index % opsPool.length];
     const city = scaleCities[index % scaleCities.length];
     const status = scaleStatuses[index % scaleStatuses.length];
     const stage = scaleStages[index % scaleStages.length];
@@ -832,8 +834,10 @@ function buildScaledDemoWorkspace(workspace: WorkspaceSnapshot, scaleCount = 100
       estimateNotes: "Use this record to test list performance, filters, owners, and conversion views.",
       qualityScore: 52 + (index % 45),
       spamScore: index % 17 === 0 ? 35 : 0,
-      receivedAt: at(8 + (index % 9), (index * 7) % 60, -1 * (index % 21)),
-      createdAt: at(8 + (index % 9), (index * 7) % 60, -1 * (index % 21)),
+      // Response SLAs are minutes-scale, so keep most leads inside their window
+      // (received minutes ago) with a deliberate few aged 1-3 days for follow-up demos.
+      receivedAt: index % 20 === 0 ? at(9, (index * 7) % 60, -3) : Date.now() - (index % 4) * 3 * 60 * 1000,
+      createdAt: index % 20 === 0 ? at(9, (index * 7) % 60, -3) : Date.now() - (index % 4) * 3 * 60 * 1000,
     });
 
     syntheticOpportunities.push({
@@ -860,9 +864,15 @@ function buildScaledDemoWorkspace(workspace: WorkspaceSnapshot, scaleCount = 100
         title: `${program.replaceAll("_", " ")} production ${padded}`,
         status: jobStatus,
         priority: index % 8 === 0 ? "high" : "normal",
-        managerId: owner.id,
+        managerId: manager.id,
         startDate: at(7 + (index % 8), 30, index % 12),
       });
+      // Assign the crew whose skills match the service line so dispatch doesn't
+      // flag a skill mismatch on every synthetic stop.
+      const visitCrewId = program === "pest_control" ? "crew-bravo" : program === "maintenance" || program === "irrigation" ? "crew-charlie" : "crew-alpha";
+      const crewStopKey = `${visitCrewId}-${index % 12}`;
+      const nextStopNumber = (crewStopCounters.get(crewStopKey) ?? 0) + 1;
+      crewStopCounters.set(crewStopKey, nextStopNumber);
       syntheticVisits.push({
         id: `visit-scale-${padded}`,
         jobId: `job-scale-${padded}`,
@@ -871,8 +881,8 @@ function buildScaledDemoWorkspace(workspace: WorkspaceSnapshot, scaleCount = 100
         scheduledStart: at(7 + (index % 8), 30, index % 12),
         scheduledEnd: at(9 + (index % 8), 0, index % 12),
         status: index % 6 === 0 ? "complete" : index % 3 === 0 ? "on_site" : "scheduled",
-        routeOrder: (index % 12) + 1,
-        crewId: workspace.crews[index % workspace.crews.length]?.id ?? "crew-alpha",
+        routeOrder: nextStopNumber,
+        crewId: visitCrewId,
         checklist: [
           { id: `scale-${padded}-c1`, label: "Confirm property access", isDone: index % 3 === 0 },
           { id: `scale-${padded}-c2`, label: "Complete service scope", isDone: index % 6 === 0 },
@@ -888,7 +898,7 @@ function buildScaledDemoWorkspace(workspace: WorkspaceSnapshot, scaleCount = 100
         status: index % 5 === 0 ? "in_progress" : "open",
         priority: index % 8 === 0 ? "high" : "normal",
         dueAt: at(15, 0, index % 9),
-        assignedUserId: owner.id,
+        assignedUserId: manager.id,
       });
       syntheticInvoices.push({
         id: `inv-scale-${padded}`,
@@ -953,6 +963,47 @@ function buildScaledDemoWorkspace(workspace: WorkspaceSnapshot, scaleCount = 100
       });
     }
   }
+
+  // Two intentional duplicate submissions for the same customer so the Lead Ops
+  // duplicate queue demonstrates a realistic (small) duplicate cluster.
+  syntheticLeads.push(
+    {
+      id: "lead-dup-walsh-1",
+      title: "Mosquito quote request (web form resubmission)",
+      customerId: "cust-walsh",
+      propertyId: "prop-walsh",
+      source: "Website form",
+      status: "new",
+      urgency: "normal",
+      ownerId: "u-amy",
+      leadType: "form",
+      accountType: "residential",
+      programRequests: ["pest_control"],
+      message: "Submitted the form again to ask about mosquito pricing.",
+      qualityScore: 74,
+      spamScore: 0,
+      receivedAt: at(10, 5, 0),
+      createdAt: at(10, 5, 0),
+    },
+    {
+      id: "lead-dup-walsh-2",
+      title: "Mosquito quote request (phone follow-up)",
+      customerId: "cust-walsh",
+      propertyId: "prop-walsh",
+      source: "Phone",
+      status: "new",
+      urgency: "normal",
+      ownerId: "u-justin",
+      leadType: "phone_call",
+      accountType: "residential",
+      programRequests: ["pest_control"],
+      message: "Called in about the same mosquito quote submitted online.",
+      qualityScore: 71,
+      spamScore: 0,
+      receivedAt: at(11, 40, 0),
+      createdAt: at(11, 40, 0),
+    },
+  );
 
   return {
     ...workspace,

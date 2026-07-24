@@ -31,4 +31,17 @@ describe("guided demo personas", () => {
     expect(starter.invoices.every((invoice) => starter.customers.some((customer) => customer.id === invoice.customerId))).toBe(true);
     expect(established.organization.id).not.toBe(starter.organization.id);
   });
+
+  it("seeds a realistic staff roster instead of one member per customer", () => {
+    const established = getDemoWorkspaceForPersona("established");
+    expect(established.members).toHaveLength(8);
+    const ownerIds = new Set(established.members.map((member) => member.id));
+    expect(established.leads.every((lead) => ownerIds.has(lead.ownerId))).toBe(true);
+  });
+
+  it("generates unique customer names at scale", () => {
+    const established = getDemoWorkspaceForPersona("established");
+    const names = established.customers.map((customer) => customer.name);
+    expect(new Set(names).size).toBe(names.length);
+  });
 });

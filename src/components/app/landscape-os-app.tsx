@@ -101,16 +101,14 @@ const navGroups: Array<{ label: string; items: NavigationItem[] }> = [
     items: [
       { id: "lead_ops", label: "Leads", icon: <Filter size={18} /> },
       { id: "crm", label: "Customers", icon: <UsersRound size={18} /> },
-      { id: "pipeline", label: "Pipeline", icon: <Gauge size={18} /> },
-      { id: "estimates", label: "Estimates", icon: <FileText size={18} /> },
+      { id: "pipeline", label: "Pipeline & Estimates", icon: <Gauge size={18} /> },
     ],
   },
   {
     label: "Operations",
     items: [
       { id: "calendar", label: "Calendar", icon: <CalendarDays size={18} /> },
-      { id: "dispatch", label: "Dispatch", icon: <Truck size={18} /> },
-      { id: "routing", label: "Routes", icon: <Route size={18} /> },
+      { id: "dispatch", label: "Dispatch & Routes", icon: <Truck size={18} /> },
       { id: "jobs", label: "Jobs", icon: <ClipboardList size={18} /> },
       { id: "field", label: "Field", icon: <MapPin size={18} /> },
       { id: "chemicals", label: "Chemical tracking", icon: <Package size={18} /> },
@@ -121,7 +119,6 @@ const navGroups: Array<{ label: string; items: NavigationItem[] }> = [
     items: [
       { id: "job_analysis", label: "Job performance", icon: <BarChart3 size={18} /> },
       { id: "job_pricer", label: "Pricing", icon: <Calculator size={18} /> },
-      { id: "costing", label: "Job costing", icon: <Receipt size={18} /> },
       { id: "profit", label: "Financials", icon: <DollarSign size={18} /> },
       { id: "churn_ltv", label: "Retention", icon: <TrendingUp size={18} /> },
       { id: "cost_intel", label: "Cost intelligence", icon: <CloudSun size={18} /> },
@@ -129,7 +126,10 @@ const navGroups: Array<{ label: string; items: NavigationItem[] }> = [
   },
   {
     label: "Workspace",
-    items: [{ id: "admin", label: "Settings", icon: <Settings size={18} /> }],
+    items: [
+      { id: "admin", label: "Settings", icon: <Settings size={18} /> },
+      { id: "onboarding", label: "Company setup", icon: <Briefcase size={18} /> },
+    ],
   },
 ];
 
@@ -798,6 +798,7 @@ type OperatingDepth = {
   revenue: {
     pipelineCents: number;
     bookedRevenueCents: number;
+    actualRevenueCents?: number;
     completedRevenueCents: number;
     invoicedCents: number;
     collectedCents: number;
@@ -1157,10 +1158,11 @@ function buildEstimateReadiness({
 
 function duplicateWarningsForLead(row: { id: string; title: string; customerName: string; city: string; source: string }, peers: Array<{ id: string; title: string; customerName: string; city: string; source: string }>) {
   const normalizedName = row.customerName.trim().toLowerCase();
-  const normalizedCity = row.city.trim().toLowerCase();
+  // Duplicates require a customer-name match. A shared city+source is normal volume
+  // (5 towns x 6 sources), not a duplicate signal.
   const warnings = peers
     .filter((peer) => peer.id !== row.id)
-    .filter((peer) => peer.customerName.trim().toLowerCase() === normalizedName || (normalizedCity && peer.city.trim().toLowerCase() === normalizedCity && peer.source === row.source))
+    .filter((peer) => peer.customerName.trim().toLowerCase() === normalizedName)
     .slice(0, 3)
     .map((peer) => `Possible duplicate: ${peer.customerName} / ${peer.title}`);
   return [...new Set(warnings)];
@@ -1240,7 +1242,7 @@ function normalizeOperatingDepth(input: OperatingDepth | undefined, fallback: Op
         unassigned: rows.filter((lead) => lead.ownerName === "Unassigned").length,
         slaOverdue: rows.filter((lead) => lead.slaStatus === "overdue").length,
         duplicates: rows.filter((lead) => lead.duplicateWarnings.length > 0).length,
-        estimateReady: rows.filter((lead) => lead.estimateReady).length,
+        estimateReady: rows.filter((lead) => lead.estimateReady && !terminalLeadStatuses.has(lead.status)).length,
       },
     },
     fieldOps: {
@@ -1402,15 +1404,27 @@ function buildFallbackOperatingDepth(workspace: WorkspaceSnapshot): OperatingDep
   const crewsById = new Map(workspace.crews.map((crew) => [crew.id, crew]));
   const openOpportunityValue = workspace.opportunities.filter((opportunity) => !["won", "lost"].includes(opportunity.stage)).reduce((sum, opportunity) => sum + opportunity.valueCents, 0);
   const bookedRevenueCents = workspace.estimates.reduce((sum, estimate) => sum + estimate.totalCents, 0);
+  const invoicesByJobId = new Map<string, WorkspaceSnapshot["invoices"]>();
+  for (const invoice of workspace.invoices) {
+    if (!invoice.jobId) continue;
+    const group = invoicesByJobId.get(invoice.jobId) ?? [];
+    group.push(invoice);
+    invoicesByJobId.set(invoice.jobId, group);
+  }
   const summaries = workspace.jobs.map((job, index) => {
-    const estimate = workspace.estimates.find((candidate) => candidate.customerId === job.customerId);
+    const estimate = workspace.estimates.find((candidate) => (job.estimateId ? candidate.id === job.estimateId : candidate.customerId === job.customerId));
     const visits = workspace.visits.filter((visit) => visit.jobId === job.id);
-    const estimatedRevenueCents = estimate?.totalCents ?? Math.max(250000, bookedRevenueCents / Math.max(1, workspace.jobs.length));
-    const actualLaborCostCents = Math.round(visits.length * 2.5 * 3200);
-    const actualMaterialCostCents = Math.round(estimatedRevenueCents * (index % 2 === 0 ? 0.16 : 0.22));
-    const actualEquipmentCostCents = Math.round(visits.length * 7200);
+    const jobInvoices = invoicesByJobId.get(job.id) ?? [];
+    const invoicedTotalCents = jobInvoices.reduce((sum, invoice) => sum + invoice.totalCents, 0);
+    const collectedTotalCents = jobInvoices.reduce((sum, invoice) => sum + invoice.paidCents, 0);
+    const estimatedRevenueCents = estimate?.totalCents ?? (invoicedTotalCents > 0 ? invoicedTotalCents : Math.max(250000, bookedRevenueCents / Math.max(1, workspace.jobs.length)));
+    // Revenue comes from real invoices when they exist; costs are modeled as
+    // revenue fractions so every row (and the totals built from them) stays coherent.
+    const actualRevenueCents = invoicedTotalCents > 0 ? invoicedTotalCents : estimatedRevenueCents;
+    const actualLaborCostCents = Math.round(actualRevenueCents * (0.3 + (index % 5) * 0.02));
+    const actualMaterialCostCents = Math.round(actualRevenueCents * (0.12 + (index % 6) * 0.02));
+    const actualEquipmentCostCents = Math.round(actualRevenueCents * 0.07);
     const overheadCostCents = Math.round((actualLaborCostCents + actualMaterialCostCents + actualEquipmentCostCents) * 0.18);
-    const actualRevenueCents = estimatedRevenueCents;
     const grossProfitCents = actualRevenueCents - actualLaborCostCents - actualMaterialCostCents - actualEquipmentCostCents - overheadCostCents;
     return {
       id: `summary-${job.id}`,
@@ -1421,8 +1435,8 @@ function buildFallbackOperatingDepth(workspace: WorkspaceSnapshot): OperatingDep
       status: job.status,
       estimatedRevenueCents,
       actualRevenueCents,
-      invoicedCents: Math.round(actualRevenueCents * 0.75),
-      collectedCents: Math.round(actualRevenueCents * 0.55),
+      invoicedCents: invoicedTotalCents,
+      collectedCents: collectedTotalCents,
       actualLaborCostCents,
       actualMaterialCostCents,
       actualEquipmentCostCents,
@@ -1434,6 +1448,7 @@ function buildFallbackOperatingDepth(workspace: WorkspaceSnapshot): OperatingDep
   });
   const totals = summaries.reduce(
     (sum, row) => ({
+      revenueCents: sum.revenueCents + row.actualRevenueCents,
       invoicedCents: sum.invoicedCents + row.invoicedCents,
       collectedCents: sum.collectedCents + row.collectedCents,
       laborCostCents: sum.laborCostCents + row.actualLaborCostCents,
@@ -1442,7 +1457,7 @@ function buildFallbackOperatingDepth(workspace: WorkspaceSnapshot): OperatingDep
       overheadCostCents: sum.overheadCostCents + row.overheadCostCents,
       grossProfitCents: sum.grossProfitCents + row.grossProfitCents,
     }),
-    { invoicedCents: 0, collectedCents: 0, laborCostCents: 0, materialCostCents: 0, equipmentCostCents: 0, overheadCostCents: 0, grossProfitCents: 0 },
+    { revenueCents: 0, invoicedCents: 0, collectedCents: 0, laborCostCents: 0, materialCostCents: 0, equipmentCostCents: 0, overheadCostCents: 0, grossProfitCents: 0 },
   );
   const serviceLineGroups = summaries.reduce<Record<string, {
     serviceCategory: string;
@@ -1575,14 +1590,14 @@ function buildFallbackOperatingDepth(workspace: WorkspaceSnapshot): OperatingDep
     { id: "cost-fred", source: "fred", kind: "fertilizer_index", label: "FRED fertilizer materials PPI", value: 439.037, unit: "index_1982_100", region: "US", capturedAt: now() },
     { id: "cost-bls", source: "bls", kind: "labor", label: "BLS local labor baseline", value: 27.5, unit: "loaded_hourly_usd", region: "MA/Boston", capturedAt: now() },
   ];
-  const weatherSnapshots = workspace.visits.slice(0, 4).map((visit, index) => ({
+  const weatherSnapshots = workspace.visits.map((visit, index) => ({
     id: `weather-${visit.id}`,
     propertyName: propertiesById.get(visit.propertyId)?.label ?? "Property",
-    conditions: index % 2 === 0 ? "Partly sunny" : "Warm",
-    temperatureF: 72 + index,
-    windMph: 7 + index,
-    precipitationProbability: 12 + index * 5,
-    applicationRisk: index % 2 === 0 ? "low" : "medium",
+    conditions: index % 7 === 3 ? "Breezy" : index % 2 === 0 ? "Partly sunny" : "Warm",
+    temperatureF: 70 + (index % 8),
+    windMph: index % 7 === 3 ? 14 : 5 + (index % 6),
+    precipitationProbability: 8 + (index % 5) * 6,
+    applicationRisk: index % 7 === 3 ? "medium" : "low",
     observedAt: visit.scheduledStart,
   }));
   const crewSkills = (crewName: string) => {
@@ -1626,7 +1641,7 @@ function buildFallbackOperatingDepth(workspace: WorkspaceSnapshot): OperatingDep
     return {
       visitId: visit.id,
       materialName: material?.name ?? "General material",
-      epaNumber: material?.name.toLowerCase().includes("barrier") || material?.name.toLowerCase().includes("grub") ? `EPA-${8700 + index}-MA` : undefined,
+      epaNumber: material?.epaRegistrationNumber,
       lotNumber: `LOT-${new Date(visit.scheduledStart).getFullYear()}-${String(index + 17).padStart(3, "0")}`,
       quantity: `${index + 1}.${index + 5} ${material?.unit ?? "unit"}`,
       applicator: crew?.name ?? "Unassigned",
@@ -1640,7 +1655,7 @@ function buildFallbackOperatingDepth(workspace: WorkspaceSnapshot): OperatingDep
     const customer = job ? customersById.get(job.customerId) : undefined;
     const crew = crewsById.get(visit.crewId);
     const weather = weatherSnapshots.find((snapshot) => snapshot.id === `weather-${visit.id}`);
-    const epaRegistrationNumber = material?.name.toLowerCase().includes("barrier") || material?.name.toLowerCase().includes("grub") ? `EPA-${8700 + index}-MA` : undefined;
+    const epaRegistrationNumber = material?.epaRegistrationNumber;
     const missing = [
       ...(epaRegistrationNumber ? [] : ["EPA registration"]),
       ...(property ? [] : ["property"]),
@@ -1792,7 +1807,7 @@ function buildFallbackOperatingDepth(workspace: WorkspaceSnapshot): OperatingDep
       paybackMonths: Math.max(1, Math.round((averageLtvCents / Math.max(1, averageGrossProfitCents)) * 12) / 10),
     };
   });
-  const pnlServiceRevenue = totals.invoicedCents || bookedRevenueCents;
+  const pnlServiceRevenue = totals.revenueCents || totals.invoicedCents || bookedRevenueCents;
   const pnlDirectCosts = totals.laborCostCents + totals.materialCostCents + totals.equipmentCostCents + totals.overheadCostCents + Math.round(pnlServiceRevenue * 0.035);
   const pnlGrossProfit = pnlServiceRevenue - pnlDirectCosts;
   const adminPayrollCents = Math.round(pnlServiceRevenue * 0.08);
@@ -1805,7 +1820,9 @@ function buildFallbackOperatingDepth(workspace: WorkspaceSnapshot): OperatingDep
   const pnlOperatingProfit = pnlGrossProfit - pnlOperatingExpenses;
   const churnRatePercent = lifecycleRows.length > 0 ? Math.round((lifecycleRows.filter((row) => ["high", "critical"].includes(row.churnRiskLevel)).length / lifecycleRows.length) * 1000) / 10 : 0;
   const averageLtvCents = average(lifecycleRows.map((row) => row.estimatedLtvCents));
-  const cacCents = Math.round(salesMarketingCents / Math.max(1, workspace.leads.length));
+  // CAC = sales/marketing spend per WON customer (spend-per-lead made LTV:CAC absurd).
+  const wonOpportunityCount = workspace.opportunities.filter((opportunity) => opportunity.stage === "won").length;
+  const cacCents = Math.max(40000, Math.round(salesMarketingCents / Math.max(1, wonOpportunityCount)));
   const ownerAnalytics: OperatingDepth["admin"]["ownerAnalytics"] = {
     kpis: {
       retentionRatePercent: Math.max(0, Math.round((100 - churnRatePercent) * 10) / 10),
@@ -1960,7 +1977,7 @@ function buildFallbackOperatingDepth(workspace: WorkspaceSnapshot): OperatingDep
         unassigned: leadRows.filter((lead) => lead.ownerName === "Unassigned").length,
         slaOverdue: leadRows.filter((lead) => lead.slaStatus === "overdue").length,
         duplicates: leadRows.filter((lead) => lead.duplicateWarnings.length > 0).length,
-        estimateReady: leadRows.filter((lead) => lead.estimateReady).length,
+        estimateReady: leadRows.filter((lead) => lead.estimateReady && !terminalLeadStatuses.has(lead.status)).length,
       },
     },
     fieldOps: {
@@ -2019,6 +2036,7 @@ function buildFallbackOperatingDepth(workspace: WorkspaceSnapshot): OperatingDep
     revenue: {
       pipelineCents: openOpportunityValue,
       bookedRevenueCents,
+      actualRevenueCents: totals.revenueCents,
       completedRevenueCents: summaries.filter((summary) => summary.status === "completed").reduce((sum, summary) => sum + summary.actualRevenueCents, 0),
       invoicedCents: totals.invoicedCents,
       collectedCents: totals.collectedCents,
@@ -2028,7 +2046,7 @@ function buildFallbackOperatingDepth(workspace: WorkspaceSnapshot): OperatingDep
       overheadCostCents: totals.overheadCostCents,
       grossProfitCents: totals.grossProfitCents,
       arCents: Math.max(0, totals.invoicedCents - totals.collectedCents),
-      grossMarginPercent: totals.invoicedCents > 0 ? Math.round((totals.grossProfitCents / totals.invoicedCents) * 1000) / 10 : 0,
+      grossMarginPercent: totals.revenueCents > 0 ? Math.round((totals.grossProfitCents / totals.revenueCents) * 1000) / 10 : 0,
       serviceLineProfitability,
       customerProfitability: fallbackCustomerProfitability,
       arAging: fallbackArAging,
@@ -3740,12 +3758,32 @@ function LandscapeOsWorkspace({
       const job = visit ? workspaceRef.current.jobs.find((item) => item.id === visit.jobId) : undefined;
       const customer = visit ? workspaceRef.current.customers.find((item) => item.id === visit.customerId) : undefined;
       const property = visit ? workspaceRef.current.properties.find((item) => item.id === visit.propertyId) : undefined;
+      const material = workspaceRef.current.materials.find((item) => item.active) ?? workspaceRef.current.materials[0];
+      const missing = [
+        ...(material?.epaRegistrationNumber ? [] : ["EPA registration number"]),
+        ...(property ? [] : ["property"]),
+      ];
+      const ready = missing.length === 0;
       const id = `local-compliance-${Date.now()}`;
-      setLocalOperatingDepth((current) => ({ ...current, fieldOps: { ...current.fieldOps, complianceRecords: [{ id, reportNumber: `CMP-DEMO-${String(Date.now()).slice(-5)}`, visitId, jobTitle: job?.title ?? "Demo visit", customerName: customer?.name ?? "Demo customer", propertyName: property?.label ?? "Primary property", siteAddress: property ? `${property.street}, ${property.city}, ${property.state} ${property.postalCode}` : "Address unavailable", materialName: "Demo material application", restrictedUse: false, quantity: 1.5, unit: "gal", targetArea: "Target treatment area", applicator: "Field technician", weatherSummary: "Dry, 68 F, wind 4 mph", applicationRisk: "low", generatedAt: now(), ready: false, missing: ["EPA registration number"] }, ...current.fieldOps.complianceRecords] } }));
-      return { visitId, recordCount: 1, ready: false, missing: ["EPA registration number"] };
+      setLocalOperatingDepth((current) => ({ ...current, fieldOps: { ...current.fieldOps, complianceRecords: [{ id, reportNumber: `CMP-DEMO-${String(Date.now()).slice(-5)}`, visitId, jobTitle: job?.title ?? "Demo visit", customerName: customer?.name ?? "Demo customer", propertyName: property?.label ?? "Primary property", siteAddress: property ? `${property.street}, ${property.city}, ${property.state} ${property.postalCode}` : "Address unavailable", materialName: material?.name ?? "Material application", epaRegistrationNumber: material?.epaRegistrationNumber, restrictedUse: Boolean(material?.restrictedUse), quantity: 1.5, unit: material?.unit ?? "gal", targetArea: "Target treatment area", applicator: "Field technician", weatherSummary: "Dry, 68 F, wind 4 mph", applicationRisk: "low", generatedAt: now(), ready, missing }, ...current.fieldOps.complianceRecords] } }));
+      return { visitId, recordCount: 1, ready, missing };
     },
-    recalculateJobCosts: () => undefined,
-    refreshCostIntelligence: () => undefined,
+    recalculateJobCosts: () => setLocalOperatingDepth((current) => {
+      const fresh = buildFallbackOperatingDepth(workspaceRef.current);
+      return {
+        ...current,
+        jobCosting: { ...fresh.jobCosting, timesheets: [...current.jobCosting.timesheets.filter((entry) => entry.id.startsWith("local-timesheet-")), ...fresh.jobCosting.timesheets] },
+        revenue: { ...fresh.revenue, invoices: current.revenue.invoices, payments: current.revenue.payments },
+      };
+    }),
+    refreshCostIntelligence: () => setLocalOperatingDepth((current) => ({
+      ...current,
+      costIntelligence: {
+        ...current.costIntelligence,
+        costSnapshots: current.costIntelligence.costSnapshots.map((snapshot) => ({ ...snapshot, capturedAt: now() })),
+        weatherSnapshots: current.costIntelligence.weatherSnapshots.map((snapshot) => ({ ...snapshot, observedAt: now() })),
+      },
+    })),
     priceFertilizationProgram: async (input) => {
       const property = workspaceRef.current.properties.find((item) => item.id === input.propertyId);
       const material = workspaceRef.current.materials.find((item) => item.id === input.materialId);
@@ -3758,7 +3796,16 @@ function LandscapeOsWorkspace({
       });
       return { sessionId: `local-pricing-${Date.now()}`, output, estimateLineItemPreview: input.estimateLineItemName ? { name: input.estimateLineItemName, quantity: 1, unit: input.estimateLineItemUnit ?? "program", unitPriceCents: input.estimateLineItemUnitPriceCents ?? 0 } : undefined };
     },
-    decideEstimateApproval: async (approvalRequestId, decision) => ({ approvalRequestId, status: decision }),
+    decideEstimateApproval: async (approvalRequestId, decision) => {
+      const approvalStatus = decision;
+      const request = workspaceRef.current.approvalRequests.find((item) => item.id === approvalRequestId);
+      setWorkspace((current) => ({
+        ...current,
+        approvalRequests: current.approvalRequests.map((item) => item.id === approvalRequestId ? { ...item, status: approvalStatus } : item),
+        estimates: request ? current.estimates.map((estimate) => estimate.id === request.estimateId ? { ...estimate, approvalStatus } : estimate) : current.estimates,
+      }));
+      return { approvalRequestId, status: decision };
+    },
   };
   const effectiveOperatingActions = operatingActions ?? localOperatingActions;
 
@@ -5299,8 +5346,6 @@ function LandscapeOsWorkspace({
             {view === "dashboard" && (
               <DashboardView workspace={workspace} dashboard={dashboard} crewsById={crewsById} customersById={customersById} jobsById={jobsById} setView={setView} />
             )}
-            {view === "prime_time" && <PrimeTimeView />}
-            {view === "journeys" && <JourneyAuditView />}
             {view === "lead_ops" && <LeadOpsView operatingDepth={effectiveOperatingDepth} operatingActions={effectiveOperatingActions} setView={setView} />}
             {view === "crm" && (
               <CrmView
@@ -5322,8 +5367,12 @@ function LandscapeOsWorkspace({
                 addActivity={addCustomerActivity}
               />
             )}
-            {view === "pipeline" && <PipelineView workspace={workspace} customersById={customersById} moveOpportunity={moveOpportunity} createQuoteFromOpportunity={createQuoteFromOpportunity} sendQuoteToCustomer={sendQuoteToCustomer} acceptQuoteFromCustomer={acceptQuoteFromCustomer} convertAcceptedQuoteToJob={convertAcceptedQuoteToJob} openJob={(jobId) => { setSelectedJobId(jobId); setView("jobs"); }} />}
-            {view === "estimates" && <EstimatesView workspace={workspace} customersById={customersById} sendQuoteToCustomer={sendQuoteToCustomer} acceptQuoteFromCustomer={acceptQuoteFromCustomer} convertAcceptedQuoteToJob={convertAcceptedQuoteToJob} openJob={(jobId) => { setSelectedJobId(jobId); setView("jobs"); }} />}
+            {view === "pipeline" && (
+              <div className="grid gap-4">
+                <PipelineView workspace={workspace} customersById={customersById} moveOpportunity={moveOpportunity} createQuoteFromOpportunity={createQuoteFromOpportunity} sendQuoteToCustomer={sendQuoteToCustomer} acceptQuoteFromCustomer={acceptQuoteFromCustomer} convertAcceptedQuoteToJob={convertAcceptedQuoteToJob} openJob={(jobId) => { setSelectedJobId(jobId); setView("jobs"); }} />
+                <EstimatesView workspace={workspace} customersById={customersById} sendQuoteToCustomer={sendQuoteToCustomer} acceptQuoteFromCustomer={acceptQuoteFromCustomer} convertAcceptedQuoteToJob={convertAcceptedQuoteToJob} openJob={(jobId) => { setSelectedJobId(jobId); setView("jobs"); }} />
+              </div>
+            )}
             {view === "calendar" && (
               <ServiceCalendarView
                 workspace={workspace}
@@ -5340,18 +5389,18 @@ function LandscapeOsWorkspace({
               />
             )}
             {view === "dispatch" && (
-              <DispatchView workspace={workspace} operatingDepth={effectiveOperatingDepth} customersById={customersById} propertiesById={propertiesById} crewsById={crewsById} jobsById={jobsById} assignCrew={assignCrew} moveRouteStop={moveRouteStop} generateRecurringRoute={generateRecurringRoute} />
-            )}
-            {view === "routing" && (
-              <RoutingView
-                workspace={workspace}
-                operatingDepth={effectiveOperatingDepth}
-                customersById={customersById}
-                propertiesById={propertiesById}
-                jobsById={jobsById}
-                setSelectedVisitId={setSelectedVisitId}
-                setView={setView}
-              />
+              <div className="grid gap-4">
+                <DispatchView workspace={workspace} operatingDepth={effectiveOperatingDepth} customersById={customersById} propertiesById={propertiesById} crewsById={crewsById} jobsById={jobsById} assignCrew={assignCrew} moveRouteStop={moveRouteStop} generateRecurringRoute={generateRecurringRoute} />
+                <RoutingView
+                  workspace={workspace}
+                  operatingDepth={effectiveOperatingDepth}
+                  customersById={customersById}
+                  propertiesById={propertiesById}
+                  jobsById={jobsById}
+                  setSelectedVisitId={setSelectedVisitId}
+                  setView={setView}
+                />
+              </div>
             )}
             {view === "jobs" && (
               <JobsView
@@ -5376,7 +5425,12 @@ function LandscapeOsWorkspace({
                 operatingActions={effectiveOperatingActions}
               />
             )}
-            {view === "job_analysis" && <JobAnalysisView operatingDepth={effectiveOperatingDepth} setSelectedJobId={setSelectedJobId} setView={setView} />}
+            {view === "job_analysis" && (
+              <div className="grid gap-4">
+                <JobAnalysisView operatingDepth={effectiveOperatingDepth} setSelectedJobId={setSelectedJobId} setView={setView} />
+                <CostingView workspace={workspace} operatingDepth={effectiveOperatingDepth} operatingActions={effectiveOperatingActions} />
+              </div>
+            )}
             {view === "job_pricer" && <JobsPricerView workspace={workspace} operatingDepth={effectiveOperatingDepth} />}
             {view === "chemicals" && (
               <ChemicalTrackingView
@@ -5406,9 +5460,8 @@ function LandscapeOsWorkspace({
                 operatingActions={effectiveOperatingActions}
               />
             )}
-            {view === "costing" && <CostingView workspace={workspace} operatingDepth={effectiveOperatingDepth} operatingActions={effectiveOperatingActions} />}
             {view === "profit" && <ProfitView operatingDepth={effectiveOperatingDepth} operatingActions={effectiveOperatingActions} />}
-            {view === "churn_ltv" && <ChurnLtvDashboard operatingDepth={effectiveOperatingDepth} />}
+            {view === "churn_ltv" && <ChurnLtvDashboard workspace={workspace} operatingDepth={effectiveOperatingDepth} />}
             {view === "cost_intel" && <CostIntelligenceView operatingDepth={effectiveOperatingDepth} operatingActions={effectiveOperatingActions} />}
             {view === "admin" && (
               <AdminView
@@ -5434,7 +5487,6 @@ function LandscapeOsWorkspace({
                 operatingActions={effectiveOperatingActions}
               />
             )}
-            {view === "specs" && <SpecsView backendState={backendState} workspace={workspace} />}
           </div>
         </main>
       </div>
@@ -5828,7 +5880,7 @@ function DashboardView({
     { id: "overdue-tasks", title: `${dashboard.overdueTasks.length} overdue ${dashboard.overdueTasks.length === 1 ? "task" : "tasks"}`, detail: "Close the loop on customer and production commitments.", count: dashboard.overdueTasks.length, view: "jobs" as View, lenses: ["owner", "operations", "field"], urgent: true },
     { id: "stale-opportunities", title: `${staleOpportunities.length} sales ${staleOpportunities.length === 1 ? "follow-up" : "follow-ups"} due`, detail: "Advance, reschedule, or close opportunities that need a next step.", count: staleOpportunities.length, view: "pipeline" as View, lenses: ["owner", "sales"] },
     { id: "unassigned-visits", title: `${unassignedVisits.length} unassigned ${unassignedVisits.length === 1 ? "visit" : "visits"}`, detail: "Assign a crew before the route is released to the field.", count: unassignedVisits.length, view: "dispatch" as View, lenses: ["owner", "operations"] },
-    { id: "open-estimates", title: `${dashboard.openEstimates.length} open ${dashboard.openEstimates.length === 1 ? "estimate" : "estimates"}`, detail: "Review aging quotes and capture the next customer decision.", count: dashboard.openEstimates.length, view: "estimates" as View, lenses: ["owner", "sales"] },
+    { id: "open-estimates", title: `${dashboard.openEstimates.length} open ${dashboard.openEstimates.length === 1 ? "estimate" : "estimates"}`, detail: "Review aging quotes and capture the next customer decision.", count: dashboard.openEstimates.length, view: "pipeline" as View, lenses: ["owner", "sales"] },
   ].filter((item) => item.lenses.includes(dashboardLens) && item.count > 0);
 
   return (
@@ -5836,7 +5888,7 @@ function DashboardView({
       <div className="grid gap-4 md:grid-cols-2 xl:grid-cols-4">
         <Metric icon={<DollarSign size={18} />} label="Open pipeline" value={currency(dashboard.pipelineValue)} detail="Review pipeline" onClick={() => setView("pipeline")} />
         <Metric icon={<Route size={18} />} label="Today's visits" value={String(dashboard.todayVisits.length)} detail="Open today's calendar" onClick={() => setView("calendar")} />
-        <Metric icon={<FileText size={18} />} label="Open estimates" value={String(dashboard.openEstimates.length)} detail="Review estimates" onClick={() => setView("estimates")} />
+        <Metric icon={<FileText size={18} />} label="Open estimates" value={String(dashboard.openEstimates.length)} detail="Review estimates" onClick={() => setView("pipeline")} />
         <Metric icon={<ClipboardCheck size={18} />} label="Overdue tasks" value={String(dashboard.overdueTasks.length)} detail="Review job tasks" onClick={() => setView("jobs")} tone={dashboard.overdueTasks.length ? "danger" : "success"} />
       </div>
 
@@ -5954,6 +6006,26 @@ function DashboardView({
 
 function sameCalendarDay(left: number, right: number) {
   return new Date(left).toDateString() === new Date(right).toDateString();
+}
+
+// Display stop numbers must read 1..N per crew per day regardless of how routeOrder
+// was seeded or edited; manual reorders still win via the routeOrder sort key.
+function stopNumbersByVisitId(visits: WorkspaceSnapshot["visits"]): Map<string, number> {
+  const groups = new Map<string, WorkspaceSnapshot["visits"]>();
+  for (const visit of visits) {
+    const key = `${visit.crewId || "unassigned"}|${new Date(visit.scheduledStart).toDateString()}`;
+    const group = groups.get(key) ?? [];
+    group.push(visit);
+    groups.set(key, group);
+  }
+  const numbers = new Map<string, number>();
+  for (const group of groups.values()) {
+    group
+      .slice()
+      .sort((left, right) => (left.routeOrder - right.routeOrder) || (left.scheduledStart - right.scheduledStart))
+      .forEach((visit, index) => numbers.set(visit.id, index + 1));
+  }
+  return numbers;
 }
 
 function calendarInputDate(value: number) {
@@ -6285,13 +6357,45 @@ function RoutingView({
             <div className="flex items-center gap-2 text-sm font-semibold text-[#224036]"><Route size={16} />Route optimization</div>
             <h2 className="mt-2 text-2xl font-bold tracking-normal">Daily routing, stop order, conflicts, and Maps links</h2>
           </div>
-          <Badge tone={totalWarnings ? "warning" : "success"}>{totalWarnings} route issues</Badge>
+          <Badge tone={totalWarnings ? "warning" : "success"}>{totalWarnings} open route {totalWarnings === 1 ? "warning" : "warnings"}</Badge>
         </div>
         <div className="mt-5 grid gap-3 sm:grid-cols-3">
           <Metric label="Route confidence" value={`${avgScore}%`} tone={avgScore >= 80 ? "success" : "warning"} />
           <Metric label="Visits routed" value={workspace.visits.filter((visit) => visit.crewId).length} />
           <Metric label="Unassigned" value={workspace.visits.filter((visit) => !visit.crewId).length} tone={workspace.visits.some((visit) => !visit.crewId) ? "warning" : "success"} />
         </div>
+        {totalWarnings > 0 ? (
+          <div className="mt-4">
+            <div className="text-xs font-semibold uppercase text-stone-500">Top route issues</div>
+            <div className="mt-2 grid gap-2">
+              {operatingDepth.fieldOps.routeConfidence
+                .filter((route) => route.warnings.length + route.equipmentConflicts.length > 0)
+                .sort((left, right) => (right.warnings.length + right.equipmentConflicts.length) - (left.warnings.length + left.equipmentConflicts.length))
+                .slice(0, 5)
+                .map((route) => {
+                  const visit = workspace.visits.find((candidate) => candidate.id === route.visitId);
+                  const job = visit ? jobsById.get(visit.jobId) : undefined;
+                  return (
+                    <button
+                      key={route.visitId}
+                      type="button"
+                      onClick={() => {
+                        setSelectedVisitId(route.visitId);
+                        setView("field");
+                      }}
+                      className="flex flex-wrap items-center justify-between gap-2 rounded-md border border-stone-200 p-2 text-left transition hover:border-[#8aa99a] hover:bg-[#f5f8f5]"
+                    >
+                      <span className="min-w-0 truncate text-sm font-semibold">{job?.title ?? "Visit"}</span>
+                      <span className="flex flex-wrap gap-1">
+                        {route.warnings.map((warning) => <Badge key={warning} tone="warning">{warning}</Badge>)}
+                        {route.equipmentConflicts.map((conflict) => <Badge key={conflict} tone="danger">{conflict}</Badge>)}
+                      </span>
+                    </button>
+                  );
+                })}
+            </div>
+          </div>
+        ) : null}
       </Panel>
 
       <div className="grid gap-4 xl:grid-cols-2">
@@ -6312,20 +6416,24 @@ function RoutingView({
                   <div key={visit.id} className="rounded-md border border-stone-200 p-3">
                     <div className="flex flex-wrap items-start justify-between gap-3">
                       <div className="min-w-0">
-                        <div className="text-xs font-bold uppercase text-stone-500">Stop {visit.routeOrder || index + 1}</div>
+                        <div className="text-xs font-bold uppercase text-stone-500">Stop {index + 1}</div>
                         <div className="mt-1 font-semibold">{job?.title ?? "Visit"}</div>
                         <div className="mt-1 text-sm text-stone-500">{customer?.name ?? "Customer"} - {property?.city ?? "No city"}</div>
                       </div>
-                      <button
-                        type="button"
-                        onClick={() => {
-                          setSelectedVisitId(visit.id);
-                          setView("field");
-                        }}
-                        className="rounded-full border border-stone-200 bg-stone-50 px-3 py-1 text-xs font-bold uppercase hover:bg-[#eef4ee]"
-                      >
-                        {route?.score ?? 80}% score
-                      </button>
+                      <div className="flex shrink-0 flex-col items-end gap-1">
+                        <Badge tone={(route?.score ?? 80) >= 80 ? "success" : "warning"}>{route?.score ?? 80}% confidence</Badge>
+                        <button
+                          type="button"
+                          onClick={() => {
+                            setSelectedVisitId(visit.id);
+                            setView("field");
+                          }}
+                          className="inline-flex items-center gap-1 rounded-full border border-stone-200 bg-stone-50 px-3 py-1 text-xs font-bold uppercase hover:bg-[#eef4ee]"
+                        >
+                          Open in Field
+                          <ArrowRight size={12} />
+                        </button>
+                      </div>
                     </div>
                     <div className="mt-3 flex flex-wrap gap-2">
                       {property ? (
@@ -6583,45 +6691,29 @@ function JobsPricerView({ workspace, operatingDepth }: { workspace: WorkspaceSna
   );
 }
 
-function ChurnLtvDashboard({ operatingDepth }: { operatingDepth: OperatingDepth }) {
+function ChurnLtvDashboard({ workspace, operatingDepth }: { workspace: WorkspaceSnapshot; operatingDepth: OperatingDepth }) {
   const analytics = operatingDepth.admin.ownerAnalytics;
   const highRisk = operatingDepth.revenue.customerProfitability.filter((customer) => ["high", "critical"].includes(customer.churnRiskLevel));
-  const turfProReference = {
-    churned: 2239,
-    greenAceChurned: 291,
-    turfProChurned: 1948,
-    greenAceTenure: 2.0,
-    turfProTenure: 4.8,
-    missingArchiveDate: 68,
-    landscaperCustomers: 740,
-  };
+  const activeCustomers = workspace.customers.filter((customer) => customer.status === "active").length;
+  const ltvAtRiskCents = highRisk.reduce((sum, customer) => sum + (customer.lifetimeRevenueCents ?? 0), 0);
 
   return (
     <div className="grid gap-4">
       <Panel>
         <div className="flex flex-wrap items-start justify-between gap-3">
           <div>
-            <div className="text-sm font-semibold text-[#224036]">GreenAce (2013-2026) - Turf Pro (1998-2026)</div>
-            <h2 className="mt-2 text-2xl font-bold tracking-normal">Churn & LTV Dashboard</h2>
+            <div className="text-sm font-semibold text-[#224036]">{workspace.organization.name}</div>
+            <h2 className="mt-2 text-2xl font-bold tracking-normal">Retention, churn risk, and lifetime value</h2>
           </div>
-          <div className="flex flex-wrap gap-2">
-            <Badge>Both Companies</Badge>
-            <Badge>All Customers</Badge>
-            <Badge>All Time</Badge>
-            <Badge>Compare Off</Badge>
-          </div>
+          <Badge tone={highRisk.length > 0 ? "warning" : "success"}>{highRisk.length} at-risk {highRisk.length === 1 ? "account" : "accounts"}</Badge>
         </div>
-        <div className="mt-5 grid gap-3 sm:grid-cols-2 xl:grid-cols-4">
-          <Metric label="Total Churned" value={turfProReference.churned.toLocaleString()} />
-          <Metric label="GreenAce Churned" value={turfProReference.greenAceChurned.toLocaleString()} />
-          <Metric label="Turf Pro Churned" value={turfProReference.turfProChurned.toLocaleString()} />
-          <Metric label="Avg. Tenure GA" value={`${turfProReference.greenAceTenure.toFixed(1)} yrs`} />
-          <Metric label="Avg. Tenure TP" value={`${turfProReference.turfProTenure.toFixed(1)} yrs`} />
-          <Metric label="Missing Archive Date" value={turfProReference.missingArchiveDate} tone="warning" />
-          <Metric label="Landscaper Customers" value={turfProReference.landscaperCustomers} />
-          <Metric label="Current Churn Risk" value={percent(analytics.kpis.churnRatePercent)} tone={analytics.kpis.churnRatePercent > 12 ? "warning" : "success"} />
-          <Metric label="Average LTV" value={currency(analytics.kpis.averageLtvCents)} />
-          <Metric label="LTV:CAC" value={`${analytics.kpis.ltvToCac}x`} tone={analytics.kpis.ltvToCac >= 3 ? "success" : "warning"} />
+        <div className="mt-5 grid gap-3 sm:grid-cols-2 xl:grid-cols-3">
+          <Metric label="Active customers" value={activeCustomers} hint="Accounts with active status in this workspace" />
+          <Metric label="At-risk accounts" value={highRisk.length} tone={highRisk.length > 0 ? "warning" : "success"} hint="High or critical churn-risk score" />
+          <Metric label="LTV at risk" value={currency(ltvAtRiskCents)} tone={ltvAtRiskCents > 0 ? "warning" : "success"} hint="Lifetime revenue of at-risk accounts" />
+          <Metric label="Current Churn Risk" value={percent(analytics.kpis.churnRatePercent)} tone={analytics.kpis.churnRatePercent > 12 ? "warning" : "success"} hint="Share of customers scored high/critical risk" />
+          <Metric label="Average LTV" value={currency(analytics.kpis.averageLtvCents)} hint="Average lifetime value per customer" />
+          <Metric label="LTV:CAC" value={`${analytics.kpis.ltvToCac}x`} tone={analytics.kpis.ltvToCac >= 3 ? "success" : "warning"} hint="Lifetime value vs. cost to acquire a won customer" />
         </div>
       </Panel>
 
@@ -6675,13 +6767,14 @@ function ChurnLtvDashboard({ operatingDepth }: { operatingDepth: OperatingDepth 
   );
 }
 
-function Metric({ icon = <Gauge size={18} />, label, value, tone = "neutral", detail, onClick }: { icon?: ReactNode; label: string; value: ReactNode; tone?: string; detail?: string; onClick?: () => void }) {
+function Metric({ icon = <Gauge size={18} />, label, value, tone = "neutral", detail, hint, onClick }: { icon?: ReactNode; label: string; value: ReactNode; tone?: string; detail?: string; hint?: string; onClick?: () => void }) {
   const content = (
     <>
-      <div className="flex items-start justify-between gap-3">
+      <div className="flex items-start justify-between gap-3" title={hint}>
         <div>
           <div className="text-sm text-stone-500">{label}</div>
           <div className="mt-2 text-2xl font-bold tracking-normal">{value}</div>
+          {hint ? <div className="mt-1 text-xs leading-4 text-stone-400">{hint}</div> : null}
           {detail ? <div className="mt-2 flex items-center gap-1 text-xs font-semibold text-[#315a4d]">{detail}<ArrowRight size={12} /></div> : null}
         </div>
         <div
@@ -6980,6 +7073,7 @@ function CrmView({
   const customerActivities = selectedCustomer ? workspace.activities.filter((activity) => activity.entityType === "customer" && activity.entityId === selectedCustomer.id) : [];
   const customerTasks = selectedCustomer ? workspace.tasks.filter((task) => task.entityType === "customer" && task.entityId === selectedCustomer.id && task.status !== "done") : [];
   const customerNotes = selectedCustomer ? workspace.notes.filter((note) => note.entityType === "customer" && note.entityId === selectedCustomer.id) : [];
+  const customerOpenLeads = selectedCustomer ? workspace.leads.filter((lead) => lead.customerId === selectedCustomer.id && !["converted", "disqualified", "spam", "lost_confirmed", "lost_assumed"].includes(lead.status)) : [];
   const customerPropertyIds = new Set(customerProperties.map((property) => property.id));
   const customerEstimateIds = new Set(customerEstimates.map((estimate) => estimate.id));
   const customerJobIds = new Set(customerJobs.map((job) => job.id));
@@ -7002,6 +7096,7 @@ function CrmView({
   const [repeatLeadForm, setRepeatLeadForm] = useState<RepeatLeadFormState>(() => defaultRepeatLeadForm());
   const [repeatLeadState, setRepeatLeadState] = useState<"idle" | "submitting" | "success" | "error">("idle");
   const [repeatLeadMessage, setRepeatLeadMessage] = useState("");
+  const customerDetailRef = useRef<HTMLDivElement>(null);
 
   async function submitRepeatLead(event: FormEvent) {
     event.preventDefault();
@@ -7037,7 +7132,7 @@ function CrmView({
 
   return (
     <div className={cn("grid gap-4", workspace.customers.length > 0 && "xl:grid-cols-[0.8fr_1.2fr]")}>
-      <Panel className={workspace.customers.length === 0 ? "hidden" : undefined}>
+      <Panel className={cn("xl:sticky xl:top-20 xl:self-start", workspace.customers.length === 0 && "hidden")}>
         <div className="flex items-center justify-between gap-3">
           <h2 className="text-base font-bold">Customers</h2>
           <Badge>{workspace.customers.length}</Badge>
@@ -7046,12 +7141,17 @@ function CrmView({
           <Search className="pointer-events-none absolute left-3 top-2.5 text-stone-400" size={16} />
           <input className={cn(inputClass(), "w-full pl-9")} value={customerSearch} onChange={(event) => setCustomerSearch(event.target.value)} placeholder="Search customers" />
         </div>
-        <div className="mt-4 grid gap-2">
+        <div className="mt-4 grid max-h-[70vh] content-start gap-2 overflow-y-auto pr-1">
           {filtered.map((customer) => (
             <button
               type="button"
               key={customer.id}
-              onClick={() => setSelectedCustomerId(customer.id)}
+              onClick={() => {
+                setSelectedCustomerId(customer.id);
+                if (typeof window !== "undefined" && window.innerWidth < 1280) {
+                  customerDetailRef.current?.scrollIntoView({ behavior: "smooth", block: "start" });
+                }
+              }}
               className={cn(
                 "rounded-md border p-3 text-left transition hover:border-stone-300 hover:bg-stone-50",
                 selectedCustomer?.id === customer.id ? "border-[#8aa99a] bg-[#f0f5ef]" : "border-stone-200 bg-white",
@@ -7067,7 +7167,7 @@ function CrmView({
         </div>
       </Panel>
 
-      <div className={cn("grid gap-4", workspace.customers.length === 0 && "mx-auto w-full max-w-4xl")}>
+      <div ref={customerDetailRef} className={cn("grid gap-4", workspace.customers.length === 0 && "mx-auto w-full max-w-4xl")}>
         <Panel className={!selectedCustomer ? "hidden" : undefined}>
           {selectedCustomer ? (
             <>
@@ -7139,6 +7239,7 @@ function CrmView({
                         <div key={property.id} className="rounded-md border border-stone-100 p-2">
                           <div className="font-semibold">{property.label}</div>
                           <div className="mt-1 text-sm text-stone-500">{property.street}, {property.city}</div>
+                          {property.lawnSizeSqFt ? <div className="mt-1 text-xs font-semibold text-[#315a4d]">{property.lawnSizeSqFt.toLocaleString()} sq ft turf</div> : null}
                           <a className="mt-2 inline-flex items-center gap-2 text-sm font-semibold text-[#224036]" href={googleMapsUrl(`${property.street}, ${property.city}, ${property.state} ${property.postalCode}`)} target="_blank" rel="noreferrer">
                             <MapPin size={15} />
                             Maps
@@ -7235,6 +7336,13 @@ function CrmView({
                 </div>
                 <div className="mt-3">
                   <h4 className="text-sm font-bold">Opportunities</h4>
+                  {customerOpenLeads.length > 0 ? (
+                    <div className="mt-2 flex flex-wrap gap-1.5">
+                      {customerOpenLeads.map((lead) => (
+                        <Badge key={lead.id} tone="warning">Open lead: {lead.title}</Badge>
+                      ))}
+                    </div>
+                  ) : null}
                   <div className="mt-2 grid gap-2">
                     {customerOpps.map((opp) => (
                       <div key={opp.id} className="flex items-center justify-between gap-3 rounded-md border border-stone-200 bg-white p-3">
@@ -8248,6 +8356,7 @@ function DispatchView({
   const sortedVisits = workspace.visits
     .slice()
     .sort((a, b) => a.routeOrder - b.routeOrder || a.scheduledStart - b.scheduledStart || a.id.localeCompare(b.id));
+  const stopNumbers = stopNumbersByVisitId(workspace.visits);
   const activeRecurringPlans = workspace.recurringServicePlans.filter((plan) => plan.status === "active");
 
   async function handleGenerateRecurringRoute(event: FormEvent) {
@@ -8296,10 +8405,10 @@ function DispatchView({
               const route = routeByVisitId.get(visit.id);
               const equipment = equipmentByVisitId.get(visit.id) ?? [];
               return (
-                <div key={visit.id} role="region" aria-label={`Dispatch route stop ${visit.routeOrder} ${jobTitle}`} className="grid gap-3 rounded-md border border-stone-200 p-3 lg:grid-cols-[150px_1fr_210px_180px_150px] lg:items-center">
+                <div key={visit.id} role="region" aria-label={`Dispatch route stop ${stopNumbers.get(visit.id) ?? visit.routeOrder} ${jobTitle}`} className="grid gap-3 rounded-md border border-stone-200 p-3 lg:grid-cols-[150px_1fr_210px_180px_150px] lg:items-center">
                   <div>
                     <div className="font-semibold">{timeRange(visit.scheduledStart, visit.scheduledEnd)}</div>
-                    <div className="mt-1 text-sm text-stone-500">Stop {visit.routeOrder}</div>
+                    <div className="mt-1 text-sm text-stone-500">Stop {stopNumbers.get(visit.id) ?? visit.routeOrder}</div>
                     <div className="mt-2 flex gap-1">
                       <IconButton
                         title={`Move route stop up for ${jobTitle}`}
@@ -9070,6 +9179,7 @@ function FieldView({
     () => fieldSessionCanSeeAll ? fieldRouteVisits : fieldRouteVisits.filter((visit) => visit.crewId && visit.crewId === fieldSessionCrewId),
     [fieldRouteVisits, fieldSessionCanSeeAll, fieldSessionCrewId],
   );
+  const fieldStopNumbers = useMemo(() => stopNumbersByVisitId(workspace.visits), [workspace.visits]);
   const selectedVisit = fieldVisibleVisits.find((visit) => visit.id === requestedVisit?.id) ?? fieldVisibleVisits[0];
   const property = selectedVisit?.propertyId ? propertiesById.get(selectedVisit.propertyId) : undefined;
   const customer = selectedVisit ? customersById.get(selectedVisit.customerId) : undefined;
@@ -9272,7 +9382,7 @@ function FieldView({
                 <Badge tone={statusTone(visit.status)}>{visitStatusLabel(visit.status)}</Badge>
               </div>
               <div className="mt-2 flex flex-wrap items-center gap-2 text-sm text-stone-500">
-                <span className="rounded-full bg-stone-100 px-2 py-0.5 font-semibold text-stone-700">Stop {visit.routeOrder}</span>
+                <span className="rounded-full bg-stone-100 px-2 py-0.5 font-semibold text-stone-700">Stop {fieldStopNumbers.get(visit.id) ?? visit.routeOrder}</span>
                 <span>{customersById.get(visit.customerId)?.name}</span>
               </div>
             </button>
@@ -9289,7 +9399,7 @@ function FieldView({
               <div>
                 <h2 className="text-xl font-bold">{jobsById.get(selectedVisit.jobId)?.title}</h2>
                 <div className="mt-1 text-sm text-stone-500">{customersById.get(selectedVisit.customerId)?.name} - {crewsById.get(selectedVisit.crewId)?.name}</div>
-                <div className="mt-2 inline-flex rounded-full bg-stone-100 px-2.5 py-1 text-xs font-bold uppercase tracking-normal text-stone-600">Route stop {selectedVisit.routeOrder}</div>
+                <div className="mt-2 inline-flex rounded-full bg-stone-100 px-2.5 py-1 text-xs font-bold uppercase tracking-normal text-stone-600">Route stop {fieldStopNumbers.get(selectedVisit.id) ?? selectedVisit.routeOrder}</div>
               </div>
               <Badge tone={statusTone(selectedVisit.status)}>{visitStatusLabel(selectedVisit.status)}</Badge>
             </div>
@@ -9764,7 +9874,7 @@ function LeadOpsView({ operatingDepth, operatingActions, setView }: { operatingD
       }
       if (action === "estimate") {
         setConversionMessage(`${result.estimateNumber ?? "Estimate"} is ready in the estimate workbench.`);
-        setView("estimates");
+        setView("pipeline");
         return;
       }
       setConversionMessage("Opportunity is ready in Pipeline.");
@@ -9787,13 +9897,13 @@ function LeadOpsView({ operatingDepth, operatingActions, setView }: { operatingD
             <h2 className="mt-2 text-2xl font-bold tracking-normal">Lead command table</h2>
           </div>
           <div className="grid grid-cols-2 gap-2 sm:grid-cols-4">
-            <Metric label="Open" value={operatingDepth.leadOps.metrics.openLeads} />
-            <Metric label="A quality" value={operatingDepth.leadOps.metrics.highQuality} />
-            <Metric label="Spam review" value={operatingDepth.leadOps.metrics.spamReview} tone="warning" />
-            <Metric label="Unassigned" value={operatingDepth.leadOps.metrics.unassigned} tone="danger" />
-            <Metric label="SLA misses" value={operatingDepth.leadOps.metrics.slaOverdue} tone={operatingDepth.leadOps.metrics.slaOverdue > 0 ? "danger" : "success"} />
-            <Metric label="Duplicates" value={operatingDepth.leadOps.metrics.duplicates} tone={operatingDepth.leadOps.metrics.duplicates > 0 ? "warning" : "success"} />
-            <Metric label="Estimate ready" value={operatingDepth.leadOps.metrics.estimateReady} tone="success" />
+            <Metric label="Open" value={operatingDepth.leadOps.metrics.openLeads} hint="Leads not yet converted, lost, or spam" />
+            <Metric label="A quality" value={operatingDepth.leadOps.metrics.highQuality} hint="Quality score 85 or higher" />
+            <Metric label="Spam review" value={operatingDepth.leadOps.metrics.spamReview} tone="warning" hint="Flagged by spam scoring for human review" />
+            <Metric label="Unassigned" value={operatingDepth.leadOps.metrics.unassigned} tone="danger" hint="No owner assigned yet" />
+            <Metric label="SLA misses" value={operatingDepth.leadOps.metrics.slaOverdue} tone={operatingDepth.leadOps.metrics.slaOverdue > 0 ? "danger" : "success"} hint="First-response due date has passed" />
+            <Metric label="Duplicates" value={operatingDepth.leadOps.metrics.duplicates} tone={operatingDepth.leadOps.metrics.duplicates > 0 ? "warning" : "success"} hint="Possible repeat of another lead (same customer)" />
+            <Metric label="Estimate ready" value={operatingDepth.leadOps.metrics.estimateReady} tone="success" hint="Open leads with contact, address, and service confirmed" />
           </div>
         </div>
         <div className="mt-5 grid gap-3 lg:grid-cols-[1fr_180px_160px_auto]">
@@ -10444,7 +10554,7 @@ function CostingView({ workspace, operatingDepth, operatingActions }: { workspac
           </div>
         </div>
         <div className="mt-5 grid gap-3 sm:grid-cols-2 xl:grid-cols-4">
-          <Metric label="Actual revenue" value={currency(operatingDepth.revenue.bookedRevenueCents)} />
+          <Metric label="Actual revenue" value={currency(operatingDepth.revenue.actualRevenueCents ?? operatingDepth.revenue.invoicedCents)} />
           <Metric label="Gross profit" value={currency(operatingDepth.revenue.grossProfitCents)} tone={operatingDepth.revenue.grossProfitCents >= 0 ? "success" : "danger"} />
           <Metric label="Gross margin" value={percent(operatingDepth.revenue.grossMarginPercent)} />
           <Metric label="Worst variance" value={worstVariance ? currency(worstVariance.varianceCents) : "$0"} tone={worstVariance && worstVariance.varianceCents > 0 ? "warning" : "success"} />
